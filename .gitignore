@@ -1,0 +1,37 @@
+﻿# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Build outputs
+build/
+dist/
+*.spec
+
+# Runtime data
+*.log
+
+# Local DB artifacts
+*.db
+*.db.enc
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Release bundle
+TaskCalendar_*.zip
+
+bin/
+distutils-precedence.pth
+
+pefile.py
+peutils.py

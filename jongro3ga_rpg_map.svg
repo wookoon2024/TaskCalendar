@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="720" viewBox="0 0 960 720" shape-rendering="crispEdges">
+  <defs>
+    <style>
+      .soil { fill: #b99872; }
+      .grass { fill: #91a965; }
+      .grass2 { fill: #7f9757; }
+      .brick { fill: #9d7858; }
+      .brick2 { fill: #846146; }
+      .wood { fill: #875734; }
+      .roof { fill: #5e3c2c; }
+      .stone { fill: #b9b1a1; }
+      .stone2 { fill: #968d7e; }
+      .shadow { fill: #6d533f; opacity: .28; }
+      .water { fill: #6b9fb1; }
+      .bannerR { fill: #b9483e; }
+      .bannerY { fill: #d4a83d; }
+      .line { fill: #3f3126; }
+      .stallA { fill: #4f86b7; }
+      .stallB { fill: #d98a43; }
+      .npc1 { fill: #e9d8bb; }
+      .npc2 { fill: #2e3d57; }
+      .npc3 { fill: #c94545; }
+      .npc4 { fill: #f2f2f2; }
+      text { font-family: monospace; }
+    </style>
+  </defs>
+
+  <rect width="960" height="720" class="soil"/>
+
+  <!-- outer grass bands -->
+  <rect x="0" y="262" width="960" height="84" class="grass"/>
+  <rect x="408" y="0" width="144" height="720" class="grass"/>
+  <rect x="0" y="290" width="960" height="14" class="grass2"/>
+  <rect x="470" y="0" width="14" height="720" class="grass2"/>
+
+  <!-- central plaza -->
+  <rect x="350" y="212" width="260" height="180" class="brick"/>
+  <rect x="366" y="228" width="228" height="148" class="brick2"/>
+  <rect x="392" y="254" width="166" height="96" class="brick"/>
+
+  <!-- cross roads simplified from map layout -->
+  <rect x="0" y="300" width="960" height="8" class="line"/>
+  <rect x="472" y="0" width="8" height="720" class="line"/>
+
+  <!-- station square markers -->
+  <rect x="428" y="272" width="96" height="56" fill="#d9c36d"/>
+  <rect x="444" y="288" width="64" height="24" fill="#b7973f"/>
+  <rect x="456" y="296" width="40" height="8" class="line"/>
+
+  <!-- hanok buildings -->
+  <g>
+    <rect x="86" y="124" width="124" height="94" class="wood"/>
+    <rect x="74" y="108" width="148" height="28" class="roof"/>
+    <rect x="96" y="146" width="18" height="24" fill="#dbc8a4"/>
+    <rect x="120" y="146" width="18" height="24" fill="#dbc8a4"/>
+    <rect x="144" y="146" width="18" height="24" fill="#dbc8a4"/>
+    <rect x="168" y="146" width="18" height="24" fill="#dbc8a4"/>
+  </g>
+  <g>
+    <rect x="692" y="110" width="144" height="100" class="wood"/>
+    <rect x="676" y="92" width="176" height="30" class="roof"/>
+    <rect x="710" y="142" width="22" height="24" fill="#dbc8a4"/>
+    <rect x="742" y="142" width="22" height="24" fill="#dbc8a4"/>
+    <rect x="774" y="142" width="22" height="24" fill="#dbc8a4"/>
+  </g>
+  <g>
+    <rect x="98" y="470" width="132" height="96" class="wood"/>
+    <rect x="84" y="452" width="160" height="30" class="roof"/>
+    <rect x="118" y="506" width="26" height="22" fill="#dbc8a4"/>
+    <rect x="152" y="506" width="26" height="22" fill="#dbc8a4"/>
+    <rect x="186" y="506" width="26" height="22" fill="#dbc8a4"/>
+  </g>
+  <g>
+    <rect x="692" y="472" width="158" height="102" class="wood"/>
+    <rect x="676" y="452" width="188" height="32" class="roof"/>
+    <rect x="716" y="510" width="24" height="22" fill="#dbc8a4"/>
+    <rect x="748" y="510" width="24" height="22" fill="#dbc8a4"/>
+    <rect x="780" y="510" width="24" height="22" fill="#dbc8a4"/>
+  </g>
+
+  <!-- market stalls -->
+  <g>
+    <rect x="214" y="260" width="54" height="34" class="stallA"/>
+    <rect x="218" y="252" width="46" height="10" fill="#f3e7c6"/>
+    <rect x="220" y="294" width="10" height="16" class="wood"/>
+    <rect x="252" y="294" width="10" height="16" class="wood"/>
+    <rect x="224" y="274" width="8" height="8" class="bannerY"/>
+    <rect x="238" y="274" width="8" height="8" class="bannerR"/>
+    <rect x="252" y="274" width="8" height="8" fill="#5c7c34"/>
+  </g>
+  <g>
+    <rect x="668" y="262" width="54" height="34" class="stallB"/>
+    <rect x="672" y="254" width="46" height="10" fill="#f3e7c6"/>
+    <rect x="674" y="296" width="10" height="16" class="wood"/>
+    <rect x="706" y="296" width="10" height="16" class="wood"/>
+    <rect x="678" y="276" width="8" height="8" class="bannerR"/>
+    <rect x="692" y="276" width="8" height="8" class="bannerY"/>
+    <rect x="706" y="276" width="8" height="8" fill="#5c7c34"/>
+  </g>
+  <g>
+    <rect x="420" y="424" width="54" height="34" class="stallA"/>
+    <rect x="424" y="416" width="46" height="10" fill="#f3e7c6"/>
+    <rect x="426" y="458" width="10" height="16" class="wood"/>
+    <rect x="458" y="458" width="10" height="16" class="wood"/>
+  </g>
+
+  <!-- stone statues -->
+  <g>
+    <rect x="256" y="116" width="36" height="44" class="stone2"/>
+    <rect x="248" y="158" width="52" height="18" class="stone"/>
+    <rect x="266" y="94" width="16" height="22" class="stone"/>
+    <rect x="260" y="88" width="28" height="10" class="stone2"/>
+  </g>
+  <g>
+    <rect x="640" y="494" width="36" height="44" class="stone2"/>
+    <rect x="632" y="536" width="52" height="18" class="stone"/>
+    <rect x="650" y="472" width="16" height="22" class="stone"/>
+    <rect x="644" y="466" width="28" height="10" class="stone2"/>
+  </g>
+
+  <!-- poles and banners -->
+  <g>
+    <rect x="324" y="180" width="8" height="92" class="wood"/>
+    <rect x="332" y="182" width="18" height="10" class="bannerR"/>
+    <rect x="332" y="196" width="14" height="10" class="bannerY"/>
+  </g>
+  <g>
+    <rect x="606" y="356" width="8" height="92" class="wood"/>
+    <rect x="614" y="358" width="18" height="10" class="bannerR"/>
+    <rect x="614" y="372" width="14" height="10" class="bannerY"/>
+  </g>
+  <g>
+    <rect x="524" y="110" width="8" height="76" class="wood"/>
+    <polygon points="528,110 548,126 528,142" class="bannerY"/>
+    <polygon points="528,142 548,156 528,170" class="bannerR"/>
+  </g>
+
+  <!-- station gate / transfer hub -->
+  <g>
+    <rect x="404" y="192" width="152" height="42" class="roof"/>
+    <rect x="420" y="228" width="120" height="34" class="wood"/>
+    <rect x="434" y="236" width="18" height="26" fill="#dbc8a4"/>
+    <rect x="470" y="236" width="18" height="26" fill="#dbc8a4"/>
+    <rect x="506" y="236" width="18" height="26" fill="#dbc8a4"/>
+  </g>
+
+  <!-- small NPCs -->
+  <g>
+    <rect x="450" y="332" width="10" height="14" class="npc2"/>
+    <rect x="448" y="346" width="14" height="14" class="npc4"/>
+    <rect x="452" y="328" width="6" height="4" class="line"/>
+  </g>
+  <g>
+    <rect x="486" y="334" width="10" height="14" class="npc3"/>
+    <rect x="484" y="348" width="14" height="14" class="npc1"/>
+    <rect x="488" y="330" width="6" height="4" class="line"/>
+  </g>
+  <g>
+    <rect x="242" y="322" width="10" height="14" class="npc2"/>
+    <rect x="240" y="336" width="14" height="14" fill="#8ac06c"/>
+    <rect x="244" y="318" width="6" height="4" class="line"/>
+  </g>
+  <g>
+    <rect x="714" y="320" width="10" height="14" class="npc2"/>
+    <rect x="712" y="334" width="14" height="14" fill="#b8c8e6"/>
+    <rect x="716" y="316" width="6" height="4" class="line"/>
+  </g>
+
+  <!-- shrubs / trees -->
+  <g>
+    <rect x="32" y="598" width="40" height="16" class="grass2"/>
+    <rect x="48" y="582" width="10" height="16" class="wood"/>
+    <rect x="24" y="614" width="56" height="14" fill="#6f8550"/>
+  </g>
+  <g>
+    <rect x="120" y="610" width="40" height="16" class="grass2"/>
+    <rect x="136" y="594" width="10" height="16" class="wood"/>
+    <rect x="112" y="626" width="56" height="14" fill="#6f8550"/>
+  </g>
+  <g>
+    <rect x="808" y="606" width="40" height="16" class="grass2"/>
+    <rect x="824" y="590" width="10" height="16" class="wood"/>
+    <rect x="800" y="622" width="56" height="14" fill="#6f8550"/>
+  </g>
+
+  <!-- decorative canal at bottom to echo main road line -->
+  <rect x="0" y="650" width="960" height="20" class="water"/>
+  <rect x="0" y="670" width="960" height="8" fill="#88bbc9"/>
+
+  <!-- shadows -->
+  <rect x="360" y="392" width="240" height="12" class="shadow"/>
+  <rect x="94" y="220" width="124" height="10" class="shadow"/>
+  <rect x="700" y="212" width="144" height="10" class="shadow"/>
+
+  <!-- title -->
+  <rect x="18" y="18" width="248" height="46" fill="#3e2d22"/>
+  <text x="34" y="47" font-size="24" fill="#f3dfb0">JONGRO 3-GA VILLAGE</text>
+</svg>

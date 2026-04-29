@@ -1,0 +1,43 @@
+.taskcalendar-import-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  padding: 4px 10px;
+  border: 1px solid #1f7a67;
+  border-radius: 999px;
+  background: #1f7a67;
+  color: #ffffff;
+  font-family: "Segoe UI", sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  vertical-align: middle;
+  box-shadow: 0 2px 8px rgba(31, 122, 103, 0.18);
+}
+
+.taskcalendar-import-button:hover:not(:disabled) {
+  background: #176654;
+  border-color: #176654;
+}
+
+.taskcalendar-import-button:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.taskcalendar-import-button[data-state="success"] {
+  background: #0f9d58;
+  border-color: #0f9d58;
+}
+
+.taskcalendar-import-button[data-state="duplicate"] {
+  background: #5b6b7f;
+  border-color: #5b6b7f;
+}
+
+.taskcalendar-import-button[data-state="error"] {
+  background: #c0392b;
+  border-color: #c0392b;
+}
