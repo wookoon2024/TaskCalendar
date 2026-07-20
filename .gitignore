@@ -46,3 +46,6 @@ analyze_plain.py
 auto_restore.py
 encrypt_work_db.py
 salvage_db.py
+
+# Browser Extension
+browser_extension/
