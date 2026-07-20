@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import calendar
 import ctypes
@@ -7,8 +7,9 @@ import logging
 import queue
 import shutil
 import threading
+import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, time as datetime_time
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QObject, QMimeData, Signal, QEvent
@@ -55,15 +56,17 @@ from taskcalendar.desktop_services import (
     set_startup_enabled,
 )
 from taskcalendar.excel_io import export_entries_to_excel, import_entries_from_excel
-from taskcalendar.models import AlertType, CalendarEntry, EntryType
+from taskcalendar.backup_io import backup_to_zip, restore_from_zip
+from taskcalendar.models import AlertType, CalendarEntry, EntryType, Alarm, calculate_next_alarm_trigger
 from taskcalendar.paths import asset_path, data_path
-from taskcalendar.qt_dialogs import EntryDialog, EntryViewDialog, SettingsDialog
+from taskcalendar.qt_dialogs import EntryDialog, EntryViewDialog, SettingsDialog, AlarmManagerDialog, BackupRestoreFormatDialog
 from taskcalendar.storage import EncryptedRepository
 from taskcalendar.themes import THEMES
 
 logger = logging.getLogger(__name__)
 ALERT_BOX_WIDTH = 300
 ALERT_BOX_HEIGHT = 300
+CALENDAR_ENTRY_DRAG_MIME = "application/x-taskcalendar-entry-id"
 
 
 def app_icon() -> QIcon:
@@ -74,6 +77,47 @@ def app_icon() -> QIcon:
     if png.exists():
         return QIcon(str(png))
     return QIcon()
+
+
+class DraggableFrame(QFrame):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._drag_active = False
+        self._drag_position = QPoint()
+        self.main_window = None
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_active = True
+            self._drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            self.setCursor(Qt.SizeAllCursor)
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_active and event.buttons() == Qt.LeftButton:
+            new_pos = event.globalPosition().toPoint() - self._drag_position
+            parent = self.parentWidget()
+            if parent:
+                rect = parent.rect()
+                new_pos.setX(max(0, min(new_pos.x(), rect.width() - self.width())))
+                new_pos.setY(max(0, min(new_pos.y(), rect.height() - self.height())))
+            self.move(new_pos)
+            if self.main_window is not None:
+                self.main_window._sticker_toolbar_manually_moved = True
+                self.main_window._sticker_toolbar_pos = new_pos
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_active = False
+            self.unsetCursor()
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
 
 class _HotkeySignal(QObject):
@@ -238,9 +282,11 @@ def app_stylesheet(p: dict[str, str]) -> str:
 
 def day_cell_style(p: dict[str, str], in_month: bool, is_today: bool, is_selected: bool) -> str:
     bg = p["panel"] if in_month else p["panel_alt"]
+    border_color = p["line"]
     if is_selected:
-        bg = "#FFF7CC"
-    return f"QFrame {{ background: {bg}; border: 1px solid {p['line']}; }}"
+        bg = p.get("accent_soft", "#FFF7CC")
+        border_color = p["accent"]
+    return f"QFrame {{ background: {bg}; border: 1px solid {border_color}; }}"
 
 
 def badge_style(p: dict[str, str], selected: bool) -> str:
@@ -273,15 +319,17 @@ def text_editor_style(p: dict[str, str]) -> str:
 
 
 class DayCell(QFrame):
-    def __init__(self, parent, callback_select, callback_add) -> None:
+    def __init__(self, parent, callback_select, callback_add, callback_move_entry) -> None:
         super().__init__(parent)
         self.callback_select = callback_select
         self.callback_add = callback_add
+        self.callback_move_entry = callback_move_entry
         self.day_value: date | None = None
 
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(0)
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.setAcceptDrops(True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 1, 0, 4)
         layout.setSpacing(2)
@@ -320,6 +368,126 @@ class DayCell(QFrame):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        payload = self._parse_drag_payload(event.mimeData())
+        if payload is not None and self.day_value is not None:
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        payload = self._parse_drag_payload(event.mimeData())
+        if payload is not None and self.day_value is not None:
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        payload = self._parse_drag_payload(event.mimeData())
+        if payload is None or self.day_value is None:
+            event.ignore()
+            return
+        entry_id = int(payload.get("entry_id", 0))
+        source_day_text = str(payload.get("source_day", "")).strip()
+        try:
+            source_day = date.fromisoformat(source_day_text)
+        except ValueError:
+            event.ignore()
+            return
+        moved = bool(self.callback_move_entry(entry_id, source_day, self.day_value))
+        if moved:
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    @staticmethod
+    def _parse_drag_payload(mime_data: QMimeData) -> dict[str, object] | None:
+        if not mime_data.hasFormat(CALENDAR_ENTRY_DRAG_MIME):
+            return None
+        raw = bytes(mime_data.data(CALENDAR_ENTRY_DRAG_MIME)).decode("utf-8", errors="ignore").strip()
+        if not raw:
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        if "entry_id" not in payload or "source_day" not in payload:
+            return None
+        return payload
+
+
+class DraggableCalendarEntryChip(QFrame):
+    def __init__(self, parent, entry: CalendarEntry, source_day: date, title_text: str, time_text: str, entry_fg: str, time_fg: str, on_edit, completed: bool = False, bg_color: str = "") -> None:
+        super().__init__(parent)
+        self.entry = entry
+        self.source_day = source_day
+        self._on_edit = on_edit
+        self._press_pos: QPoint | None = None
+        self.setCursor(Qt.PointingHandCursor)
+        chip_bg = str(bg_color or "").strip()
+        if chip_bg:
+            self.setStyleSheet(f"background: {chip_bg}; border: none; border-radius: 4px;")
+        else:
+            self.setStyleSheet("background: transparent; border: none;")
+
+        chip_layout = QHBoxLayout(self)
+        chip_layout.setContentsMargins(3, 0, 3, 0)
+        chip_layout.setSpacing(0)
+        if time_text:
+            time_label = QLabel(time_text)
+            time_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            strike = " text-decoration: line-through;" if completed else ""
+            time_label.setStyleSheet(f"color: {time_fg}; background: transparent; border: none;{strike}")
+            chip_layout.addWidget(time_label)
+        chip = QLabel(title_text)
+        chip.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        strike = " text-decoration: line-through;" if completed else ""
+        chip.setStyleSheet(f"color: {entry_fg}; background: transparent; border: none; padding: 0px; margin: 0px;{strike}")
+        chip_layout.addWidget(chip, 1, Qt.AlignLeft)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self._press_pos = event.position().toPoint()
+            event.accept()
+            return
+        event.ignore()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._press_pos is not None and (event.buttons() & Qt.LeftButton):
+            distance = (event.position().toPoint() - self._press_pos).manhattanLength()
+            if distance >= QApplication.startDragDistance():
+                if self._start_drag():
+                    self._press_pos = None
+                    event.accept()
+                    return
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self._press_pos = None
+        event.accept()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if callable(self._on_edit):
+            self._on_edit()
+        event.accept()
+
+    def _start_drag(self) -> bool:
+        if self.entry.entry_id is None:
+            return False
+        payload = {
+            "entry_id": int(self.entry.entry_id),
+            "source_day": self.source_day.isoformat(),
+        }
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(CALENDAR_ENTRY_DRAG_MIME, json.dumps(payload).encode("utf-8"))
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.MoveAction)
+        return True
 
 
 class EntryLabel(QLabel):
@@ -632,6 +800,7 @@ class MainWindow(QMainWindow):
         self._sticker_animation_state: dict[str, dict[str, float | int]] = {}
         self._sticker_anim_timer: QTimer | None = None
         self._sticker_animation_enabled = self.repository.get_setting("sticker_animation_enabled", "1") == "1"
+        self.hide_completed_on_calendar = self.repository.get_setting("hide_completed_on_calendar", "1") == "1"
         self._action_icons: dict[str, QIcon] = self._load_action_icons()
         self._holidays_fixed, self._holidays_yearly = self._load_holidays()
         self.memo_title_only = self.repository.get_setting("memo_title_only", "0") == "1"
@@ -648,6 +817,8 @@ class MainWindow(QMainWindow):
         self._sticker_rebase_scheduled = False
         self._sticker_rebase_last_size: tuple[int, int] | None = None
         self._save_stickers_after_rebase = False
+        self._sticker_toolbar_manually_moved = False
+        self._sticker_toolbar_pos = QPoint(0, 0)
         self._last_calendar_item_capacity = 2
         self._did_initial_sticker_sync = False
         self._did_onboarding_check = False
@@ -666,11 +837,14 @@ class MainWindow(QMainWindow):
         self._last_normal_geometry = QRect(120, 120, 1024, 640)
         self._suspend_window_state_tracking = False
         self._calendar_rerender_pending = False
+        self._window_state_dirty = False
 
         self.setWindowTitle("캘린더")
         self.setWindowIcon(app_icon())
         self.resize(1024, 640)
         self.setMinimumSize(980, 620)
+        self._load_window_state()
+        self._apply_initial_window_state()
 
         self._build()
         QApplication.instance().installEventFilter(self)
@@ -682,6 +856,7 @@ class MainWindow(QMainWindow):
         self._setup_sticker_animation_timer()
         self._setup_alert_timer()
         self.refresh()
+        self._perform_auto_backup()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if event.type() == QEvent.Type.KeyPress and self._handle_calendar_navigation_key(event):
@@ -737,22 +912,8 @@ class MainWindow(QMainWindow):
         self.next_button = self._top_button(">", 32)
         self.next_button.clicked.connect(lambda: self._change_month(1))
         left.addWidget(self.next_button)
-        topbar_layout.addLayout(left)
-
         topbar_layout.addStretch(1)
-        search_wrap = QHBoxLayout()
-        search_wrap.setContentsMargins(0, 0, 0, 0)
-        search_wrap.setSpacing(6)
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("검색어 입력")
-        self.search_input.setFixedWidth(140)
-        self.search_input.returnPressed.connect(self._run_search)
-        search_wrap.addWidget(self.search_input)
-        self.search_button = QPushButton("검색")
-        self.search_button.setObjectName("primary")
-        self.search_button.clicked.connect(self._run_search)
-        search_wrap.addWidget(self.search_button)
-        topbar_layout.addLayout(search_wrap)
+        topbar_layout.addLayout(left)
         topbar_layout.addStretch(1)
 
         right = QHBoxLayout()
@@ -765,6 +926,10 @@ class MainWindow(QMainWindow):
         self.memo_button = self._top_button("메모")
         self.memo_button.clicked.connect(lambda: self._set_sidebar_mode("memo"))
         right.addWidget(self.memo_button)
+
+        self.alarm_button = self._top_button("알림")
+        self.alarm_button.clicked.connect(self._open_alarm_settings)
+        right.addWidget(self.alarm_button)
 
         settings_button = self._top_button("환경설정")
         settings_button.clicked.connect(self._open_settings)
@@ -793,6 +958,19 @@ class MainWindow(QMainWindow):
         title_box.addWidget(self.calendar_title)
         header.addLayout(title_box)
         header.addStretch(1)
+        search_wrap = QHBoxLayout()
+        search_wrap.setContentsMargins(0, 0, 0, 0)
+        search_wrap.setSpacing(6)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("검색어 입력")
+        self.search_input.setFixedWidth(140)
+        self.search_input.returnPressed.connect(self._run_search)
+        search_wrap.addWidget(self.search_input)
+        self.search_button = QPushButton("검색")
+        self.search_button.setObjectName("primary")
+        self.search_button.clicked.connect(self._run_search)
+        search_wrap.addWidget(self.search_button)
+        header.addLayout(search_wrap)
         self.print_button = self._top_button("인쇄")
         self.print_button.clicked.connect(self._print_calendar_view)
         header.addWidget(self.print_button)
@@ -809,11 +987,22 @@ class MainWindow(QMainWindow):
         header.addWidget(self.decorate_cancel_button)
         calendar_layout.addLayout(header)
 
-        self.sticker_toolbar = QFrame()
+        self.sticker_toolbar = DraggableFrame()
+        self.sticker_toolbar.main_window = self
         self.sticker_toolbar.setObjectName("stickerToolbar")
         sticker_toolbar_layout = QHBoxLayout(self.sticker_toolbar)
         sticker_toolbar_layout.setContentsMargins(10, 8, 10, 8)
         sticker_toolbar_layout.setSpacing(6)
+        
+        # Drag Handle
+        drag_handle = QLabel("||")
+        drag_handle.setObjectName("stickerDragHandle")
+        drag_handle.setCursor(Qt.SizeAllCursor)
+        drag_handle.setFixedWidth(16)
+        drag_handle.setFixedHeight(20)
+        drag_handle.setAlignment(Qt.AlignCenter)
+        sticker_toolbar_layout.addWidget(drag_handle)
+        
         sticker_label = QLabel("스티커")
         sticker_label.setObjectName("stickerToolbarLabel")
         sticker_toolbar_layout.addWidget(sticker_label)
@@ -864,7 +1053,18 @@ class MainWindow(QMainWindow):
         delete_button.setFixedHeight(28)
         delete_button.clicked.connect(self._delete_selected_sticker)
         sticker_toolbar_layout.addWidget(delete_button)
+        
+        # Stretch to push close button to the right
         sticker_toolbar_layout.addStretch(1)
+        
+        # Close Button
+        self.sticker_close_button = QPushButton("✕")
+        self.sticker_close_button.setObjectName("stickerCloseButton")
+        self.sticker_close_button.setFixedWidth(24)
+        self.sticker_close_button.setFixedHeight(24)
+        self.sticker_close_button.clicked.connect(self._on_sticker_close_clicked)
+        sticker_toolbar_layout.addWidget(self.sticker_close_button)
+        
         self.sticker_toolbar.hide()
         self._rebuild_sticker_palette_buttons()
 
@@ -888,7 +1088,7 @@ class MainWindow(QMainWindow):
         for row in range(6):
             self.calendar_grid.setRowStretch(row + 1, 1)
             for col in range(7):
-                cell = DayCell(self, self._select_day_by_date, self._open_add_for_day)
+                cell = DayCell(self, self._select_day_by_date, self._open_add_for_day, self._move_calendar_entry)
                 cell.installEventFilter(self)
                 self.day_cells.append(cell)
                 self.calendar_grid.addWidget(cell, row + 1, col)
@@ -924,7 +1124,7 @@ class MainWindow(QMainWindow):
         info_layout.addWidget(self.info_title, 1)
         self.info_export_button = QPushButton("엑셀저장")
         self.info_export_button.setObjectName("topbarButton")
-        self.info_export_button.setFixedWidth(54)
+        self.info_export_button.setFixedWidth(78)
         self.info_export_button.clicked.connect(self._export_search_results_to_excel)
         self.info_export_button.hide()
         info_layout.addWidget(self.info_export_button)
@@ -1092,6 +1292,9 @@ class MainWindow(QMainWindow):
         now = datetime.now()
         check_from = self._last_alert_check
         self._last_alert_check = now
+
+        self._poll_alarms(check_from, now)
+
         keep_after = now - timedelta(days=2)
         self._shown_alert_keys = {k: v for k, v in self._shown_alert_keys.items() if v >= keep_after}
         targets = sorted({now.date(), (now + timedelta(days=1)).date()})
@@ -1145,6 +1348,137 @@ class MainWindow(QMainWindow):
         box.show()
         self._reposition_alert_boxes()
         box.raise_()
+
+    def _poll_alarms(self, check_from: datetime, now: datetime) -> None:
+        targets = []
+        d = check_from.date()
+        while d <= now.date():
+            targets.append(d)
+            d += timedelta(days=1)
+
+        try:
+            alarms = self.repository.list_alarms()
+        except Exception:
+            return
+
+        for alarm in alarms:
+            if not alarm.enabled:
+                continue
+
+            for target_day in targets:
+                trigger_dts = self._get_alarm_trigger_on_date(alarm, target_day)
+                for trigger_dt in trigger_dts:
+                    if check_from < trigger_dt <= now:
+                        offset_map = {
+                            "at_start": timedelta(),
+                            "5m": timedelta(minutes=5),
+                            "10m": timedelta(minutes=10),
+                            "30m": timedelta(minutes=30),
+                            "1h": timedelta(hours=1),
+                        }
+                        offset_delta = offset_map.get(alarm.alert_offset, timedelta())
+                        occurrence_time = (trigger_dt + offset_delta).strftime("%H:%M")
+                        
+                        self._show_alarm_toast(alarm, target_day, occurrence_time)
+                        
+                        if not alarm.start_date and not alarm.repeat_days:
+                            next_trig = calculate_next_alarm_trigger(alarm, now)
+                            if next_trig is None:
+                                alarm.enabled = False
+                                self.repository.upsert_alarm(alarm)
+
+    def _get_alarm_trigger_on_date(self, alarm: Alarm, d: date) -> list[datetime]:
+        def parse_time(time_str: str) -> datetime_time | None:
+            try:
+                h, m = map(int, time_str.split(":"))
+                return datetime_time(h, m)
+            except Exception:
+                return None
+
+        def get_occurrence_times() -> list[datetime_time]:
+            st = parse_time(alarm.alarm_time)
+            if not st:
+                return []
+            if not alarm.hourly_repeat:
+                return [st]
+            et = parse_time(alarm.hourly_end_time)
+            if not et:
+                return [st]
+            
+            occurrences = []
+            curr_dt = datetime.combine(date.today(), st)
+            end_dt = datetime.combine(date.today(), et)
+            interval_hours = max(1, alarm.hourly_interval)
+            while curr_dt <= end_dt:
+                occurrences.append(curr_dt.time())
+                curr_dt += timedelta(hours=interval_hours)
+            return occurrences
+
+        occurrence_times = get_occurrence_times()
+        if not occurrence_times:
+            return []
+
+        offset_map = {
+            "at_start": timedelta(),
+            "5m": timedelta(minutes=5),
+            "10m": timedelta(minutes=10),
+            "30m": timedelta(minutes=30),
+            "1h": timedelta(hours=1),
+        }
+        offset_delta = offset_map.get(alarm.alert_offset, timedelta())
+
+        if not alarm.start_date and not alarm.repeat_days:
+            created_at = alarm.created_at or datetime.now()
+            today_date = created_at.date()
+            tomorrow_date = today_date + timedelta(days=1)
+            
+            if d not in (today_date, tomorrow_date):
+                return []
+                
+            triggers = []
+            for t in occurrence_times:
+                alarm_dt = datetime.combine(d, t)
+                trigger_dt = alarm_dt - offset_delta
+                if created_at < trigger_dt <= created_at + timedelta(days=1):
+                    triggers.append(trigger_dt)
+            return triggers
+
+        if alarm.start_date and d < alarm.start_date:
+            return []
+        if alarm.end_date and d > alarm.end_date:
+            return []
+
+        if alarm.repeat_days:
+            py_weekday = d.weekday()
+            alarm_weekday = (py_weekday + 1) % 7
+            if alarm_weekday not in alarm.repeat_days:
+                return []
+
+        triggers = []
+        for t in occurrence_times:
+            alarm_dt = datetime.combine(d, t)
+            trigger_dt = alarm_dt - offset_delta
+            triggers.append(trigger_dt)
+        return triggers
+
+    def _show_alarm_toast(self, alarm: Alarm, target_day: date, trigger_time: str) -> None:
+        detail = target_day.strftime("%Y.%m.%d")
+        if trigger_time:
+            detail = f"{detail} {trigger_time}"
+        box = AlertToast(
+            self.palette,
+            f"알람: {alarm.title}",
+            detail,
+        )
+        box.closed.connect(self._on_alert_box_closed)
+        self._active_alert_boxes.append(box)
+        box.show()
+        self._reposition_alert_boxes()
+        box.raise_()
+
+    def _open_alarm_settings(self) -> None:
+        dialog = AlarmManagerDialog(self, self.repository)
+        dialog.exec()
 
     def _on_alert_box_closed(self, box: AlertToast) -> None:
         if box in self._active_alert_boxes:
@@ -1235,6 +1569,7 @@ class MainWindow(QMainWindow):
         if self._suspend_window_state_tracking or self.isMinimized():
             return
         self._last_window_was_maximized = self.isMaximized()
+        self._window_state_dirty = True
         if self._last_window_was_maximized:
             normal_geometry = self.normalGeometry()
             if normal_geometry.isValid():
@@ -1260,6 +1595,50 @@ class MainWindow(QMainWindow):
         self._suspend_window_state_tracking = False
         self._remember_window_state()
 
+    def _load_window_state(self) -> None:
+        raw = self.repository.get_setting("window_state_v1", "")
+        if not raw:
+            return
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(data, dict):
+            return
+        try:
+            x = int(data.get("x", self._last_normal_geometry.x()))
+            y = int(data.get("y", self._last_normal_geometry.y()))
+            w = int(data.get("w", self._last_normal_geometry.width()))
+            h = int(data.get("h", self._last_normal_geometry.height()))
+            maximized = bool(data.get("maximized", False))
+        except (TypeError, ValueError):
+            return
+        if w < 980 or h < 620:
+            return
+        self._last_normal_geometry = QRect(x, y, w, h)
+        self._last_window_was_maximized = maximized
+        self._window_state_dirty = False
+
+    def _apply_initial_window_state(self) -> None:
+        if self._last_normal_geometry.isValid():
+            self.setGeometry(self._last_normal_geometry)
+        if self._last_window_was_maximized:
+            self.setWindowState(self.windowState() | Qt.WindowMaximized)
+
+    def _persist_window_state(self) -> None:
+        if not self._window_state_dirty:
+            return
+        geo = self._last_normal_geometry if self._last_normal_geometry.isValid() else self.geometry()
+        payload = {
+            "x": int(geo.x()),
+            "y": int(geo.y()),
+            "w": int(geo.width()),
+            "h": int(geo.height()),
+            "maximized": bool(self._last_window_was_maximized),
+        }
+        self.repository.set_setting("window_state_v1", json.dumps(payload, ensure_ascii=False))
+        self._window_state_dirty = False
+
     def _on_tray_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.Trigger:
             if self.isVisible() and not self.isMinimized():
@@ -1277,12 +1656,18 @@ class MainWindow(QMainWindow):
     def _position_sticker_toolbar(self) -> None:
         if self.sticker_toolbar.parentWidget() is not self.root_widget:
             return
+        desired_w = self.sticker_toolbar.sizeHint().width()
+        height = self.sticker_toolbar.sizeHint().height()
+        if self._sticker_toolbar_manually_moved:
+            rect = self.root_widget.rect()
+            x = max(0, min(self._sticker_toolbar_pos.x(), rect.width() - desired_w))
+            y = max(0, min(self._sticker_toolbar_pos.y(), rect.height() - height))
+            self.sticker_toolbar.setGeometry(x, y, desired_w, height)
+            return
         topbar_geo = self.topbar.geometry()
         anchor = self.prev_button.mapTo(self.root_widget, QPoint(0, 0))
         margin = 10
         x = anchor.x()
-        desired_w = self.sticker_toolbar.sizeHint().width()
-        height = self.sticker_toolbar.sizeHint().height()
         y = topbar_geo.y() + max(0, (topbar_geo.height() - height) // 2)
         avail_w = max(120, topbar_geo.right() - x - margin)
         width = max(120, min(avail_w, desired_w))
@@ -2274,24 +2659,49 @@ class MainWindow(QMainWindow):
 
     def _load_holidays(self) -> tuple[dict[str, str], dict[str, str]]:
         path = data_path("holidays_kr.json")
-        if not path.exists():
+        should_copy = not path.exists()
+        if path.exists():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(raw, dict):
+                    yearly = raw.get("yearly", {})
+                    # "2030-02-03" (Lunar New Year 2030) is the indicator for 2030 holiday completeness
+                    if "2030-02-03" not in yearly:
+                        should_copy = True
+            except Exception:
+                should_copy = True
+
+        if should_copy:
             path.parent.mkdir(parents=True, exist_ok=True)
-            sample = {
-                "fixed": {
-                    "01-01": "신정",
-                    "03-01": "삼일절",
-                    "05-05": "어린이날",
-                    "06-06": "현충일",
-                    "08-15": "광복절",
-                    "10-03": "개천절",
-                    "10-09": "한글날",
-                    "12-25": "성탄절",
-                },
-                "yearly": {
-                    "2026-03-02": "삼일절 대체공휴일",
-                },
-            }
-            path.write_text(json.dumps(sample, ensure_ascii=False, indent=2), encoding="utf-8")
+            copied = False
+            try:
+                if getattr(sys, "frozen", False):
+                    meipass = getattr(sys, "_MEIPASS", "")
+                    if meipass:
+                        packaged_path = Path(meipass) / "data" / "holidays_kr.json"
+                        if packaged_path.exists():
+                            shutil.copy2(packaged_path, path)
+                            copied = True
+            except Exception:
+                pass
+            
+            if not copied and not path.exists():
+                sample = {
+                    "fixed": {
+                        "01-01": "신정",
+                        "03-01": "삼일절",
+                        "05-05": "어린이날",
+                        "06-06": "현충일",
+                        "08-15": "광복절",
+                        "10-03": "개천절",
+                        "10-09": "한글날",
+                        "12-25": "성탄절",
+                    },
+                    "yearly": {
+                        "2026-03-02": "삼일절 대체공휴일",
+                    },
+                }
+                path.write_text(json.dumps(sample, ensure_ascii=False, indent=2), encoding="utf-8")
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -2407,6 +2817,36 @@ class MainWindow(QMainWindow):
         self.sticker_toolbar.hide()
         self.sticker_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._schedule_sticker_rebase()
+
+    def _on_sticker_close_clicked(self) -> None:
+        has_changes = False
+        if self._sticker_snapshot is not None:
+            has_changes = (json.dumps(self._sticker_store, sort_keys=True) != 
+                           json.dumps(self._sticker_snapshot, sort_keys=True))
+        
+        if has_changes:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("변경사항 저장")
+            msg.setText("스티커 변경사항이 있습니다. 저장하시겠습니까?")
+            msg.setIcon(QMessageBox.Question)
+            msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            
+            yes_btn = msg.button(QMessageBox.Yes)
+            no_btn = msg.button(QMessageBox.No)
+            cancel_btn = msg.button(QMessageBox.Cancel)
+            if yes_btn: yes_btn.setText("저장")
+            if no_btn: no_btn.setText("저장 안 함")
+            if cancel_btn: cancel_btn.setText("취소")
+            
+            ret = msg.exec()
+            if ret == QMessageBox.Yes:
+                self._complete_sticker_edit_mode()
+            elif ret == QMessageBox.No:
+                self._cancel_sticker_edit_mode()
+            else:
+                return
+        else:
+            self._complete_sticker_edit_mode()
 
     def _add_sticker(self, name: str) -> None:
         resolved_name = self._resolve_sticker_asset_name(name)
@@ -2684,6 +3124,14 @@ class MainWindow(QMainWindow):
                 border: 1px solid #d5c68a;
                 border-radius: 11px;
             }
+            QLabel#stickerDragHandle {
+                color: #a6965b;
+                background: transparent;
+                font-weight: bold;
+                font-size: 13px;
+                padding: 0px;
+                margin-bottom: 2px;
+            }
             QLabel#stickerToolbarLabel {
                 color: #6e5f2d;
                 background: transparent;
@@ -2755,6 +3203,19 @@ class MainWindow(QMainWindow):
             QPushButton#stickerDangerButton:hover {
                 background: #ffe8db;
             }
+            QPushButton#stickerCloseButton {
+                background: transparent;
+                color: #8f7f4f;
+                border: none;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 0px;
+                border-radius: 4px;
+            }
+            QPushButton#stickerCloseButton:hover {
+                color: #c93b2b;
+                background: #ffebd2;
+            }
             """
         )
         self.sidebar_scroll.setStyleSheet(
@@ -2788,7 +3249,7 @@ class MainWindow(QMainWindow):
         self._last_calendar_item_capacity = item_capacity
         grouped: dict[date, list[CalendarEntry]] = {}
         for entry in entries:
-            if entry.day and self._is_entry_completed_on_day(entry, entry.day):
+            if entry.day and self.hide_completed_on_calendar and self._is_entry_completed_on_day(entry, entry.day):
                 continue
             if entry.day:
                 grouped.setdefault(entry.day, []).append(entry)
@@ -2818,7 +3279,7 @@ class MainWindow(QMainWindow):
             elif current_day.weekday() == 5:
                 cell.number_label.setStyleSheet(f"font-size: 11pt; color: {self.palette['info']}; background: transparent; border: none;")
             else:
-                color = self.palette["text"] if in_month else self.palette["muted"]
+                color = self.palette.get("badge_selected_fg", self.palette["text"]) if is_selected else (self.palette["text"] if in_month else self.palette["muted"])
                 cell.number_label.setStyleSheet(f"font-size: 11pt; color: {color}; background: transparent; border: none;")
 
             badge_text = "오늘" if is_today else "선택" if is_selected else ""
@@ -2831,30 +3292,32 @@ class MainWindow(QMainWindow):
 
             day_entries = grouped.get(current_day, [])
             slots_for_entries = item_capacity
-            entry_fg = "#1f2328" if is_selected else self.palette.get("entry_text", "#1f2328")
-            more_fg = "#1f2328" if is_selected else self.palette.get("more_text", "#111111")
+            entry_fg = self.palette.get("badge_selected_fg", "#1f2328") if is_selected else self.palette.get("entry_text", "#1f2328")
+            more_fg = self.palette.get("badge_selected_fg", "#111111") if is_selected else self.palette.get("more_text", "#111111")
             if holiday_name:
                 holiday_label = QLabel(holiday_name)
                 holiday_label.setStyleSheet(f"color: {self.palette['danger']}; background: transparent; border: none;")
                 cell.items_layout.addWidget(holiday_label, 0, Qt.AlignLeft)
                 slots_for_entries = max(0, item_capacity - 1)
+            # Prefer showing one more real item instead of a lone "+1건" marker.
+            if len(day_entries) == slots_for_entries + 1:
+                slots_for_entries += 1
             for entry in day_entries[:slots_for_entries]:
-                chip_row = QWidget()
-                chip_layout = QHBoxLayout(chip_row)
-                chip_layout.setContentsMargins(0, 0, 0, 0)
-                chip_layout.setSpacing(0)
                 edit_entry = lambda e=entry: self._edit_entry(e.entry_type, e)
-                if entry.start_time:
-                    time_label = EntryLabel(f"[{entry.start_time}] ", edit_entry)
-                    time_label.setStyleSheet(f"color: {self.palette['info']}; background: transparent; border: none;")
-                    chip_layout.addWidget(time_label)
-                chip = EntryLabel(self._entry_title_text(entry), edit_entry)
-                chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-                chip.setStyleSheet(
-                    f"color: {entry_fg}; background: transparent; border: none; padding: 0px; margin: 0px;"
+                completed_on_day = self._is_entry_completed_on_day(entry, current_day)
+                chip = DraggableCalendarEntryChip(
+                    cell,
+                    entry,
+                    current_day,
+                    self._entry_title_text(entry),
+                    f"[{entry.start_time}] " if entry.start_time else "",
+                    entry_fg,
+                    self.palette["info"],
+                    edit_entry,
+                    completed_on_day,
+                    entry.bg_color,
                 )
-                chip_layout.addWidget(chip, 1, Qt.AlignLeft)
-                cell.items_layout.addWidget(chip_row, 0, Qt.AlignLeft)
+                cell.items_layout.addWidget(chip, 0, Qt.AlignLeft)
             if len(day_entries) > slots_for_entries:
                 more = QLabel(f"+{len(day_entries) - slots_for_entries}건")
                 more.setStyleSheet(
@@ -2927,18 +3390,25 @@ class MainWindow(QMainWindow):
         row_layout.setSpacing(4)
 
         if entry.entry_type == EntryType.MEMO:
-            headline = f"[메모] {(entry.title or '메모').strip()}"
+            tag_color = self.palette.get("icon_important", "#ffd166")
+            tag_html = f'<span style="color: {tag_color}; font-weight: bold;">[메모]</span>'
+            headline_html = f"{tag_html} {(entry.title or '메모').strip()}"
         else:
             anchor = entry.start_date or entry.day or date.today()
-            kind = "일정" if entry.entry_type == EntryType.SCHEDULE else "업무"
-            headline = f"[{kind}] {anchor.strftime('%Y.%m.%d')}"
-        title_btn = QPushButton(headline)
-        title_btn.setObjectName("topbarButton")
-        title_btn.setStyleSheet(
-            f"QPushButton {{ text-align: left; color: {self.palette['text']}; }}"
-        )
-        title_btn.clicked.connect(lambda _checked=False, e=entry: self._open_search_result(e))
-        row_layout.addWidget(title_btn)
+            if entry.entry_type == EntryType.SCHEDULE:
+                tag_color = self.palette.get("info", "#8ab6ff")
+                tag_text = "[일정]"
+            else:
+                tag_color = self.palette.get("work", "#8b78f1")
+                tag_text = "[업무]"
+            tag_html = f'<span style="color: {tag_color}; font-weight: bold;">{tag_text}</span>'
+            headline_html = f"{tag_html} {anchor.strftime('%Y.%m.%d')}"
+            
+        title_lbl = ClickableLabel()
+        title_lbl.setText(headline_html)
+        title_lbl.setStyleSheet(f"color: {self.palette['text']}; background: transparent; border: none; font-size: 13px; font-weight: 600;")
+        title_lbl.clicked.connect(lambda e=entry: self._open_search_result(e))
+        row_layout.addWidget(title_lbl)
 
         if entry.description:
             preview = " ".join(entry.description.splitlines()).strip()
@@ -2946,6 +3416,7 @@ class MainWindow(QMainWindow):
                 preview = preview[:70].rstrip() + "..."
             detail = QLabel(preview)
             detail.setObjectName("muted")
+            detail.setWordWrap(True)
             detail.setStyleSheet(f"color: {self.palette['muted']}; background: transparent; border: none;")
             row_layout.addWidget(detail)
 
@@ -3385,6 +3856,164 @@ class MainWindow(QMainWindow):
         self.refresh()
         QMessageBox.information(self, "엑셀 불러오기", f"{count}건을 불러왔습니다.")
 
+    def _export_data_flow(self) -> None:
+        dialog = BackupRestoreFormatDialog(self, mode="export")
+        if not dialog.exec():
+            return
+
+        fmt = dialog.selected_format
+        if fmt == "xlsx":
+            self._export_all_entries_to_excel()
+        else:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M")
+            default_path = self._default_export_dir() / f"taskcalendar_backup_{stamp}.zip"
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "데이터 내보내기 (ZIP)",
+                str(default_path),
+                "ZIP Backup Files (*.zip)",
+            )
+            if not file_path:
+                return
+            try:
+                backup_to_zip(self.repository.db_path, self.repository.attachments_root, Path(file_path))
+                QMessageBox.information(self, "데이터 내보내기", f"백업 파일이 성공적으로 저장되었습니다.\n{file_path}")
+            except Exception as exc:
+                logger.exception("zip backup failed")
+                QMessageBox.critical(self, "데이터 내보내기 실패", f"백업 중 오류가 발생했습니다.\n{exc}")
+
+    def _import_data_flow(self) -> None:
+        dialog = BackupRestoreFormatDialog(self, mode="import")
+        if not dialog.exec():
+            return
+
+        fmt = dialog.selected_format
+        if fmt == "xlsx":
+            self._import_all_entries_from_excel()
+        else:
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "데이터 가져오기 (ZIP)",
+                str(self._default_export_dir()),
+                "ZIP Backup Files (*.zip)",
+            )
+            if not file_path:
+                return
+
+            reply = QMessageBox.warning(
+                self,
+                "데이터 가져오기 경고",
+                "경고: 정말 데이터를 복원하시겠습니까?\n\n이 작업은 현재 캘린더에 있는 모든 일정, 메모, 설정 및 첨부파일을 덮어씁니다. 이 작업은 되돌릴 수 없습니다.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+            try:
+                restore_from_zip(Path(file_path), self.repository.db_path, self.repository.attachments_root)
+                self.repository.reload_database()
+                self.search_query = ""
+                self.search_results = []
+                self.sidebar_mode = "day"
+                self.refresh()
+                QMessageBox.information(self, "데이터 가져오기", "백업 데이터가 성공적으로 복원되었습니다.")
+            except Exception as exc:
+                logger.exception("zip restore failed")
+                QMessageBox.critical(self, "데이터 가져오기 실패", f"복원 중 오류가 발생했습니다.\n{exc}")
+
+
+    def _restore_auto_backup_flow(self) -> None:
+        backup_dir = self.repository.db_path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "복원할 백업 파일 선택 (taskcalendar_backup_*.db.enc)",
+            str(backup_dir),
+            "Backup Files (taskcalendar_backup_*.db.enc);;All Files (*.*)",
+        )
+        if not file_path:
+            return
+
+        try:
+            from taskcalendar.storage import unprotect_bytes
+            import sqlite3
+            import shutil
+
+            db_path = Path(file_path)
+            raw = db_path.read_bytes()
+
+            # 1. Try Decrypt
+            try:
+                plain = unprotect_bytes(raw)
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "복원 실패",
+                    f"파일 복호화에 실패했습니다.\n"
+                    f"다른 PC/계정에서 생성된 백업 파일이거나 암호화 키가 다릅니다.\n\n"
+                    f"상세 오류: {exc}"
+                )
+                return
+
+            # 2. Test SQLite structure and count entries
+            conn = sqlite3.connect(":memory:")
+            try:
+                conn.deserialize(plain)
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                cur.execute("SELECT count(*) FROM entries")
+                count = cur.fetchone()[0]
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "복원 실패",
+                    f"유효한 SQLite 데이터베이스가 아닙니다.\n"
+                    f"파일 내용이 손상되었을 수 있습니다.\n\n"
+                    f"상세 오류: {exc}"
+                )
+                return
+
+            # 3. Confirmation dialog
+            reply = QMessageBox.warning(
+                self,
+                "백업 복원",
+                f"선택한 백업 파일에서 복원을 진행하시겠습니까?\n\n"
+                f"- 복원 대상: {db_path.name}\n"
+                f"- 일정/메모 건수: {count}건\n\n"
+                f"※ 주의: 현재 입력되어 있는 모든 데이터가 덮어씌워집니다.\n"
+                f"(기존 데이터는 복원 직전 백업본으로 저장됩니다.)",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+            # 4. Backup current DB and apply restored DB
+            current_db = self.repository.db_path
+            current_bak = current_db.with_name("taskcalendar.db.enc.backup_before_restore")
+
+            if current_db.exists():
+                shutil.copy2(current_db, current_bak)
+
+            shutil.copy2(db_path, current_db)
+            shutil.copy2(db_path, current_db.with_suffix(current_db.suffix + ".bak"))
+
+            # Reload repository
+            self.repository.reload_database()
+            self.search_query = ""
+            self.search_results = []
+            self.sidebar_mode = "day"
+            self.refresh()
+
+            QMessageBox.information(self, "복원 완료", f"성공적으로 데이터를 복구했습니다!\n일정/메모 {count}건을 로드했습니다.")
+
+        except Exception as exc:
+            logger.exception("auto backup restore failed")
+            QMessageBox.critical(self, "오류", f"데이터 복원 중 예상치 못한 오류가 발생했습니다.\n{exc}")
+
+
     def _on_memo_title_only_toggled(self, checked: bool) -> None:
         self.memo_title_only = bool(checked)
         self.repository.set_setting("memo_title_only", "1" if checked else "0")
@@ -3471,6 +4100,36 @@ class MainWindow(QMainWindow):
         self.refresh()
         self._edit_entry(EntryType.SCHEDULE, None)
 
+    def _move_calendar_entry(self, entry_id: int, source_day: date, target_day: date) -> bool:
+        if target_day == source_day:
+            return False
+        entry = self.repository.get_entry(int(entry_id))
+        if entry is None:
+            return False
+        if entry.entry_type == EntryType.MEMO:
+            return False
+        if entry.recurrence_enabled or (entry.source_entry_id is not None and entry.source_entry_id != entry.entry_id):
+            QMessageBox.information(self, "안내", "반복 일정은 아직 드래그 이동을 지원하지 않습니다.")
+            return False
+
+        delta_days = (target_day - source_day).days
+        if delta_days == 0:
+            return False
+
+        if entry.day is not None:
+            entry.day = entry.day + timedelta(days=delta_days)
+        if entry.start_date is not None:
+            entry.start_date = entry.start_date + timedelta(days=delta_days)
+        if entry.end_date is not None:
+            entry.end_date = entry.end_date + timedelta(days=delta_days)
+
+        self.repository.upsert_entry(entry)
+        self.repository.save()
+        self.selected_day = target_day
+        self.sidebar_mode = "day"
+        self.refresh()
+        return True
+
     def _change_month(self, delta: int) -> None:
         month = self.current_month + delta
         year = self.current_year
@@ -3542,14 +4201,26 @@ class MainWindow(QMainWindow):
             self.repository.get_setting("toggle_shortcut", default_shortcut()),
             current_auto_start,
             self._sticker_animation_enabled,
+            self.hide_completed_on_calendar,
+            self.repository.get_setting("auto_backup_enabled", "1") != "0",
+            int(self.repository.get_setting("auto_backup_interval_days", "1")),
+            int(self.repository.get_setting("auto_backup_keep_count", "5")),
+            self.repository.db_path,
         )
         if dialog.exec() and dialog.result is not None:
             action = str(dialog.result.get("action", "apply"))
-            if action == "export_excel_all":
-                self._export_all_entries_to_excel()
+            if action == "export_data":
+                self._export_data_flow()
                 return
-            if action == "import_excel_all":
-                self._import_all_entries_from_excel()
+            if action == "import_data":
+                self._import_data_flow()
+                return
+            if action == "restore_auto_backup":
+                self._restore_auto_backup_flow()
+                return
+            if action == "reload_holidays":
+                self._holidays_fixed, self._holidays_yearly = self._load_holidays()
+                self.refresh()
                 return
             new_shortcut = str(dialog.result["shortcut"])
             if self.hotkey_manager is not None and not self.hotkey_manager.update_shortcut(new_shortcut):
@@ -3564,6 +4235,14 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("auto_start", "1" if current_auto_start else "0")
             self._sticker_animation_enabled = bool(dialog.result.get("sticker_animation_enabled", True))
             self.repository.set_setting("sticker_animation_enabled", "1" if self._sticker_animation_enabled else "0")
+            self.hide_completed_on_calendar = bool(dialog.result.get("hide_completed_on_calendar", True))
+            self.repository.set_setting("hide_completed_on_calendar", "1" if self.hide_completed_on_calendar else "0")
+            
+            auto_bk_enabled = bool(dialog.result.get("auto_backup_enabled", True))
+            self.repository.set_setting("auto_backup_enabled", "1" if auto_bk_enabled else "0")
+            self.repository.set_setting("auto_backup_interval_days", str(dialog.result.get("auto_backup_interval_days", 1)))
+            self.repository.set_setting("auto_backup_keep_count", str(dialog.result.get("auto_backup_keep_count", 5)))
+
             if not self._sticker_animation_enabled:
                 self._sticker_animation_state.clear()
             self.repository.save()
@@ -3573,6 +4252,7 @@ class MainWindow(QMainWindow):
                     "자동 시작 설정",
                     "윈도우 자동 시작 설정 적용에 실패했습니다.\n보안 정책 또는 권한을 확인해 주세요.",
                 )
+            self._holidays_fixed, self._holidays_yearly = self._load_holidays()
             self.refresh()
 
     def _edit_entry(self, entry_type: EntryType, entry: CalendarEntry | None) -> None:
@@ -3772,9 +4452,13 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.tray_icon is not None and not self._force_exit:
             self._remember_window_state()
+            self._persist_window_state()
+            self.repository.save()
             self.hide()
             event.ignore()
             return
+        self._remember_window_state()
+        self._persist_window_state()
         self.repository.save()
         if self._alert_timer is not None:
             self._alert_timer.stop()
@@ -3811,3 +4495,27 @@ class MainWindow(QMainWindow):
                 event.accept()
                 return
         super().keyPressEvent(event)
+
+    def _perform_auto_backup(self) -> None:
+        try:
+            enabled = self.repository.get_setting("auto_backup_enabled", "1") != "0"
+            if not enabled:
+                return
+
+            interval_days = int(self.repository.get_setting("auto_backup_interval_days", "1"))
+            if interval_days <= 0:
+                interval_days = 1
+            keep_count = int(self.repository.get_setting("auto_backup_keep_count", "5"))
+            last_backup = self.repository.get_setting("last_auto_backup_time", "")
+
+            db_path = self.repository.db_path
+            backup_dir = db_path.parent / "backups"
+
+            from taskcalendar.backup_io import run_auto_backup_db
+
+            new_stamp = run_auto_backup_db(db_path, backup_dir, interval_days, keep_count, last_backup)
+            if new_stamp:
+                self.repository.set_setting("last_auto_backup_time", new_stamp)
+                self.repository.save()
+        except Exception as exc:
+            logger.exception("auto_backup execution failed")

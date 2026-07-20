@@ -1,17 +1,18 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import calendar
 import ctypes
 import json
 import shutil
 import sqlite3
+import traceback
 from ctypes import wintypes
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
-from taskcalendar.models import AlertType, CalendarEntry, DaySummary, EntryType, RecurrenceType
+from taskcalendar.models import AlertType, CalendarEntry, DaySummary, EntryType, RecurrenceType, Alarm
 
 
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
@@ -73,6 +74,25 @@ def unprotect_bytes(data: bytes) -> bytes:
         kernel32.LocalFree(out_blob.pbData)
 
 
+def _can_deserialize_sqlite_blob(connection: sqlite3.Connection, data: bytes) -> bool:
+    try:
+        connection.deserialize(data)
+        connection.row_factory = sqlite3.Row
+        # Deserialize can succeed with invalid bytes; force a real SQLite read path.
+        connection.execute("PRAGMA schema_version").fetchone()
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "entries" not in tables or "settings" not in tables:
+            return False
+        return True
+    except sqlite3.Error:
+        return False
+
+
 class EncryptedRepository:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
@@ -82,12 +102,61 @@ class EncryptedRepository:
         self.connection = sqlite3.connect(":memory:")
         self.connection.row_factory = sqlite3.Row
         self._initialize()
-        if self.db_path.exists():
-            self._load()
+        try:
+            if self.db_path.exists():
+                self._load()
+            self._ensure_columns()
+            if not self.db_path.exists():
+                self._seed()
+                self.save()
+        except sqlite3.DatabaseError as exc:
+            self._log_diagnostic("database_error_during_init", f"{exc}\n{traceback.format_exc()}")
+            self._recover_from_corrupt_database()
+
+    def _log_diagnostic(self, stage: str, detail: str) -> None:
+        try:
+            log_path = self.db_path.parent / "taskcalendar_storage_diagnostic.log"
+            now = datetime.now().isoformat(timespec="seconds")
+            db_info = "missing"
+            if self.db_path.exists():
+                db_info = f"exists,size={self.db_path.stat().st_size}"
+            bak_path = self.db_path.with_suffix(self.db_path.suffix + ".bak")
+            bak_info = "missing"
+            if bak_path.exists():
+                bak_info = f"exists,size={bak_path.stat().st_size}"
+            with log_path.open("a", encoding="utf-8") as fh:
+                fh.write(
+                    f"[{now}] stage={stage}\n"
+                    f"db={self.db_path} ({db_info})\n"
+                    f"bak={bak_path} ({bak_info})\n"
+                    f"{detail.strip()}\n\n"
+                )
+        except Exception:
+            pass
+
+    def _recover_from_corrupt_database(self) -> None:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        corrupt_path = self.db_path.with_suffix(self.db_path.suffix + f".corrupt.{stamp}")
+        bak_path = self.db_path.with_suffix(self.db_path.suffix + ".bak")
+        corrupt_bak_path = bak_path.with_suffix(bak_path.suffix + f".corrupt.{stamp}")
+        try:
+            if self.db_path.exists():
+                shutil.move(str(self.db_path), str(corrupt_path))
+            if bak_path.exists():
+                shutil.move(str(bak_path), str(corrupt_bak_path))
+            self._log_diagnostic(
+                "database_recovery",
+                f"moved_corrupt_db={corrupt_path}\nmoved_corrupt_bak={corrupt_bak_path}",
+            )
+        except Exception:
+            self._log_diagnostic("database_recovery_move_failed", traceback.format_exc())
+        self.connection.close()
+        self.connection = sqlite3.connect(":memory:")
+        self.connection.row_factory = sqlite3.Row
+        self._initialize()
         self._ensure_columns()
-        if not self.db_path.exists():
-            self._seed()
-            self.save()
+        self._seed()
+        self.save()
 
     def _initialize(self) -> None:
         self.connection.executescript(
@@ -115,6 +184,7 @@ class EncryptedRepository:
                 recurrence_month_end INTEGER NOT NULL DEFAULT 0,
                 completed_dates_json TEXT NOT NULL DEFAULT '[]',
                 icon_type TEXT NOT NULL DEFAULT '',
+                bg_color TEXT NOT NULL DEFAULT '',
                 alert_type TEXT NOT NULL DEFAULT 'none',
                 alert_offset TEXT NOT NULL DEFAULT 'at_start',
                 created_at TEXT NOT NULL,
@@ -129,6 +199,32 @@ class EncryptedRepository:
         self.connection.commit()
 
     def _ensure_columns(self) -> None:
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS alarms (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                start_date TEXT,
+                end_date TEXT,
+                alarm_time TEXT NOT NULL,
+                repeat_days_json TEXT NOT NULL DEFAULT '[]',
+                alert_offset TEXT NOT NULL DEFAULT 'at_start',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                hourly_repeat INTEGER NOT NULL DEFAULT 0,
+                hourly_interval INTEGER NOT NULL DEFAULT 1,
+                hourly_end_time TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        existing_alarms_cols = {row["name"] for row in self.connection.execute("PRAGMA table_info(alarms)").fetchall()}
+        if "hourly_repeat" not in existing_alarms_cols:
+            self.connection.execute("ALTER TABLE alarms ADD COLUMN hourly_repeat INTEGER NOT NULL DEFAULT 0")
+        if "hourly_interval" not in existing_alarms_cols:
+            self.connection.execute("ALTER TABLE alarms ADD COLUMN hourly_interval INTEGER NOT NULL DEFAULT 1")
+        if "hourly_end_time" not in existing_alarms_cols:
+            self.connection.execute("ALTER TABLE alarms ADD COLUMN hourly_end_time TEXT NOT NULL DEFAULT ''")
         existing = {row["name"] for row in self.connection.execute("PRAGMA table_info(entries)").fetchall()}
         additions = {
             "all_day": "ALTER TABLE entries ADD COLUMN all_day INTEGER NOT NULL DEFAULT 0",
@@ -141,6 +237,7 @@ class EncryptedRepository:
             "recurrence_month_end": "ALTER TABLE entries ADD COLUMN recurrence_month_end INTEGER NOT NULL DEFAULT 0",
             "completed_dates_json": "ALTER TABLE entries ADD COLUMN completed_dates_json TEXT NOT NULL DEFAULT '[]'",
             "icon_type": "ALTER TABLE entries ADD COLUMN icon_type TEXT NOT NULL DEFAULT ''",
+            "bg_color": "ALTER TABLE entries ADD COLUMN bg_color TEXT NOT NULL DEFAULT ''",
             "alert_type": "ALTER TABLE entries ADD COLUMN alert_type TEXT NOT NULL DEFAULT 'none'",
             "alert_offset": "ALTER TABLE entries ADD COLUMN alert_offset TEXT NOT NULL DEFAULT 'at_start'",
         }
@@ -156,21 +253,47 @@ class EncryptedRepository:
         for candidate in candidates:
             if not candidate.exists():
                 continue
+            raw = candidate.read_bytes()
+            if not raw:
+                self._log_diagnostic("load_skip_empty", f"candidate={candidate}")
+                continue
             try:
-                plain = unprotect_bytes(candidate.read_bytes())
+                plain = unprotect_bytes(raw)
             except OSError as exc:
                 last_error = exc
+                self._log_diagnostic("load_unprotect_failed", f"candidate={candidate}\nerror={exc}")
+                # Compatibility/recovery: older or broken files may contain plain SQLite bytes.
+                if _can_deserialize_sqlite_blob(self.connection, raw):
+                    self._log_diagnostic("load_plain_sqlite_fallback_ok", f"candidate={candidate}")
+                    return
+                self._log_diagnostic("load_plain_sqlite_fallback_failed", f"candidate={candidate}")
                 continue
-            self.connection.deserialize(plain)
-            self.connection.row_factory = sqlite3.Row
-            return
+            if _can_deserialize_sqlite_blob(self.connection, plain):
+                self._log_diagnostic("load_encrypted_sqlite_ok", f"candidate={candidate}")
+                return
+            self._log_diagnostic("load_encrypted_sqlite_invalid", f"candidate={candidate}")
 
+        # None of the candidates was usable. Keep running with a fresh in-memory DB.
+        # The next save() will write a clean encrypted database file.
         if last_error is not None:
-            raise last_error
+            self._log_diagnostic("load_no_usable_candidate", f"last_error={last_error}")
+        else:
+            self._log_diagnostic("load_no_usable_candidate", "no_candidate_error")
 
     def save(self) -> None:
         self.connection.commit()
-        self.db_path.write_bytes(protect_bytes(self.connection.serialize()))
+        encrypted = protect_bytes(self.connection.serialize())
+        tmp_path = self.db_path.with_suffix(self.db_path.suffix + ".tmp")
+        bak_path = self.db_path.with_suffix(self.db_path.suffix + ".bak")
+        tmp_path.write_bytes(encrypted)
+        if self.db_path.exists():
+            shutil.copy2(self.db_path, bak_path)
+        tmp_path.replace(self.db_path)
+
+    def reload_database(self) -> None:
+        if self.db_path.exists():
+            self._load()
+            self._ensure_columns()
 
     def _seed(self) -> None:
         # Keep initial DB empty; only default settings are seeded.
@@ -219,6 +342,7 @@ class EncryptedRepository:
             int(entry.recurrence_month_end),
             json.dumps(entry.completed_dates, ensure_ascii=False),
             entry.icon_type,
+            entry.bg_color,
             entry.alert_type.value,
             entry.alert_offset,
         )
@@ -229,9 +353,9 @@ class EncryptedRepository:
                     entry_type, title, description, day, start_date, end_date,
                     start_time, end_time, all_day, assignee, status, attachments_json,
                     recurrence_enabled, recurrence_type, recurrence_interval,
-                    recurrence_weekdays_json, recurrence_month_day, recurrence_month_week, recurrence_month_end, completed_dates_json, icon_type, alert_type, alert_offset,
+                    recurrence_weekdays_json, recurrence_month_day, recurrence_month_week, recurrence_month_end, completed_dates_json, icon_type, bg_color, alert_type, alert_offset,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values + (now, now),
             )
@@ -243,7 +367,7 @@ class EncryptedRepository:
                 SET entry_type=?, title=?, description=?, day=?, start_date=?, end_date=?,
                     start_time=?, end_time=?, all_day=?, assignee=?, status=?, attachments_json=?,
                     recurrence_enabled=?, recurrence_type=?, recurrence_interval=?,
-                    recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, alert_type=?, alert_offset=?, updated_at=?
+                    recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, updated_at=?
                 WHERE id = ?
                 """,
                 values + (now, entry.entry_id),
@@ -413,6 +537,7 @@ class EncryptedRepository:
             recurrence_month_end=bool(row["recurrence_month_end"]) if "recurrence_month_end" in row.keys() else False,
             completed_dates=json.loads(row["completed_dates_json"] or "[]"),
             icon_type=row["icon_type"] or "",
+            bg_color=row["bg_color"] or "",
             alert_type=AlertType(row["alert_type"] or "none"),
             alert_offset=row["alert_offset"] or "at_start",
             created_at=datetime.fromisoformat(row["created_at"]),
@@ -488,6 +613,79 @@ class EncryptedRepository:
     def _is_managed_attachment(path: Path) -> bool:
         return not path.is_absolute() and len(path.parts) >= 4 and path.parts[0].isdigit()
 
+    @staticmethod
+    def _row_to_alarm(row: sqlite3.Row) -> Alarm:
+        return Alarm(
+            alarm_id=row["id"],
+            title=row["title"],
+            start_date=date.fromisoformat(row["start_date"]) if row["start_date"] else None,
+            end_date=date.fromisoformat(row["end_date"]) if row["end_date"] else None,
+            alarm_time=row["alarm_time"] or "",
+            repeat_days=json.loads(row["repeat_days_json"] or "[]"),
+            alert_offset=row["alert_offset"] or "at_start",
+            enabled=bool(row["enabled"]),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            hourly_repeat=bool(row["hourly_repeat"]),
+            hourly_interval=int(row["hourly_interval"]),
+            hourly_end_time=row["hourly_end_time"] or "",
+        )
+
+    def upsert_alarm(self, alarm: Alarm) -> Alarm:
+        now = datetime.now().isoformat(timespec="seconds")
+        values = (
+            alarm.title,
+            alarm.start_date.isoformat() if alarm.start_date else None,
+            alarm.end_date.isoformat() if alarm.end_date else None,
+            alarm.alarm_time,
+            json.dumps(alarm.repeat_days, ensure_ascii=False),
+            alarm.alert_offset,
+            int(alarm.enabled),
+            int(alarm.hourly_repeat),
+            alarm.hourly_interval,
+            alarm.hourly_end_time,
+        )
+        if alarm.alarm_id is None:
+            cursor = self.connection.execute(
+                """
+                INSERT INTO alarms (
+                    title, start_date, end_date, alarm_time, repeat_days_json,
+                    alert_offset, enabled, hourly_repeat, hourly_interval, hourly_end_time,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                values + (now, now),
+            )
+            alarm.alarm_id = int(cursor.lastrowid)
+            alarm.created_at = datetime.fromisoformat(now)
+            alarm.updated_at = datetime.fromisoformat(now)
+        else:
+            self.connection.execute(
+                """
+                UPDATE alarms
+                SET title=?, start_date=?, end_date=?, alarm_time=?, repeat_days_json=?,
+                    alert_offset=?, enabled=?, hourly_repeat=?, hourly_interval=?, hourly_end_time=?,
+                    updated_at=?
+                WHERE id = ?
+                """,
+                values + (now, alarm.alarm_id),
+            )
+            alarm.updated_at = datetime.fromisoformat(now)
+        self.connection.commit()
+        return alarm
+
+    def delete_alarm(self, alarm_id: int) -> None:
+        self.connection.execute("DELETE FROM alarms WHERE id = ?", (alarm_id,))
+        self.connection.commit()
+
+    def list_alarms(self) -> list[Alarm]:
+        rows = self.connection.execute("SELECT * FROM alarms ORDER BY alarm_time ASC, id ASC").fetchall()
+        return [self._row_to_alarm(row) for row in rows]
+
+    def get_alarm(self, alarm_id: int) -> Alarm | None:
+        row = self.connection.execute("SELECT * FROM alarms WHERE id = ?", (alarm_id,)).fetchone()
+        return self._row_to_alarm(row) if row else None
+
 
 def calendar_days(year: int, month: int) -> list[date]:
     cal = calendar.Calendar(firstweekday=6)
@@ -496,4 +694,3 @@ def calendar_days(year: int, month: int) -> list[date]:
         last = days[-1]
         days.append(last.fromordinal(last.toordinal() + 1))
     return days
-

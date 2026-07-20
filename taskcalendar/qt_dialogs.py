@@ -1,6 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 import ctypes
 from pathlib import Path
 from typing import Callable
@@ -32,10 +32,12 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QScrollArea,
 )
 
 from taskcalendar.models import (
     ALERT_OPTIONS,
+    COLOR_OPTIONS,
     ICON_OPTIONS,
     RECURRENCE_OPTIONS,
     WEEKDAY_LABELS,
@@ -44,6 +46,8 @@ from taskcalendar.models import (
     EntryType,
     RecurrenceType,
     THEME_OPTIONS,
+    Alarm,
+    calculate_next_alarm_trigger,
 )
 from taskcalendar.desktop_services import _parse_hotkey, normalize_shortcut
 from taskcalendar.paths import asset_path
@@ -55,6 +59,10 @@ ICON_PREVIEW_EMOJI = {
     "meal": "🍚",
     "meeting": "👥",
 }
+REPEAT_DETAIL_WIDTH = 210
+REPEAT_SPIN_FIELD_WIDTH = 68
+REPEAT_DETAIL_HEIGHT = 30
+FORM_LABEL_WIDTH = 40
 
 
 def _dialog_icon() -> QIcon:
@@ -359,7 +367,7 @@ class EntryDialog(QDialog):
         self.setObjectName("entryDialog")
         self.setWindowTitle("메모 등록" if entry_type == EntryType.MEMO else "일정 등록")
         self.setWindowIcon(_dialog_icon())
-        self.dialog_width = 620 if entry_type != EntryType.MEMO else 600
+        self.dialog_width = 700 if entry_type != EntryType.MEMO else 600
         self.resize(self.dialog_width, 560 if entry_type != EntryType.MEMO else 430)
         self._apply_styles()
 
@@ -384,10 +392,14 @@ class EntryDialog(QDialog):
             root.addWidget(repeat_card)
 
             self.repeat_panel, repeat_form = self._create_grid_card()
+            repeat_form.setColumnMinimumWidth(0, 40)
             repeat_form.setColumnStretch(3, 1)
 
             repeat_form.addWidget(self._section_title("반복 설정"), 0, 0, 1, 4)
-            repeat_form.addWidget(self._muted("주기"), 1, 0)
+            repeat_cycle_label = self._muted("주기")
+            repeat_cycle_label.setFixedWidth(FORM_LABEL_WIDTH)
+            repeat_cycle_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            repeat_form.addWidget(repeat_cycle_label, 1, 0)
             self.recurrence_combo = QComboBox()
             for label, value in RECURRENCE_OPTIONS[1:]:
                 self.recurrence_combo.addItem(label, value.value)
@@ -414,9 +426,14 @@ class EntryDialog(QDialog):
             self.recurrence_interval.setMinimumHeight(30)
             self._syncing_interval = False
             self.recurrence_interval.valueChanged.connect(self._sync_recurrence_interval_from_daily)
-            interval_layout.addWidget(self._step_field(self.recurrence_interval, 20))
+            self.recurrence_interval_field = self._step_field(self.recurrence_interval, 20)
+            self.recurrence_interval_field.setFixedWidth(REPEAT_SPIN_FIELD_WIDTH)
+            interval_layout.addWidget(self.recurrence_interval_field)
             interval_layout.addWidget(self._muted("일마다"))
             self.interval_wrap.setMinimumHeight(30)
+            self.interval_wrap.setMaximumHeight(REPEAT_DETAIL_HEIGHT)
+            self.interval_wrap.setMinimumWidth(REPEAT_DETAIL_WIDTH)
+            self.interval_wrap.setMaximumWidth(REPEAT_DETAIL_WIDTH)
             repeat_form.addWidget(self.interval_wrap, 1, 2)
 
             detail_slot = QWidget()
@@ -424,16 +441,22 @@ class EntryDialog(QDialog):
             detail_layout.setContentsMargins(0, 0, 0, 0)
             detail_layout.setSpacing(8)
             detail_layout.addStretch(1)
+            detail_slot.setMinimumHeight(REPEAT_DETAIL_HEIGHT)
+            detail_slot.setMaximumHeight(REPEAT_DETAIL_HEIGHT)
 
             self.recurrence_summary = QLabel("")
             self.recurrence_summary.setObjectName("hint")
             self.recurrence_summary.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.recurrence_summary.setMinimumHeight(REPEAT_DETAIL_HEIGHT)
+            self.recurrence_summary.setMaximumHeight(REPEAT_DETAIL_HEIGHT)
             detail_layout.addWidget(self.recurrence_summary)
 
             self.weekday_wrap = QWidget()
             weekday_layout = QHBoxLayout(self.weekday_wrap)
             weekday_layout.setContentsMargins(0, 0, 0, 0)
             weekday_layout.setSpacing(6)
+            self.weekday_wrap.setMinimumHeight(REPEAT_DETAIL_HEIGHT)
+            self.weekday_wrap.setMaximumHeight(REPEAT_DETAIL_HEIGHT)
             self.weekly_interval = QSpinBox()
             self.weekly_interval.setRange(1, 52)
             self.weekly_interval.setValue(self.recurrence_interval.value())
@@ -442,7 +465,9 @@ class EntryDialog(QDialog):
             self.weekly_interval.setMaximumWidth(44)
             self.weekly_interval.setMinimumHeight(30)
             self.weekly_interval.valueChanged.connect(self._sync_recurrence_interval_from_weekly)
-            weekday_layout.addWidget(self._step_field(self.weekly_interval, 20))
+            self.weekly_interval_field = self._step_field(self.weekly_interval, 20)
+            self.weekly_interval_field.setFixedWidth(REPEAT_SPIN_FIELD_WIDTH)
+            weekday_layout.addWidget(self.weekly_interval_field)
             weekday_layout.addWidget(self._muted("주마다"))
             selected_weekdays = set(entry.recurrence_weekdays if entry else [])
             self.weekday_checks: list[QCheckBox] = []
@@ -469,6 +494,7 @@ class EntryDialog(QDialog):
             self.recurrence_month_day.setMaximumWidth(44)
             self.recurrence_month_day.setMinimumHeight(30)
             self.recurrence_month_day_field = self._step_field(self.recurrence_month_day, 20)
+            self.recurrence_month_day_field.setFixedWidth(REPEAT_SPIN_FIELD_WIDTH)
             month_day_layout.addWidget(self.recurrence_month_day_field)
             month_day_layout.addWidget(self._muted("일"))
             self.recurrence_month_end_check = QCheckBox("말일")
@@ -477,6 +503,9 @@ class EntryDialog(QDialog):
             self.recurrence_month_end_check.toggled.connect(self._refresh_repeat_details)
             month_day_layout.addWidget(self.recurrence_month_end_check)
             self.month_day_wrap.setMinimumHeight(30)
+            self.month_day_wrap.setMaximumHeight(REPEAT_DETAIL_HEIGHT)
+            self.month_day_wrap.setMinimumWidth(REPEAT_DETAIL_WIDTH)
+            self.month_day_wrap.setMaximumWidth(REPEAT_DETAIL_WIDTH)
             repeat_form.addWidget(self.month_day_wrap, 1, 2)
 
             self.month_week_wrap = QWidget()
@@ -513,27 +542,59 @@ class EntryDialog(QDialog):
             self.recurrence_month_weekday_combo.setMaximumHeight(30)
             month_week_layout.addWidget(self.recurrence_month_weekday_combo)
             self.month_week_wrap.setMinimumHeight(30)
+            self.month_week_wrap.setMaximumHeight(REPEAT_DETAIL_HEIGHT)
+            self.month_week_wrap.setMinimumWidth(REPEAT_DETAIL_WIDTH)
+            self.month_week_wrap.setMaximumWidth(REPEAT_DETAIL_WIDTH)
             repeat_form.addWidget(self.month_week_wrap, 1, 2)
             root.addWidget(self.repeat_panel)
 
         if self.entry_type != EntryType.MEMO:
             details_card, details_layout = self._create_grid_card()
-            details_layout.addWidget(self._muted("아이콘"), 0, 0)
+            details_layout.setColumnMinimumWidth(0, 40)
+            icon_label = self._muted("아이콘")
+            icon_label.setFixedWidth(FORM_LABEL_WIDTH)
+            icon_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            details_layout.addWidget(icon_label, 0, 0)
             self.icon_combo = QComboBox()
             for label, value in ICON_OPTIONS:
                 preview = ICON_PREVIEW_EMOJI.get(str(value), "")
                 display = f"{preview} {label}".strip() if preview else label
                 self.icon_combo.addItem(display, value)
             self.icon_combo.setCurrentIndex(max(0, self.icon_combo.findData(entry.icon_type if entry else "")))
-            self.icon_combo.setMinimumWidth(132)
-            self.icon_combo.setMaximumWidth(180)
-            self.icon_combo.view().setMinimumWidth(180)
+            self.icon_combo.setMinimumWidth(112)
+            self.icon_combo.setMaximumWidth(112)
+            self.icon_combo.setMinimumHeight(30)
+            self.icon_combo.setMaximumHeight(30)
+            self.icon_combo.view().setMinimumWidth(112)
             details_layout.addWidget(self.icon_combo, 0, 1)
 
-            details_layout.addWidget(self._muted("일시"), 1, 0)
+            bg_row = QWidget()
+            bg_row_layout = QHBoxLayout(bg_row)
+            bg_row_layout.setContentsMargins(0, 0, 0, 0)
+            bg_row_layout.setSpacing(8)
+            bg_color_label = self._muted("배경색")
+            bg_color_label.setFixedWidth(FORM_LABEL_WIDTH)
+            bg_color_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            bg_row_layout.addWidget(bg_color_label)
+            self.bg_color_combo = QComboBox()
+            for label, value in COLOR_OPTIONS:
+                self.bg_color_combo.addItem(label, value)
+            self.bg_color_combo.setCurrentIndex(max(0, self.bg_color_combo.findData(entry.bg_color if entry else "")))
+            self.bg_color_combo.setMinimumWidth(112)
+            self.bg_color_combo.setMaximumWidth(112)
+            self.bg_color_combo.setMinimumHeight(30)
+            self.bg_color_combo.setMaximumHeight(30)
+            bg_row_layout.addWidget(self.bg_color_combo)
+            details_layout.addWidget(bg_row, 0, 3, 1, 3, Qt.AlignmentFlag.AlignLeft)
+
+            when_label = self._muted("일시")
+            when_label.setFixedWidth(FORM_LABEL_WIDTH)
+            when_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            details_layout.addWidget(when_label, 1, 0)
             self.start_date = OverwriteDateEdit(_to_qdate(base_day))
             self.start_date.setDisplayFormat("yyyy-MM-dd")
             self.start_date.setCalendarPopup(True)
+            self.start_date.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
             self.start_date.setMinimumWidth(112)
             self.start_date.setMaximumWidth(112)
             self.start_date.dateChanged.connect(self._refresh_repeat_details)
@@ -544,25 +605,34 @@ class EntryDialog(QDialog):
             self.start_time.setMinimumWidth(58)
             self.start_time.setMaximumWidth(58)
             self.start_time.setMinimumHeight(30)
-            details_layout.addWidget(self._step_field(self.start_time, 20), 1, 2)
-            details_layout.addWidget(self._muted("~"), 1, 3)
+            start_time_field = self._step_field(self.start_time, 20)
+
+            end_row = QWidget()
+            end_row_layout = QHBoxLayout(end_row)
+            end_row_layout.setContentsMargins(0, 0, 0, 0)
+            end_row_layout.setSpacing(6)
+            end_row_layout.addWidget(start_time_field)
+            end_row_layout.addWidget(self._muted("~"))
             self.end_date = OverwriteDateEdit(_to_qdate(entry.end_date if entry else base_day))
             self.end_date.setDisplayFormat("yyyy-MM-dd")
             self.end_date.setCalendarPopup(True)
+            self.end_date.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
             self.end_date.setMinimumWidth(112)
             self.end_date.setMaximumWidth(112)
-            details_layout.addWidget(self.end_date, 1, 4)
+            end_row_layout.addWidget(self.end_date)
             self.end_time = OverwriteTimeEdit(_to_qtime(entry.end_time if entry else "", "18:00"))
             self.end_time.setDisplayFormat("HH:mm")
             self.end_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
             self.end_time.setMinimumWidth(58)
             self.end_time.setMaximumWidth(58)
             self.end_time.setMinimumHeight(30)
-            details_layout.addWidget(self._step_field(self.end_time, 20), 1, 5)
+            end_row_layout.addWidget(self._step_field(self.end_time, 20))
             self.all_day = QCheckBox("종일")
             self.all_day.setChecked(entry.all_day if entry else True)
             self.all_day.toggled.connect(self._toggle_all_day)
-            details_layout.addWidget(self.all_day, 1, 6)
+            end_row_layout.addWidget(self.all_day)
+            end_row_layout.addStretch(1)
+            details_layout.addWidget(end_row, 1, 2, 1, 5)
             root.addWidget(details_card)
 
         if self.entry_type == EntryType.MEMO:
@@ -983,6 +1053,7 @@ class EntryDialog(QDialog):
             recurrence_month_week=int(self.recurrence_month_week_combo.currentData()),
             recurrence_month_end=self.recurrence_month_end_check.isChecked(),
             icon_type=str(self.icon_combo.currentData()),
+            bg_color=str(self.bg_color_combo.currentData()),
             alert_type=AlertType.POPUP if self.alert_popup.isChecked() else AlertType.NONE,
             alert_offset=str(self.alert_offset_combo.currentData()),
         )
@@ -1265,16 +1336,22 @@ class SettingsDialog(QDialog):
         current_shortcut: str,
         auto_start_enabled: bool,
         sticker_animation_enabled: bool,
+        hide_completed_on_calendar: bool,
+        auto_backup_enabled: bool,
+        auto_backup_interval_days: int,
+        auto_backup_keep_count: int,
+        db_path: Path,
     ) -> None:
         super().__init__(parent)
+        self._db_path = db_path
         self.result: dict[str, object] | None = None
         self._current_shortcut = normalize_shortcut(current_shortcut)
         shortcut_modifiers, shortcut_key = self._shortcut_parts(current_shortcut)
         self.setModal(True)
         self.setWindowTitle("환경설정")
         self.setWindowIcon(_dialog_icon())
-        self.resize(470, 460)
-        self.setFixedWidth(470)
+        self.resize(620, 540)
+        self.setFixedWidth(620)
         self.setStyleSheet(
             """
             QDialog {
@@ -1356,8 +1433,8 @@ class SettingsDialog(QDialog):
         )
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 18, 18, 18)
-        root.setSpacing(12)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(9)
 
         title = QLabel("환경설정")
         title.setObjectName("title")
@@ -1369,8 +1446,8 @@ class SettingsDialog(QDialog):
         appearance = QFrame()
         appearance.setObjectName("card")
         appearance_layout = QFormLayout(appearance)
-        appearance_layout.setContentsMargins(14, 12, 14, 12)
-        appearance_layout.setSpacing(10)
+        appearance_layout.setContentsMargins(12, 10, 12, 10)
+        appearance_layout.setSpacing(8)
         appearance_title = QLabel("스킨 설정")
         appearance_title.setObjectName("sectionTitle")
         appearance_layout.addRow(appearance_title)
@@ -1386,8 +1463,8 @@ class SettingsDialog(QDialog):
         shortcut_card = QFrame()
         shortcut_card.setObjectName("card")
         shortcut_layout = QVBoxLayout(shortcut_card)
-        shortcut_layout.setContentsMargins(14, 12, 14, 12)
-        shortcut_layout.setSpacing(8)
+        shortcut_layout.setContentsMargins(12, 10, 12, 10)
+        shortcut_layout.setSpacing(6)
         shortcut_title = QLabel("단축키 설정")
         shortcut_title.setObjectName("sectionTitle")
         shortcut_layout.addWidget(shortcut_title)
@@ -1439,59 +1516,144 @@ class SettingsDialog(QDialog):
         behavior_card = QFrame()
         behavior_card.setObjectName("card")
         behavior_layout = QVBoxLayout(behavior_card)
-        behavior_layout.setContentsMargins(14, 12, 14, 12)
-        behavior_layout.setSpacing(8)
+        behavior_layout.setContentsMargins(12, 10, 12, 10)
+        behavior_layout.setSpacing(6)
         behavior_title = QLabel("실행 옵션")
         behavior_title.setObjectName("sectionTitle")
         behavior_layout.addWidget(behavior_title)
         self.auto_start_check = QCheckBox("윈도우 시작 시 자동 시작")
         self.auto_start_check.setChecked(auto_start_enabled)
         behavior_layout.addWidget(self.auto_start_check)
-        auto_start_hint = QLabel("체크하면 Windows 로그인 후 캘린더가 자동으로 실행됩니다.")
-        auto_start_hint.setObjectName("subtitle")
-        auto_start_hint.setWordWrap(True)
-        behavior_layout.addWidget(auto_start_hint)
         self.sticker_animation_check = QCheckBox("스티커 움직임 사용")
         self.sticker_animation_check.setChecked(sticker_animation_enabled)
         behavior_layout.addWidget(self.sticker_animation_check)
-        sticker_animation_hint = QLabel("체크하면 스티커 애니메이션(움직임/깜빡임)이 표시됩니다.")
-        sticker_animation_hint.setObjectName("subtitle")
-        sticker_animation_hint.setWordWrap(True)
-        behavior_layout.addWidget(sticker_animation_hint)
+        self.hide_completed_on_calendar_check = QCheckBox("달력에서 완료 일정 숨기기")
+        self.hide_completed_on_calendar_check.setChecked(hide_completed_on_calendar)
+        behavior_layout.addWidget(self.hide_completed_on_calendar_check)
         root.addWidget(behavior_card)
+
+        backup_card = QFrame()
+        backup_card.setObjectName("card")
+        backup_layout = QVBoxLayout(backup_card)
+        backup_layout.setContentsMargins(12, 10, 12, 10)
+        backup_layout.setSpacing(6)
+        backup_title = QLabel("자동 백업 설정")
+        backup_title.setObjectName("sectionTitle")
+        backup_layout.addWidget(backup_title)
+
+        backup_row1 = QHBoxLayout()
+        self.auto_backup_check = QCheckBox("앱 시작 시 자동 백업 활성화")
+        self.auto_backup_check.setChecked(auto_backup_enabled)
+        backup_row1.addWidget(self.auto_backup_check)
+
+        backup_note = QLabel("(※ 첨부파일은 백업에 포함되지 않습니다.)")
+        backup_note.setObjectName("subtitle")
+        backup_note.setStyleSheet("color: #d15d48; font-weight: 600;")
+        backup_row1.addWidget(backup_note)
+        backup_row1.addStretch(1)
+        backup_layout.addLayout(backup_row1)
+
+        backup_row2 = QHBoxLayout()
+        interval_label = QLabel("백업 주기:")
+        interval_label.setObjectName("muted")
+        backup_row2.addWidget(interval_label)
+
+        self.auto_backup_interval_combo = QComboBox()
+        self.auto_backup_interval_combo.addItem("매일 (1일 마다)", 1)
+        self.auto_backup_interval_combo.addItem("3일 마다", 3)
+        self.auto_backup_interval_combo.addItem("7일 마다 (매주)", 7)
+        self.auto_backup_interval_combo.addItem("30일 마다 (매월)", 30)
+
+        # Fallback 0 to 1
+        check_interval = auto_backup_interval_days if auto_backup_interval_days > 0 else 1
+        idx = self.auto_backup_interval_combo.findData(check_interval)
+        if idx >= 0:
+            self.auto_backup_interval_combo.setCurrentIndex(idx)
+        else:
+            self.auto_backup_interval_combo.setCurrentIndex(0)
+        backup_row2.addWidget(self.auto_backup_interval_combo)
+
+        keep_label = QLabel("보관 개수:")
+        keep_label.setObjectName("muted")
+        backup_row2.addWidget(keep_label)
+
+        self.auto_backup_keep_combo = QComboBox()
+        self.auto_backup_keep_combo.addItem("3개", 3)
+        self.auto_backup_keep_combo.addItem("5개", 5)
+        self.auto_backup_keep_combo.addItem("10개", 10)
+        self.auto_backup_keep_combo.addItem("20개", 20)
+        self.auto_backup_keep_combo.addItem("무제한", 0)
+
+        idx = self.auto_backup_keep_combo.findData(auto_backup_keep_count)
+        if idx >= 0:
+            self.auto_backup_keep_combo.setCurrentIndex(idx)
+        else:
+            self.auto_backup_keep_combo.setCurrentIndex(1)
+        backup_row2.addWidget(self.auto_backup_keep_combo)
+
+        backup_row2.addStretch(1)
+
+        restore_backup_button = QPushButton("백업 파일 복원")
+        restore_backup_button.setObjectName("topbarButton")
+        restore_backup_button.clicked.connect(self._request_restore_backup)
+        backup_row2.addWidget(restore_backup_button)
+
+        open_backup_button = QPushButton("백업 폴더 열기")
+        open_backup_button.setObjectName("topbarButton")
+        open_backup_button.clicked.connect(self._open_backup_folder)
+        backup_row2.addWidget(open_backup_button)
+
+        backup_layout.addLayout(backup_row2)
+        root.addWidget(backup_card)
+
+        self.auto_backup_check.toggled.connect(self._on_auto_backup_toggled)
+        self._on_auto_backup_toggled(auto_backup_enabled)
 
         data_card = QFrame()
         data_card.setObjectName("card")
         data_layout = QVBoxLayout(data_card)
-        data_layout.setContentsMargins(14, 12, 14, 12)
-        data_layout.setSpacing(8)
-        data_title = QLabel("데이터 공유")
+        data_layout.setContentsMargins(12, 10, 12, 10)
+        data_layout.setSpacing(6)
+        data_title = QLabel("데이터 관리")
         data_title.setObjectName("sectionTitle")
         data_layout.addWidget(data_title)
-        data_hint = QLabel("전체 일정/업무/메모를 엑셀로 내보내거나 불러옵니다.")
+        data_hint = QLabel("전체 데이터를 내보내거나 가져옵니다.\n공휴일 설정 파일을 열어 직접 편집할 수도 있습니다.")
         data_hint.setObjectName("subtitle")
         data_hint.setWordWrap(True)
         data_layout.addWidget(data_hint)
-        data_buttons = QHBoxLayout()
+        data_buttons = QGridLayout()
         data_buttons.setContentsMargins(0, 0, 0, 0)
-        data_buttons.setSpacing(8)
-        export_button = QPushButton("전체 엑셀 저장")
+        data_buttons.setHorizontalSpacing(8)
+        data_buttons.setVerticalSpacing(8)
+        data_buttons.setColumnStretch(0, 1)
+        data_buttons.setColumnStretch(1, 1)
+        export_button = QPushButton("데이터 내보내기")
         export_button.setObjectName("topbarButton")
-        export_button.clicked.connect(self._request_export_all_excel)
-        data_buttons.addWidget(export_button)
-        import_button = QPushButton("엑셀 불러오기")
+        export_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        export_button.clicked.connect(self._request_export_data)
+        data_buttons.addWidget(export_button, 0, 0)
+        import_button = QPushButton("데이터 가져오기")
         import_button.setObjectName("topbarButton")
-        import_button.clicked.connect(self._request_import_all_excel)
-        data_buttons.addWidget(import_button)
-        data_buttons.addStretch(1)
+        import_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        import_button.clicked.connect(self._request_import_data)
+        data_buttons.addWidget(import_button, 0, 1)
+        holiday_button = QPushButton("공휴일 파일 열기")
+        holiday_button.setObjectName("topbarButton")
+        holiday_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        holiday_button.clicked.connect(self._open_holiday_file)
+        data_buttons.addWidget(holiday_button, 1, 0)
+        reload_holiday_button = QPushButton("공휴일 반영")
+        reload_holiday_button.setObjectName("topbarButton")
+        reload_holiday_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        reload_holiday_button.clicked.connect(self._request_reload_holidays)
         data_layout.addLayout(data_buttons)
         root.addWidget(data_card)
 
         info_card = QFrame()
         info_card.setObjectName("card")
         info_layout = QFormLayout(info_card)
-        info_layout.setContentsMargins(14, 12, 14, 12)
-        info_layout.setSpacing(8)
+        info_layout.setContentsMargins(12, 10, 12, 10)
+        info_layout.setSpacing(6)
         info_title = QLabel("개발자 정보")
         info_title.setObjectName("sectionTitle")
         info_layout.addRow(info_title)
@@ -1569,16 +1731,77 @@ class SettingsDialog(QDialog):
             "shortcut": shortcut,
             "auto_start": self.auto_start_check.isChecked(),
             "sticker_animation_enabled": self.sticker_animation_check.isChecked(),
+            "hide_completed_on_calendar": self.hide_completed_on_calendar_check.isChecked(),
+            "auto_backup_enabled": self.auto_backup_check.isChecked(),
+            "auto_backup_interval_days": int(self.auto_backup_interval_combo.currentData() or 0),
+            "auto_backup_keep_count": int(self.auto_backup_keep_combo.currentData() or 0),
         }
         self.accept()
 
-    def _request_export_all_excel(self) -> None:
-        self.result = {"action": "export_excel_all"}
+    def _request_export_data(self) -> None:
+        self.result = {"action": "export_data"}
         self.accept()
 
-    def _request_import_all_excel(self) -> None:
-        self.result = {"action": "import_excel_all"}
+    def _request_import_data(self) -> None:
+        self.result = {"action": "import_data"}
         self.accept()
+
+    def _request_reload_holidays(self) -> None:
+        self.result = {"action": "reload_holidays"}
+        self.accept()
+
+    def _request_restore_backup(self) -> None:
+        self.result = {"action": "restore_auto_backup"}
+        self.accept()
+
+    def _open_backup_folder(self) -> None:
+        import os
+        backup_dir = self._db_path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.startfile(str(backup_dir.resolve()))
+        except Exception:
+            pass
+
+    def _on_auto_backup_toggled(self, checked: bool) -> None:
+        self.auto_backup_interval_combo.setEnabled(checked)
+        self.auto_backup_keep_combo.setEnabled(checked)
+
+    def _open_holiday_file(self) -> None:
+        import json
+        import subprocess
+        from taskcalendar.paths import data_path
+
+        holiday_path = data_path("holidays_kr.json")
+        if not holiday_path.exists():
+            holiday_path.parent.mkdir(parents=True, exist_ok=True)
+            sample = {
+                "fixed": {
+                    "01-01": "신정",
+                    "03-01": "삼일절",
+                    "05-05": "어린이날",
+                    "06-06": "현충일",
+                    "08-15": "광복절",
+                    "10-03": "개천절",
+                    "10-09": "한글날",
+                    "12-25": "성탄절",
+                },
+                "yearly": {
+                    "2026-03-02": "삼일절 대체공휴일",
+                },
+            }
+            holiday_path.write_text(json.dumps(sample, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        try:
+            subprocess.Popen(["notepad.exe", str(holiday_path)])
+            QMessageBox.information(
+                self,
+                "안내",
+                "메모장에서 공휴일 설정 파일을 열었습니다.\n"
+                "수정 후 저장한 다음 '공휴일 반영' 또는 '적용'을 누르면 캘린더에 반영됩니다."
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "오류", f"파일을 여는 중 오류가 발생했습니다.\n{e}")
 
     def _refresh_shortcut_status(self) -> None:
         modifiers: list[str] = []
@@ -1617,3 +1840,860 @@ class SettingsDialog(QDialog):
             user32.UnregisterHotKey(None, test_id)
             return True, "사용 가능한 단축키입니다."
         return False, "다른 프로그램에서 사용 중인 단축키입니다."
+
+
+class AlarmEditDialog(QDialog):
+    def __init__(self, parent, alarm: Alarm | None = None) -> None:
+        super().__init__(parent)
+        self.alarm = alarm
+        self.setModal(True)
+        self.setWindowTitle("알람 등록" if alarm is None else "알람 수정")
+        self.setWindowIcon(_dialog_icon())
+        self.resize(500, 440)
+        self.setFixedWidth(500)
+        
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #f4f7fb;
+                color: #1f2328;
+                font-family: "Segoe UI";
+                font-size: 13px;
+            }
+            QRadioButton {
+                color: #1f2328;
+                spacing: 6px;
+            }
+            QLabel#title {
+                color: #223044;
+                font-size: 18px;
+                font-weight: 700;
+            }
+            QLabel#sectionTitle {
+                color: #223044;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QLabel#muted {
+                color: #667085;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QFrame#card {
+                background: #ffffff;
+                border: 1px solid #dbe3ec;
+                border-radius: 12px;
+            }
+            QLineEdit {
+                background: #ffffff;
+                border: 1px solid #cfd8e3;
+                border-radius: 8px;
+                padding: 6px 10px;
+                color: #1f2328;
+            }
+            QTimeEdit, QDateEdit {
+                background: #ffffff;
+                border: 1px solid #cfd8e3;
+                border-radius: 8px;
+                padding: 4px 8px;
+                color: #1f2328;
+            }
+            QComboBox {
+                background: #ffffff;
+                border: 1px solid #cfd8e3;
+                border-radius: 8px;
+                color: #1f2328;
+                min-height: 22px;
+                padding: 4px 8px;
+            }
+            QCheckBox {
+                color: #1f2328;
+                spacing: 6px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #788496;
+                background: #ffffff;
+            }
+            QCheckBox::indicator:checked {
+                background: #d7ece6;
+                border: 1px solid #1f7a67;
+                image: url("%s");
+            }
+            QPushButton {
+                background: #ffffff;
+                border: 1px solid #cfd8e3;
+                border-radius: 8px;
+                padding: 7px 16px;
+                min-width: 88px;
+            }
+            QPushButton#primary {
+                background: #1f7a67;
+                color: #ffffff;
+                border: 1px solid #1f7a67;
+                font-weight: 700;
+            }
+            QToolButton#weekdayBtn {
+                border: 1px solid #cfd8e3;
+                border-radius: 14px;
+                background: #ffffff;
+                color: #1f2328;
+                font-weight: 600;
+                min-width: 28px;
+                min-height: 28px;
+                max-width: 28px;
+                max-height: 28px;
+            }
+            QToolButton#weekdayBtn:checked {
+                background: #1f7a67;
+                color: #ffffff;
+                border: 1px solid #1f7a67;
+            }
+            """
+            % (asset_path("checkmark.svg").as_posix(),)
+        )
+        
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 12, 16, 12)
+        root.setSpacing(8)
+        
+        # Card
+        card = QFrame()
+        card.setObjectName("card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(16, 12, 16, 12)
+        card_layout.setSpacing(10)
+        
+        # 1. Alarm Title
+        title_layout = QHBoxLayout()
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_lbl_muted = QLabel("알람 제목")
+        title_lbl_muted.setObjectName("muted")
+        title_lbl_muted.setFixedWidth(70)
+        self.title_input = QLineEdit()
+        self.title_input.setPlaceholderText("알람 제목 입력")
+        if alarm:
+            self.title_input.setText(alarm.title)
+        title_layout.addWidget(title_lbl_muted)
+        title_layout.addWidget(self.title_input)
+        card_layout.addLayout(title_layout)
+        
+        # 1.5 Alarm Type (Radio buttons)
+        type_layout = QHBoxLayout()
+        type_layout.setContentsMargins(0, 0, 0, 0)
+        type_lbl_muted = QLabel("알람 유형")
+        type_lbl_muted.setObjectName("muted")
+        type_lbl_muted.setFixedWidth(70)
+        type_layout.addWidget(type_lbl_muted)
+        
+        self.type_regular_radio = QRadioButton("일반 알람")
+        self.type_regular_radio.toggled.connect(self._on_type_changed)
+        self.type_interval_radio = QRadioButton("시간 간격 반복")
+        self.type_interval_radio.toggled.connect(self._on_type_changed)
+        
+        type_layout.addWidget(self.type_regular_radio)
+        type_layout.addWidget(self.type_interval_radio)
+        type_layout.addStretch(1)
+        card_layout.addLayout(type_layout)
+        
+        # 2. Time
+        time_layout = QHBoxLayout()
+        time_layout.setContentsMargins(0, 0, 0, 0)
+        self.time_lbl_muted = QLabel("알람 시간")
+        self.time_lbl_muted.setObjectName("muted")
+        self.time_lbl_muted.setFixedWidth(70)
+        self.time_edit = QTimeEdit()
+        self.time_edit.setDisplayFormat("HH:mm")
+        if alarm and alarm.alarm_time:
+            h, m = map(int, alarm.alarm_time.split(":"))
+            self.time_edit.setTime(QTime(h, m))
+        else:
+            self.time_edit.setTime(QTime.currentTime())
+        time_layout.addWidget(self.time_lbl_muted)
+        time_layout.addWidget(self.time_edit)
+        time_layout.addStretch(1)
+        card_layout.addLayout(time_layout)
+
+        # 2.5 End Time Row
+        self.end_time_row = QWidget()
+        end_time_layout = QHBoxLayout(self.end_time_row)
+        end_time_layout.setContentsMargins(0, 0, 0, 0)
+        end_time_lbl_muted = QLabel("종료 시간")
+        end_time_lbl_muted.setObjectName("muted")
+        end_time_lbl_muted.setFixedWidth(70)
+        self.end_time_edit = QTimeEdit()
+        self.end_time_edit.setDisplayFormat("HH:mm")
+        if alarm and alarm.hourly_end_time:
+            eh, em = map(int, alarm.hourly_end_time.split(":"))
+            self.end_time_edit.setTime(QTime(eh, em))
+        else:
+            self.end_time_edit.setTime(QTime.currentTime().addSecs(3600))
+        end_time_layout.addWidget(end_time_lbl_muted)
+        end_time_layout.addWidget(self.end_time_edit)
+        end_time_layout.addStretch(1)
+        card_layout.addWidget(self.end_time_row)
+
+        # 2.6 Interval Row
+        self.interval_row = QWidget()
+        interval_layout = QHBoxLayout(self.interval_row)
+        interval_layout.setContentsMargins(0, 0, 0, 0)
+        interval_lbl_muted = QLabel("반복 간격")
+        interval_lbl_muted.setObjectName("muted")
+        interval_lbl_muted.setFixedWidth(70)
+        self.interval_combo = QComboBox()
+        self.interval_combo.addItem("1시간 간격", 1)
+        self.interval_combo.addItem("2시간 간격", 2)
+        self.interval_combo.addItem("3시간 간격", 3)
+        self.interval_combo.addItem("4시간 간격", 4)
+        self.interval_combo.addItem("6시간 간격", 6)
+        self.interval_combo.addItem("8시간 간격", 8)
+        self.interval_combo.addItem("12시간 간격", 12)
+        if alarm and alarm.hourly_interval:
+            idx = self.interval_combo.findData(alarm.hourly_interval)
+            if idx >= 0:
+                self.interval_combo.setCurrentIndex(idx)
+        interval_layout.addWidget(interval_lbl_muted)
+        interval_layout.addWidget(self.interval_combo)
+        interval_layout.addStretch(1)
+        card_layout.addWidget(self.interval_row)
+        
+        # 3. Repeat Weekdays
+        weekday_layout = QHBoxLayout()
+        weekday_layout.setContentsMargins(0, 0, 0, 0)
+        weekday_lbl_muted = QLabel("요일 반복")
+        weekday_lbl_muted.setObjectName("muted")
+        weekday_lbl_muted.setFixedWidth(70)
+        weekday_layout.addWidget(weekday_lbl_muted)
+        
+        weekday_btn_layout = QHBoxLayout()
+        weekday_btn_layout.setContentsMargins(0, 0, 0, 0)
+        weekday_btn_layout.setSpacing(6)
+        self.weekday_buttons: list[QToolButton] = []
+        weekday_labels = ["일", "월", "화", "수", "목", "금", "토"]
+        for i, label in enumerate(weekday_labels):
+            btn = QToolButton()
+            btn.setObjectName("weekdayBtn")
+            btn.setText(label)
+            btn.setCheckable(True)
+            if alarm and i in alarm.repeat_days:
+                btn.setChecked(True)
+            weekday_btn_layout.addWidget(btn)
+            self.weekday_buttons.append(btn)
+        weekday_layout.addLayout(weekday_btn_layout)
+        weekday_layout.addStretch(1)
+        card_layout.addLayout(weekday_layout)
+        
+        # 4. Period
+        period_layout = QHBoxLayout()
+        period_layout.setContentsMargins(0, 0, 0, 0)
+        period_layout.setSpacing(8)
+        
+        self.period_checkbox = QCheckBox("기간")
+        self.period_checkbox.setStyleSheet("color: #667085; font-size: 12px; font-weight: 600;")
+        self.period_checkbox.setFixedWidth(70)
+        self.period_checkbox.toggled.connect(self._on_period_toggled)
+        period_layout.addWidget(self.period_checkbox)
+        
+        self.start_date_edit = QDateEdit()
+        self.start_date_edit.setCalendarPopup(True)
+        self.start_date_edit.setFixedWidth(115)
+        self.end_date_edit = QDateEdit()
+        self.end_date_edit.setCalendarPopup(True)
+        self.end_date_edit.setFixedWidth(115)
+        
+        # Set default dates
+        if alarm and alarm.start_date:
+            self.start_date_edit.setDate(QDate(alarm.start_date.year, alarm.start_date.month, alarm.start_date.day))
+            self.end_date_edit.setDate(QDate(alarm.end_date.year, alarm.end_date.month, alarm.end_date.day))
+            self.period_checkbox.setChecked(True)
+        else:
+            today = date.today()
+            self.start_date_edit.setDate(QDate(today.year, today.month, today.day))
+            self.end_date_edit.setDate(QDate(today.year, today.month, today.day))
+            self.period_checkbox.setChecked(False)
+            
+        self.start_date_edit.dateChanged.connect(self._on_date_changed)
+        self.end_date_edit.dateChanged.connect(self._on_date_changed)
+            
+        period_layout.addWidget(self.start_date_edit)
+        tilde = QLabel("~")
+        tilde.setObjectName("value")
+        period_layout.addWidget(tilde)
+        period_layout.addWidget(self.end_date_edit)
+        period_layout.addStretch(1)
+        card_layout.addLayout(period_layout)
+        
+        # 5. Alert Offset
+        offset_layout = QHBoxLayout()
+        offset_layout.setContentsMargins(0, 0, 0, 0)
+        offset_lbl_muted = QLabel("알림 시점")
+        offset_lbl_muted.setObjectName("muted")
+        offset_lbl_muted.setFixedWidth(70)
+        self.offset_combo = QComboBox()
+        self.offset_combo.addItem("정시", "at_start")
+        self.offset_combo.addItem("5분 전", "5m")
+        self.offset_combo.addItem("10분 전", "10m")
+        self.offset_combo.addItem("30분 전", "30m")
+        self.offset_combo.addItem("1시간 전", "1h")
+        
+        if alarm:
+            idx = self.offset_combo.findData(alarm.alert_offset)
+            if idx >= 0:
+                self.offset_combo.setCurrentIndex(idx)
+                
+        offset_layout.addWidget(offset_lbl_muted)
+        offset_layout.addWidget(self.offset_combo)
+        offset_layout.addStretch(1)
+        card_layout.addLayout(offset_layout)
+        
+        card_layout.addStretch(1)
+        
+        root.addWidget(card)
+        
+        # Buttons
+        actions_layout = QHBoxLayout()
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.addStretch(1)
+        
+        self.cancel_btn = QPushButton("취소")
+        self.cancel_btn.clicked.connect(self.reject)
+        actions_layout.addWidget(self.cancel_btn)
+        
+        self.save_btn = QPushButton("저장")
+        self.save_btn.setObjectName("primary")
+        self.save_btn.clicked.connect(self._on_save)
+        actions_layout.addWidget(self.save_btn)
+        
+        root.addLayout(actions_layout)
+        
+        self.saved_alarm: Alarm | None = None
+
+        if alarm and alarm.hourly_repeat:
+            self.type_interval_radio.setChecked(True)
+        else:
+            self.type_regular_radio.setChecked(True)
+        self._on_type_changed()
+
+    def _on_type_changed(self) -> None:
+        is_interval = self.type_interval_radio.isChecked()
+        self.time_lbl_muted.setText("시작 시간" if is_interval else "알람 시간")
+        self.end_time_row.setVisible(is_interval)
+        self.interval_row.setVisible(is_interval)
+
+    def _on_period_toggled(self, checked: bool) -> None:
+        if not checked:
+            self.start_date_edit.blockSignals(True)
+            self.end_date_edit.blockSignals(True)
+            today = date.today()
+            self.start_date_edit.setDate(QDate(today.year, today.month, today.day))
+            self.end_date_edit.setDate(QDate(today.year, today.month, today.day))
+            self.start_date_edit.blockSignals(False)
+            self.end_date_edit.blockSignals(False)
+
+    def _on_date_changed(self) -> None:
+        self.period_checkbox.setChecked(True)
+
+    def _on_save(self) -> None:
+        title = self.title_input.text().strip()
+        if not title:
+            title = "알람"
+            
+        alarm_time = self.time_edit.time().toString("HH:mm")
+        
+        hourly_repeat = self.type_interval_radio.isChecked()
+        hourly_interval = self.interval_combo.currentData() if hourly_repeat else 1
+        hourly_end_time = self.end_time_edit.time().toString("HH:mm") if hourly_repeat else ""
+        
+        if hourly_repeat:
+            qstart_t = self.time_edit.time()
+            qend_t = self.end_time_edit.time()
+            if qstart_t >= qend_t:
+                QMessageBox.warning(self, "오류", "종료 시간이 시작 시간보다 늦어야 합니다.")
+                return
+
+        repeat_days = []
+        for i, btn in enumerate(self.weekday_buttons):
+            if btn.isChecked():
+                repeat_days.append(i)
+                
+        if self.period_checkbox.isChecked():
+            qstart = self.start_date_edit.date()
+            qend = self.end_date_edit.date()
+            start_date = date(qstart.year(), qstart.month(), qstart.day())
+            end_date = date(qend.year(), qend.month(), qend.day())
+            if start_date > end_date:
+                QMessageBox.warning(self, "오류", "시작일이 종료일보다 늦을 수 없습니다.")
+                return
+        else:
+            start_date = None
+            end_date = None
+            
+        alert_offset = self.offset_combo.currentData()
+        
+        temp_alarm = Alarm(
+            alarm_id=self.alarm.alarm_id if self.alarm else None,
+            title=title,
+            start_date=start_date,
+            end_date=end_date,
+            alarm_time=alarm_time,
+            repeat_days=repeat_days,
+            alert_offset=alert_offset,
+            enabled=self.alarm.enabled if self.alarm else True,
+            created_at=self.alarm.created_at if self.alarm else datetime.now(),
+            hourly_repeat=hourly_repeat,
+            hourly_interval=hourly_interval,
+            hourly_end_time=hourly_end_time,
+        )
+        
+        next_trigger = calculate_next_alarm_trigger(temp_alarm, datetime.now())
+        if next_trigger is None:
+            QMessageBox.warning(self, "오류", "유효한 알람 실행 시간을 계산할 수 없습니다. 설정을 확인해 주세요.")
+            return
+            
+        self.saved_alarm = temp_alarm
+        self.accept()
+
+
+class AlarmManagerDialog(QDialog):
+    def __init__(self, parent, repository) -> None:
+        super().__init__(parent)
+        self.repository = repository
+        self.setModal(True)
+        self.setWindowTitle("알람 설정")
+        self.setWindowIcon(_dialog_icon())
+        self.resize(600, 500)
+        self.setFixedWidth(600)
+        
+        self.palette = parent.palette if hasattr(parent, "palette") else {
+            "bg": "#f4f7fb", "text": "#1f2328", "muted": "#667085", "accent": "#1f7a67"
+        }
+        
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #f4f7fb;
+                color: #1f2328;
+                font-family: "Segoe UI";
+                font-size: 13px;
+            }
+            QLabel#title {
+                color: #223044;
+                font-size: 18px;
+                font-weight: 700;
+            }
+            QLabel#subtitle {
+                color: #667085;
+                font-size: 12px;
+            }
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+            QFrame#card {
+                background: #ffffff;
+                border: 1px solid #dbe3ec;
+                border-radius: 12px;
+            }
+            QFrame#alarmItem {
+                background: #ffffff;
+                border: 1px solid #dbe3ec;
+                border-radius: 10px;
+            }
+            QLabel#alarmTime {
+                color: #223044;
+                font-size: 20px;
+                font-weight: 700;
+            }
+            QLabel#alarmTitle {
+                color: #1f2328;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QLabel#alarmInfo {
+                color: #667085;
+                font-size: 11px;
+            }
+            QPushButton {
+                background: #ffffff;
+                border: 1px solid #cfd8e3;
+                border-radius: 8px;
+                padding: 5px 12px;
+                min-width: 60px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background: #f4f7fb;
+            }
+            QPushButton#primary {
+                background: #1f7a67;
+                color: #ffffff;
+                border: 1px solid #1f7a67;
+                font-weight: 700;
+                padding: 7px 16px;
+                min-width: 88px;
+                font-size: 13px;
+            }
+            QPushButton#danger {
+                background: #ffffff;
+                color: #d15d48;
+                border: 1px solid #cfd8e3;
+            }
+            QPushButton#danger:hover {
+                background: #ffebe9;
+                border: 1px solid #d15d48;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #788496;
+                background: #ffffff;
+            }
+            QCheckBox::indicator:checked {
+                background: #d7ece6;
+                border: 1px solid #1f7a67;
+                image: url("%s");
+            }
+            """
+            % (asset_path("checkmark.svg").as_posix(),)
+        )
+        
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
+        
+        # Header
+        header = QHBoxLayout()
+        header_text = QVBoxLayout()
+        header_text.setSpacing(2)
+        title = QLabel("알람 설정")
+        title.setObjectName("title")
+        header_text.addWidget(title)
+        header.addLayout(header_text)
+        
+        self.add_btn = QPushButton("알람 추가")
+        self.add_btn.setObjectName("primary")
+        self.add_btn.clicked.connect(self._on_add_alarm)
+        header.addWidget(self.add_btn)
+        root.addLayout(header)
+        
+        # Scroll Area for Alarms List
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll_content = QWidget()
+        self.scroll_content.setStyleSheet("background: transparent;")
+        self.scroll_layout = QVBoxLayout(self.scroll_content)
+        self.scroll_layout.setContentsMargins(0, 0, 0, 0)
+        self.scroll_layout.setSpacing(8)
+        self.scroll_layout.addStretch(1)
+        
+        self.scroll.setWidget(self.scroll_content)
+        root.addWidget(self.scroll)
+        
+        # Bottom Buttons
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addStretch(1)
+        self.close_btn = QPushButton("닫기")
+        self.close_btn.clicked.connect(self.accept)
+        bottom_layout.addWidget(self.close_btn)
+        root.addLayout(bottom_layout)
+        
+        self._load_alarms()
+
+    def _load_alarms(self) -> None:
+        while self.scroll_layout.count() > 1:
+            item = self.scroll_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+                
+        alarms = self.repository.list_alarms()
+        if not alarms:
+            no_alarms = QFrame()
+            no_alarms.setObjectName("card")
+            no_layout = QVBoxLayout(no_alarms)
+            no_layout.setContentsMargins(24, 24, 24, 24)
+            no_lbl = QLabel("등록된 알람이 없습니다. '알람 추가' 버튼을 눌러 새로운 알람을 등록해 보세요.")
+            no_lbl.setObjectName("subtitle")
+            no_lbl.setAlignment(Qt.AlignCenter)
+            no_layout.addWidget(no_lbl)
+            self.scroll_layout.insertWidget(0, no_alarms)
+        else:
+            for alarm in alarms:
+                item_widget = self._create_alarm_item(alarm)
+                self.scroll_layout.insertWidget(self.scroll_layout.count() - 1, item_widget)
+
+    def _create_alarm_item(self, alarm: Alarm) -> QWidget:
+        card = QFrame()
+        card.setObjectName("alarmItem")
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(12)
+        
+        enabled_check = QCheckBox()
+        enabled_check.setChecked(alarm.enabled)
+        enabled_check.toggled.connect(lambda checked: self._on_toggle_alarm(alarm, checked))
+        layout.addWidget(enabled_check)
+        
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(2)
+        
+        time_layout = QHBoxLayout()
+        time_layout.setSpacing(8)
+        
+        time_lbl = QLabel(alarm.alarm_time)
+        time_lbl.setObjectName("alarmTime")
+        time_layout.addWidget(time_lbl)
+        
+        title_lbl = QLabel(alarm.title)
+        title_lbl.setObjectName("alarmTitle")
+        time_layout.addWidget(title_lbl)
+        time_layout.addStretch(1)
+        info_layout.addLayout(time_layout)
+        
+        repeat_str = self._format_repeat(alarm)
+        info_lbl = QLabel(repeat_str)
+        info_lbl.setObjectName("alarmInfo")
+        info_layout.addWidget(info_lbl)
+        
+        layout.addLayout(info_layout, 1)
+        
+        edit_btn = QPushButton("수정")
+        edit_btn.clicked.connect(lambda: self._on_edit_alarm(alarm))
+        layout.addWidget(edit_btn)
+        
+        del_btn = QPushButton("삭제")
+        del_btn.setObjectName("danger")
+        del_btn.clicked.connect(lambda: self._on_delete_alarm(alarm))
+        layout.addWidget(del_btn)
+        
+        return card
+
+    def _format_repeat(self, alarm: Alarm) -> str:
+        offset_labels = {
+            "at_start": "정시",
+            "5m": "5분 전",
+            "10m": "10분 전",
+            "30m": "30분 전",
+            "1h": "1시간 전",
+        }
+        offset_str = offset_labels.get(alarm.alert_offset, "정시")
+        
+        if alarm.repeat_days:
+            if len(alarm.repeat_days) == 7:
+                rep = "매일"
+            elif sorted(alarm.repeat_days) == [1, 2, 3, 4, 5]:
+                rep = "평일"
+            elif sorted(alarm.repeat_days) == [0, 6]:
+                rep = "주말"
+            else:
+                weekday_labels = ["일", "월", "화", "수", "목", "금", "토"]
+                rep = ", ".join(weekday_labels[d] for d in sorted(alarm.repeat_days))
+            rep_str = f"반복: {rep}"
+        else:
+            rep_str = "1회성"
+            
+        if alarm.start_date:
+            period_str = f"기간: {alarm.start_date.strftime('%Y.%m.%d')} ~ {alarm.end_date.strftime('%Y.%m.%d')}"
+        else:
+            period_str = ""
+            
+        parts = [rep_str]
+        if period_str:
+            parts.append(period_str)
+            
+        if alarm.hourly_repeat:
+            parts.append(f"{alarm.hourly_interval}시간 간격 ({alarm.alarm_time} ~ {alarm.hourly_end_time})")
+            
+        parts.append(f"알림: {offset_str}")
+        return " | ".join(parts)
+
+    def _on_toggle_alarm(self, alarm: Alarm, checked: bool) -> None:
+        alarm.enabled = checked
+        if checked:
+            if not alarm.start_date and not alarm.repeat_days:
+                alarm.created_at = datetime.now()
+        self.repository.upsert_alarm(alarm)
+        next_trigger = calculate_next_alarm_trigger(alarm, datetime.now())
+        if checked and next_trigger is None:
+            QMessageBox.warning(self, "경고", "이 알람은 유효한 미래 실행 시간이 없으므로 활성화할 수 없습니다.")
+            alarm.enabled = False
+            self.repository.upsert_alarm(alarm)
+            self._load_alarms()
+
+    def _on_add_alarm(self) -> None:
+        dialog = AlarmEditDialog(self)
+        if dialog.exec() and dialog.saved_alarm:
+            self.repository.upsert_alarm(dialog.saved_alarm)
+            self._load_alarms()
+
+    def _on_edit_alarm(self, alarm: Alarm) -> None:
+        dialog = AlarmEditDialog(self, alarm)
+        if dialog.exec() and dialog.saved_alarm:
+            dialog.saved_alarm.alarm_id = alarm.alarm_id
+            self.repository.upsert_alarm(dialog.saved_alarm)
+            self._load_alarms()
+
+    def _on_delete_alarm(self, alarm: Alarm) -> None:
+        reply = QMessageBox.question(
+            self, "알람 삭제", f"'{alarm.title or '알람'}'을(를) 삭제하시겠습니까?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            if alarm.alarm_id is not None:
+                self.repository.delete_alarm(alarm.alarm_id)
+                self._load_alarms()
+
+
+class BackupRestoreFormatDialog(QDialog):
+    def __init__(self, parent, mode: str = "export") -> None:
+        super().__init__(parent)
+        self.mode = mode  # "export" or "import"
+        self.selected_format = "zip"  # default
+        self.setModal(True)
+        self.setWindowTitle("데이터 내보내기" if mode == "export" else "데이터 가져오기")
+        self.resize(480, 260)
+        self.setFixedWidth(480)
+
+        # Style sheet
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #f4f7fb;
+                color: #1f2328;
+                font-family: "Segoe UI";
+                font-size: 13px;
+            }
+            QLabel#title {
+                color: #223044;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            QLabel#description {
+                color: #667085;
+                font-size: 12px;
+            }
+            QFrame#card {
+                background: #ffffff;
+                border: 1px solid #dbe3ec;
+                border-radius: 10px;
+                padding: 10px;
+            }
+            QFrame#card:hover {
+                border-color: #1f7a67;
+            }
+            QRadioButton {
+                font-weight: 600;
+                color: #223044;
+                font-size: 14px;
+            }
+            QLabel#info_label {
+                color: #667085;
+                font-size: 11px;
+                margin-left: 20px;
+            }
+            QLabel#warning_label {
+                color: #e15741;
+                font-size: 11px;
+                font-weight: 600;
+                margin-left: 20px;
+            }
+            QPushButton {
+                background: #ffffff;
+                border: 1px solid #cfd8e3;
+                border-radius: 6px;
+                padding: 6px 14px;
+                min-width: 70px;
+            }
+            QPushButton#primary {
+                background: #1f7a67;
+                color: #ffffff;
+                border: 1px solid #1f7a67;
+                font-weight: 700;
+            }
+            """
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        title_text = "내보낼 데이터 형식 선택" if mode == "export" else "가져올 데이터 형식 선택"
+        desc_text = "원하는 백업/복원 형식을 선택해 주세요."
+
+        title = QLabel(title_text)
+        title.setObjectName("title")
+        layout.addWidget(title)
+
+        desc = QLabel(desc_text)
+        desc.setObjectName("description")
+        layout.addWidget(desc)
+
+        # ZIP Card
+        self.zip_card = QFrame()
+        self.zip_card.setObjectName("card")
+        zip_card_layout = QVBoxLayout(self.zip_card)
+        zip_card_layout.setContentsMargins(8, 8, 8, 8)
+        zip_card_layout.setSpacing(2)
+
+        self.zip_radio = QRadioButton("ZIP 백업 파일 (.zip) - 권장")
+        self.zip_radio.setChecked(True)
+        zip_card_layout.addWidget(self.zip_radio)
+
+        zip_desc_text = (
+            "일정, 메모, 설정 및 모든 첨부파일을 포함하여 안전하게 백업합니다."
+            if mode == "export"
+            else "전체 일정, 메모, 설정 및 첨부파일을 백업 파일 상태로 복원합니다.\n(⚠️ 복원 시 현재의 모든 데이터와 첨부파일이 덮어쓰여집니다.)"
+        )
+        zip_info = QLabel(zip_desc_text)
+        if mode == "import":
+            zip_info.setObjectName("warning_label")
+        else:
+            zip_info.setObjectName("info_label")
+        zip_info.setWordWrap(True)
+        zip_card_layout.addWidget(zip_info)
+        layout.addWidget(self.zip_card)
+
+        # Excel Card
+        self.excel_card = QFrame()
+        self.excel_card.setObjectName("card")
+        excel_card_layout = QVBoxLayout(self.excel_card)
+        excel_card_layout.setContentsMargins(8, 8, 8, 8)
+        excel_card_layout.setSpacing(2)
+
+        self.excel_radio = QRadioButton("Excel 파일 (.xlsx)")
+        excel_card_layout.addWidget(self.excel_radio)
+
+        excel_desc_text = (
+            "일정과 메모의 텍스트 데이터만 엑셀로 저장합니다.\n(⚠️ 엑셀 형식은 첨부파일을 내보낼 수 없습니다.)"
+            if mode == "export"
+            else "엑셀 파일로부터 일정 및 메모 데이터를 가져와 현재 데이터에 병합/대체합니다.\n(⚠️ 엑셀 형식은 첨부파일을 가져올 수 없습니다.)"
+        )
+        excel_info = QLabel(excel_desc_text)
+        excel_info.setObjectName("warning_label")
+        excel_info.setWordWrap(True)
+        excel_card_layout.addWidget(excel_info)
+        layout.addWidget(self.excel_card)
+
+        # Button Box
+        button_layout = QHBoxLayout()
+        button_layout.addStretch(1)
+
+        self.confirm_btn = QPushButton("확인")
+        self.confirm_btn.setObjectName("primary")
+        self.confirm_btn.clicked.connect(self._on_confirm)
+        button_layout.addWidget(self.confirm_btn)
+
+        self.cancel_btn = QPushButton("취소")
+        self.cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(self.cancel_btn)
+
+        layout.addLayout(button_layout)
+
+    def _on_confirm(self) -> None:
+        if self.zip_radio.isChecked():
+            self.selected_format = "zip"
+        else:
+            self.selected_format = "xlsx"
+        self.accept()
+
+

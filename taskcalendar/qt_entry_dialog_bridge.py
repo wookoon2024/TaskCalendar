@@ -41,9 +41,32 @@ def show_entry_dialog(entry_type: EntryType, selected_day: date | None, entry: C
     return dialog.result
 
 
-def show_settings_dialog(current_theme: str, current_shortcut: str, auto_start_enabled: bool) -> dict[str, object] | None:
+def show_settings_dialog(
+    current_theme: str,
+    current_shortcut: str,
+    auto_start_enabled: bool,
+    sticker_animation_enabled: bool = True,
+    hide_completed_on_calendar: bool = True,
+    auto_backup_enabled: bool = True,
+    auto_backup_interval_days: int = 1,
+    auto_backup_keep_count: int = 5,
+    db_path: Path | None = None,
+) -> dict[str, object] | None:
+    from pathlib import Path
     app = ensure_qt_application()
-    dialog = SettingsDialog(None, current_theme, current_shortcut, auto_start_enabled)
+    db_p = db_path or Path("db/taskcalendar.db.enc")
+    dialog = SettingsDialog(
+        None,
+        current_theme,
+        current_shortcut,
+        auto_start_enabled,
+        sticker_animation_enabled,
+        hide_completed_on_calendar,
+        auto_backup_enabled,
+        auto_backup_interval_days,
+        auto_backup_keep_count,
+        db_p,
+    )
     _center_dialog_on_screen(dialog)
     accepted = dialog.exec()
     _ = app

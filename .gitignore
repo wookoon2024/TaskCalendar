@@ -1,4 +1,4 @@
-﻿# Python cache
+# Python cache
 __pycache__/
 *.py[cod]
 
@@ -35,3 +35,8 @@ distutils-precedence.pth
 
 pefile.py
 peutils.py
+
+# Local directories
+db/
+data/
+run_log.txt
