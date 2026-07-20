@@ -1,4 +1,0 @@
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name Calendar --specpath . `
-  --add-data "C:\Pro1\TaskCalendar\taskcalendar\assets;taskcalendar\assets" `
-  --add-data "C:\Pro1\TaskCalendar\data\holidays_kr.json;data" `
-  .\main.py

@@ -1,4 +1,4 @@
-﻿# TaskCalendar
+# TaskCalendar
 
 TaskCalendar는 Windows 데스크톱에서 사용하는 개인 일정/메모 관리 앱입니다.  
 일정 반복, 첨부파일, 알림, 테마, 암호화 저장을 지원합니다.
@@ -12,10 +12,25 @@ TaskCalendar는 Windows 데스크톱에서 사용하는 개인 일정/메모 관
 - 테마(`light`, `warm`, `dark`)
 - 로컬 데이터 암호화 저장(Windows DPAPI)
 
+## 다운로드 (실행 프로그램)
+
+* 💾 **[Calendar.zip 다운로드 (Windows 64-bit)](https://github.com/wookoon2024/TaskCalendar/raw/main/Calendar.zip)**
+  * 다운로드 후 압축을 풀고 `Calendar.exe` 파일을 실행하면 설치 없이 바로 사용할 수 있습니다.
+
 ## 실행 방법
 
+### 소스코드 실행
 ```powershell
 python main.py
+```
+
+### 실행 프로그램 (.exe) 직접 빌드
+PyInstaller를 사용하여 단일 실행 파일을 빌드할 수 있습니다:
+```powershell
+python -m PyInstaller --noconfirm --clean --onefile --windowed --name Calendar --specpath . `
+  --add-data "taskcalendar/assets;taskcalendar/assets" `
+  --add-data "data/holidays_kr.json;data" `
+  .\main.py
 ```
 
 ## 프로젝트 구조
