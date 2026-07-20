@@ -40,3 +40,9 @@ peutils.py
 db/
 data/
 run_log.txt
+
+# Recovery/Utility scripts
+analyze_plain.py
+auto_restore.py
+encrypt_work_db.py
+salvage_db.py
