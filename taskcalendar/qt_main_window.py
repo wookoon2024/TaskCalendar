@@ -9,6 +9,7 @@ import shutil
 import threading
 import sys
 import time
+from uuid import uuid4
 from datetime import date, datetime, timedelta, time as datetime_time
 from pathlib import Path
 
@@ -358,8 +359,14 @@ class DayCell(QFrame):
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
-        if self.day_value is not None:
-            self.callback_add(self.day_value)
+        if event.isAccepted():
+            return
+        child = self.childAt(event.position().toPoint())
+        if child is None or child is self or child is self.number_label or child is self.badge_label:
+            if self.day_value is not None:
+                self.callback_add(self.day_value)
+                event.accept()
+                return
         super().mouseDoubleClickEvent(event)
 
     def clear_items(self) -> None:
@@ -504,19 +511,44 @@ class EntryLabel(QLabel):
 
 class ClickableLabel(QLabel):
     clicked = Signal()
+    doubleClicked = Signal()
 
     def __init__(self, text: str = "", parent=None) -> None:
         super().__init__(text, parent)
         self.setCursor(Qt.PointingHandCursor)
+        self._press_pos: QPoint | None = None
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
-            self.clicked.emit()
+            self._press_pos = event.globalPosition().toPoint()
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self._press_pos is not None:
+            dist = (event.globalPosition().toPoint() - self._press_pos).manhattanLength()
+            if dist < QApplication.startDragDistance():
+                try:
+                    self.clicked.emit()
+                except RuntimeError:
+                    pass
+            self._press_pos = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self._press_pos = None
+            event.accept()
+            try:
+                self.doubleClicked.emit()
+            except RuntimeError:
+                pass
+            return
+        super().mouseDoubleClickEvent(event)
 
 
 class ClickableTextEdit(QTextEdit):
     clicked = Signal()
+    doubleClicked = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -525,8 +557,29 @@ class ClickableTextEdit(QTextEdit):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(event)
+            event.accept()
+            try:
+                self.clicked.emit()
+            except RuntimeError:
+                pass
+            return
+        try:
+            super().mousePressEvent(event)
+        except RuntimeError:
+            pass
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            event.accept()
+            try:
+                self.doubleClicked.emit()
+            except RuntimeError:
+                pass
+            return
+        try:
+            super().mouseDoubleClickEvent(event)
+        except RuntimeError:
+            pass
 
 
 class StickerItem(QLabel):
@@ -586,14 +639,28 @@ class MemoDragCard(QFrame):
         self._press_pos: QPoint | None = None
         self.setAcceptDrops(self.drag_enabled)
 
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if self.drag_enabled:
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.LeftButton:
+                self._press_pos = event.globalPosition().toPoint()
+            elif event.type() == QEvent.Type.MouseMove and self._press_pos is not None and (event.buttons() & Qt.LeftButton):
+                distance = (event.globalPosition().toPoint() - self._press_pos).manhattanLength()
+                if distance >= QApplication.startDragDistance():
+                    self._start_drag()
+                    self._press_pos = None
+                    return True
+            elif event.type() == QEvent.Type.MouseButtonRelease:
+                self._press_pos = None
+        return super().eventFilter(watched, event)
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if self.drag_enabled and event.button() == Qt.LeftButton:
-            self._press_pos = event.position().toPoint()
+            self._press_pos = event.globalPosition().toPoint()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         if self.drag_enabled and self._press_pos is not None and (event.buttons() & Qt.LeftButton):
-            distance = (event.position().toPoint() - self._press_pos).manhattanLength()
+            distance = (event.globalPosition().toPoint() - self._press_pos).manhattanLength()
             if distance >= QApplication.startDragDistance():
                 self._start_drag()
                 self._press_pos = None
@@ -605,6 +672,13 @@ class MemoDragCard(QFrame):
         self._press_pos = None
         super().mouseReleaseEvent(event)
 
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and hasattr(self, "_on_double_click") and callable(self._on_double_click):
+            self._on_double_click()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if self._is_valid_drag(event):
             event.acceptProposedAction()
@@ -614,10 +688,19 @@ class MemoDragCard(QFrame):
     def dragMoveEvent(self, event) -> None:  # noqa: N802
         if self._is_valid_drag(event):
             event.acceptProposedAction()
+            if event.position().y() < (self.height() / 2.0):
+                self.setStyleSheet("border-top: 2px solid #2a9d8f; border-radius: 6px;")
+            else:
+                self.setStyleSheet("border-bottom: 2px solid #2a9d8f; border-radius: 6px;")
             return
         event.ignore()
 
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        self.setStyleSheet("")
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event) -> None:  # noqa: N802
+        self.setStyleSheet("")
         source_id = self._drag_source_id(event)
         if source_id is None or source_id == self.memo_id:
             event.ignore()
@@ -807,6 +890,7 @@ class MainWindow(QMainWindow):
         self.search_query = ""
         self.search_results: list[CalendarEntry] = []
         self._memo_card_widgets: dict[int, QWidget] = {}
+        self._active_memo_dialogs: dict[int | str, EntryDialog] = {}
         self._pending_scroll_memo_id: int | None = None
         self._sticker_widgets: dict[str, StickerItem] = {}
         self._sticker_edit_mode = False
@@ -831,6 +915,7 @@ class MainWindow(QMainWindow):
         self._force_exit = False
         self.tray_icon: QSystemTrayIcon | None = None
         self.hotkey_manager: QtGlobalHotkeyManager | None = None
+        self.memo_hotkey_manager: QtGlobalHotkeyManager | None = None
         self._sticker_nudge_shortcuts: list[QShortcut] = []
         self._calendar_nav_shortcuts: list[QShortcut] = []
         self._last_window_was_maximized = False
@@ -857,6 +942,7 @@ class MainWindow(QMainWindow):
         self._setup_alert_timer()
         self.refresh()
         self._perform_auto_backup()
+        QTimer.singleShot(150, self._restore_open_memos)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if event.type() == QEvent.Type.KeyPress and self._handle_calendar_navigation_key(event):
@@ -1133,11 +1219,6 @@ class MainWindow(QMainWindow):
         self.info_add_button.clicked.connect(self._handle_add_button)
         info_layout.addWidget(self.info_add_button)
         sidebar_layout.addWidget(info_card)
-        self.memo_title_only_check = QCheckBox("제목만보기")
-        self.memo_title_only_check.setChecked(self.memo_title_only)
-        self.memo_title_only_check.toggled.connect(self._on_memo_title_only_toggled)
-        self.memo_title_only_check.hide()
-        sidebar_layout.addWidget(self.memo_title_only_check, 0, Qt.AlignRight)
 
         self.sidebar_scroll = QScrollArea()
         self.sidebar_scroll.setWidgetResizable(True)
@@ -1257,6 +1338,8 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self._toggle_window_visibility)
         add_action = menu.addAction("새 일정 추가")
         add_action.triggered.connect(self._open_add_from_tray)
+        add_memo_action = menu.addAction("새 메모 추가")
+        add_memo_action.triggered.connect(self._open_add_memo_from_tray)
         settings_action = menu.addAction("환경설정")
         settings_action.triggered.connect(self._open_settings_from_tray)
         menu.addSeparator()
@@ -1279,13 +1362,16 @@ class MainWindow(QMainWindow):
         self._show_from_tray()
         self._edit_entry(EntryType.SCHEDULE, None)
 
+    def _open_add_memo_from_tray(self) -> None:
+        self._edit_entry(EntryType.MEMO, None)
+
     def _setup_alert_timer(self) -> None:
         timer = QTimer(self)
-        timer.setInterval(30000)
+        timer.setInterval(1000)
         timer.timeout.connect(self._poll_alerts)
         self._alert_timer = timer
         # Initial pass shortly after startup so immediate-due items are caught.
-        QTimer.singleShot(1200, self._poll_alerts)
+        QTimer.singleShot(500, self._poll_alerts)
         timer.start()
 
     def _poll_alerts(self) -> None:
@@ -1527,7 +1613,6 @@ class MainWindow(QMainWindow):
                     applied = candidate
                     break
             if applied is None:
-                # keep manager alive but with its initial binding attempt
                 applied = fallback_norm
 
             if stored_raw != applied:
@@ -1540,11 +1625,45 @@ class MainWindow(QMainWindow):
             logger.exception("failed to initialize global hotkey")
             self.hotkey_manager = None
 
+        # Setup memo toggle global hotkey (default F4)
+        memo_fallback = "Ctrl+Alt+M"
+        memo_stored_raw = self.repository.get_setting("memo_toggle_shortcut", "F4").strip()
+        memo_candidates = [normalize_shortcut(memo_stored_raw), "F4", normalize_shortcut(memo_fallback)]
+        try:
+            self.memo_hotkey_manager = QtGlobalHotkeyManager(memo_fallback, self._toggle_memos_visibility)
+            applied_memo: str | None = None
+            for candidate in memo_candidates:
+                if self.memo_hotkey_manager.update_shortcut(candidate):
+                    applied_memo = candidate
+                    break
+            if applied_memo is None:
+                applied_memo = normalize_shortcut(memo_fallback)
+            if memo_stored_raw != applied_memo:
+                self.repository.set_setting("memo_toggle_shortcut", applied_memo)
+                self.repository.save()
+        except Exception:
+            logger.exception("failed to initialize memo global hotkey")
+            self.memo_hotkey_manager = None
+
     def _toggle_window_visibility(self) -> None:
         if self.isVisible() and not self.isMinimized():
             self.hide()
             return
         self._restore_window_state()
+
+    def _toggle_memos_visibility(self) -> None:
+        if not hasattr(self, "_active_memo_dialogs") or not self._active_memo_dialogs:
+            return
+
+        any_visible = any(dlg.isVisible() for dlg in self._active_memo_dialogs.values())
+        if any_visible:
+            for dlg in self._active_memo_dialogs.values():
+                dlg.hide()
+        else:
+            for dlg in self._active_memo_dialogs.values():
+                dlg.show()
+                dlg.raise_()
+                dlg.activateWindow()
 
     def _show_from_tray(self) -> None:
         self._restore_window_state()
@@ -2951,6 +3070,7 @@ class MainWindow(QMainWindow):
         widget = self._sticker_widgets.get(sticker_id)
         if widget is not None:
             self._drag_offset = event.position().toPoint()
+            widget.raise_()
         item = self._selected_sticker()
         if item is not None:
             self.sticker_scale_slider.blockSignals(True)
@@ -3104,6 +3224,9 @@ class MainWindow(QMainWindow):
                 widget.setStyleSheet("background: transparent; border: none;")
             widget.show()
             widget.raise_()
+
+        if self._selected_sticker_id and self._selected_sticker_id in self._sticker_widgets:
+            self._sticker_widgets[self._selected_sticker_id].raise_()
 
         for sticker_id, widget in list(self._sticker_widgets.items()):
             if sticker_id in current_ids:
@@ -3334,7 +3457,6 @@ class MainWindow(QMainWindow):
         self._memo_card_widgets.clear()
 
         if self.sidebar_mode == "search":
-            self.memo_title_only_check.hide()
             self.info_add_button.hide()
             self.info_export_button.show()
             self.info_title.setText(f"검색결과 {len(self.search_results)}건")
@@ -3347,11 +3469,7 @@ class MainWindow(QMainWindow):
 
         if self.sidebar_mode == "memo":
             self.info_export_button.hide()
-            self.memo_title_only_check.show()
             self.info_add_button.show()
-            self.memo_title_only_check.blockSignals(True)
-            self.memo_title_only_check.setChecked(self.memo_title_only)
-            self.memo_title_only_check.blockSignals(False)
             items = self._ordered_memos(self.repository.list_memos())
             self.info_title.setText(f"메모 {len(items)}개")
             self.info_add_button.setText("메모 추가")
@@ -3370,7 +3488,6 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(0, lambda w=target: self.sidebar_scroll.ensureWidgetVisible(w, 0, 8))
             return
         self.info_export_button.hide()
-        self.memo_title_only_check.hide()
         self.info_add_button.show()
 
         self.info_title.setText(self.selected_day.strftime("%Y.%m.%d"))
@@ -3411,7 +3528,14 @@ class MainWindow(QMainWindow):
         row_layout.addWidget(title_lbl)
 
         if entry.description:
-            preview = " ".join(entry.description.splitlines()).strip()
+            if entry.description.strip().startswith("<"):
+                from PySide6.QtGui import QTextDocument
+                doc = QTextDocument()
+                doc.setHtml(entry.description)
+                plain_desc = doc.toPlainText()
+            else:
+                plain_desc = entry.description
+            preview = " ".join(plain_desc.splitlines()).strip()
             if len(preview) > 70:
                 preview = preview[:70].rstrip() + "..."
             detail = QLabel(preview)
@@ -3437,16 +3561,16 @@ class MainWindow(QMainWindow):
 
     def _sidebar_card(self, entry: CalendarEntry) -> QWidget:
         is_completed = self._is_entry_completed_on_day(entry, self.selected_day)
-        hide_memo_body = entry.entry_type == EntryType.MEMO and self.memo_title_only
+        hide_memo_body = (entry.entry_type == EntryType.MEMO)
         card: QFrame
         drag_enabled = (
             self.sidebar_mode == "memo"
             and entry.entry_type == EntryType.MEMO
-            and self.memo_title_only
             and entry.entry_id is not None
         )
         if drag_enabled and entry.entry_id is not None:
             card = MemoDragCard(self.sidebar_content, int(entry.entry_id), True)
+            card._on_double_click = lambda e=entry: self._open_entry_view(e)
             card.reordered.connect(self._on_memo_card_reordered)
         else:
             card = QFrame()
@@ -3480,8 +3604,10 @@ class MainWindow(QMainWindow):
         if entry.entry_type == EntryType.MEMO:
             left_text = (entry.title or "메모").strip()
             left_label = ClickableLabel(left_text)
-            left_label.clicked.connect(lambda e=entry: self._open_entry_view(e))
+            left_label.doubleClicked.connect(lambda e=entry: self._open_entry_view(e))
             left_label.setStyleSheet(f"color: {self.palette['text']}; background: transparent; border: none;")
+            if isinstance(card, MemoDragCard):
+                left_label.installEventFilter(card)
         else:
             left_text = "  ".join([part for part in [lead, *details] if part]).strip()
             left_label = ClickableLabel(left_text)
@@ -3508,17 +3634,18 @@ class MainWindow(QMainWindow):
             complete.setStyleSheet("QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; }")
             complete.clicked.connect(lambda _checked=False, e=entry: self._toggle_complete(e))
             actions.addWidget(complete)
-        edit = QToolButton()
-        edit.setAutoRaise(False)
-        edit.setToolTip("수정")
-        edit.setText("")
-        if "edit" in self._action_icons:
-            edit.setIcon(self._action_icons["edit"])
-            edit.setIconSize(QSize(46, 20))
-        edit.setFixedSize(46, 20)
-        edit.setStyleSheet("QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; }")
-        edit.clicked.connect(lambda _checked=False, e=entry: self._edit_entry(e.entry_type, e))
-        actions.addWidget(edit)
+        if entry.entry_type != EntryType.MEMO:
+            edit = QToolButton()
+            edit.setAutoRaise(False)
+            edit.setToolTip("수정")
+            edit.setText("")
+            if "edit" in self._action_icons:
+                edit.setIcon(self._action_icons["edit"])
+                edit.setIconSize(QSize(46, 20))
+            edit.setFixedSize(46, 20)
+            edit.setStyleSheet("QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; }")
+            edit.clicked.connect(lambda _checked=False, e=entry: self._edit_entry(e.entry_type, e))
+            actions.addWidget(edit)
         delete = QToolButton()
         delete.setAutoRaise(False)
         delete.setToolTip("삭제")
@@ -3536,17 +3663,24 @@ class MainWindow(QMainWindow):
         if entry.description and not hide_memo_body:
             desc = ClickableTextEdit()
             desc.setReadOnly(True)
-            desc.setPlainText(entry.description)
+            if entry.description.strip().startswith("<"):
+                desc.setHtml(entry.description)
+                target_h = 190
+            else:
+                desc.setPlainText(entry.description)
+                line_h = max(14, desc.fontMetrics().lineSpacing())
+                line_count = max(1, entry.description.count("\n") + 1)
+                target_h = min(190, line_h * line_count + 16)
             desc.setLineWrapMode(QTextEdit.WidgetWidth)
             desc.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             desc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             desc.setMaximumHeight(190)
-            line_h = max(14, desc.fontMetrics().lineSpacing())
-            line_count = max(1, entry.description.count("\n") + 1)
-            target_h = min(190, line_h * line_count + 16)
             desc.setFixedHeight(target_h)
             desc.setStyleSheet(text_editor_style(self.palette))
-            desc.clicked.connect(lambda e=entry: self._open_entry_view(e))
+            if entry.entry_type == EntryType.MEMO:
+                desc.doubleClicked.connect(lambda e=entry: self._open_entry_view(e))
+            else:
+                desc.clicked.connect(lambda e=entry: self._open_entry_view(e))
             layout.addWidget(desc)
 
         if entry.attachments and not hide_memo_body:
@@ -3669,10 +3803,14 @@ class MainWindow(QMainWindow):
         if self._sticker_edit_mode:
             QMessageBox.information(self, "인쇄", "꾸미기 모드를 종료한 뒤 인쇄해 주세요.")
             return
-        button_states = (
+        button_states = [
             (self.print_button, self.print_button.isVisible()),
             (self.decorate_button, self.decorate_button.isVisible()),
-        )
+        ]
+        if hasattr(self, "search_input"):
+            button_states.append((self.search_input, self.search_input.isVisible()))
+        if hasattr(self, "search_button"):
+            button_states.append((self.search_button, self.search_button.isVisible()))
         for button, _visible in button_states:
             button.hide()
         self.calendar_panel.update()
@@ -4090,6 +4228,8 @@ class MainWindow(QMainWindow):
             self._render_sidebar()
 
     def _select_day_by_date(self, selected_day: date) -> None:
+        if self.selected_day == selected_day and self.sidebar_mode == "day":
+            return
         self.selected_day = selected_day
         self.sidebar_mode = "day"
         self.refresh()
@@ -4192,11 +4332,11 @@ class MainWindow(QMainWindow):
         self.sidebar_mode = "day"
         self.refresh()
 
-    def _open_settings(self) -> None:
+    def _open_settings(self, initial_tab: str = "general") -> None:
         current_auto_start = is_startup_enabled()
         self.repository.set_setting("auto_start", "1" if current_auto_start else "0")
         dialog = SettingsDialog(
-            self,
+            None,
             self.theme_name,
             self.repository.get_setting("toggle_shortcut", default_shortcut()),
             current_auto_start,
@@ -4206,6 +4346,8 @@ class MainWindow(QMainWindow):
             int(self.repository.get_setting("auto_backup_interval_days", "1")),
             int(self.repository.get_setting("auto_backup_keep_count", "5")),
             self.repository.db_path,
+            current_memo_shortcut=self.repository.get_setting("memo_toggle_shortcut", "F4"),
+            initial_tab=initial_tab,
         )
         if dialog.exec() and dialog.result is not None:
             action = str(dialog.result.get("action", "apply"))
@@ -4224,11 +4366,16 @@ class MainWindow(QMainWindow):
                 return
             new_shortcut = str(dialog.result["shortcut"])
             if self.hotkey_manager is not None and not self.hotkey_manager.update_shortcut(new_shortcut):
-                QMessageBox.warning(self, "단축키 오류", "해당 단축키를 다른 프로그램에서 사용 중이오니, 다른 단축키로 변경해 주세요.")
+                QMessageBox.warning(self, "단축키 오류", "해당 캘린더 단축키를 다른 프로그램에서 사용 중이오니, 다른 단축키로 변경해 주세요.")
+                return
+            new_memo_shortcut = str(dialog.result.get("memo_shortcut", "F4"))
+            if self.memo_hotkey_manager is not None and not self.memo_hotkey_manager.update_shortcut(new_memo_shortcut):
+                QMessageBox.warning(self, "단축키 오류", "해당 메모 단축키를 다른 프로그램에서 사용 중이오니, 다른 단축키로 변경해 주세요.")
                 return
             self.theme_name = str(dialog.result["theme"])
             self.repository.set_setting("theme", self.theme_name)
             self.repository.set_setting("toggle_shortcut", new_shortcut)
+            self.repository.set_setting("memo_toggle_shortcut", new_memo_shortcut)
             requested_auto_start = bool(dialog.result["auto_start"])
             applied = set_startup_enabled(requested_auto_start)
             current_auto_start = is_startup_enabled()
@@ -4257,11 +4404,39 @@ class MainWindow(QMainWindow):
 
     def _edit_entry(self, entry_type: EntryType, entry: CalendarEntry | None) -> None:
         try:
+            logger.info(f"[_edit_entry CALLED] entry_type={entry_type}, entry_id={entry.entry_id if entry else None}, title={entry.title if entry else None}")
             if entry_type == EntryType.TASK:
                 entry_type = EntryType.SCHEDULE
             edit_entry = entry
             if entry and entry.source_entry_id and entry.source_entry_id != entry.entry_id:
                 edit_entry = self.repository.get_entry(entry.source_entry_id)
+            if entry_type == EntryType.MEMO:
+                if edit_entry and edit_entry.entry_id is not None:
+                    key = int(edit_entry.entry_id)
+                    if key in self._active_memo_dialogs:
+                        existing_dlg = self._active_memo_dialogs.get(key)
+                        if existing_dlg is not None:
+                            logger.info(f"[_edit_entry] Reusing existing memo dialog for key={key}")
+                            if getattr(existing_dlg, "_is_collapsed", False):
+                                existing_dlg._toggle_collapse()
+                            existing_dlg.show()
+                            existing_dlg.raise_()
+                            existing_dlg.activateWindow()
+                            return
+                        self._active_memo_dialogs.pop(key, None)
+                else:
+                    key = f"new_{uuid4().hex}"
+
+                logger.info(f"[_edit_entry] Creating new memo EntryDialog key={key}")
+                dialog = EntryDialog(self, entry_type, self.selected_day, edit_entry)
+                dialog._active_key = key
+                self._active_memo_dialogs[key] = dialog
+                dialog.show()
+                dialog.raise_()
+                dialog.activateWindow()
+                self._sync_open_memo_ids()
+                return
+            logger.info(f"[_edit_entry] Creating modal EntryDialog for schedule/task: {edit_entry.entry_id if edit_entry else 'new'}")
             dialog = EntryDialog(self, entry_type, self.selected_day, edit_entry)
             if not dialog.exec() or dialog.result is None:
                 return
@@ -4281,12 +4456,17 @@ class MainWindow(QMainWindow):
 
     def _open_entry_view(self, entry: CalendarEntry) -> None:
         try:
+            logger.info(f"[_open_entry_view CALLED] entry_id={entry.entry_id}, type={entry.entry_type}, title={entry.title}")
             view_entry = entry
             if entry.source_entry_id and entry.source_entry_id != entry.entry_id:
                 source = self.repository.get_entry(entry.source_entry_id)
                 if source is not None:
                     view_entry = source
+            if view_entry.entry_type == EntryType.MEMO:
+                self._edit_entry(EntryType.MEMO, view_entry)
+                return
             entry_type = EntryType.SCHEDULE if view_entry.entry_type == EntryType.TASK else view_entry.entry_type
+            logger.info(f"[_open_entry_view] Opening modal EntryViewDialog for {view_entry.entry_id}")
             dialog = EntryViewDialog(
                 self,
                 entry_type,
@@ -4309,8 +4489,39 @@ class MainWindow(QMainWindow):
         if entry.entry_type == EntryType.MEMO:
             ids = [memo_id for memo_id in self._load_memo_order_ids() if memo_id != int(target_id)]
             self._save_memo_order_ids(ids, persist=False)
+            for k in [target_id, int(target_id)]:
+                if hasattr(self, "_active_memo_dialogs") and k in self._active_memo_dialogs:
+                    dlg = self._active_memo_dialogs.pop(k)
+                    try:
+                        dlg.close()
+                    except Exception:
+                        pass
+            self._sync_open_memo_ids()
         self.repository.save()
         self.refresh()
+
+    def _sync_open_memo_ids(self, persist: bool = False) -> None:
+        open_ids: list[str] = []
+        for k, dlg in list(self._active_memo_dialogs.items()):
+            if dlg is not None and dlg.isVisible():
+                if dlg.entry and dlg.entry.entry_id is not None:
+                    open_ids.append(str(dlg.entry.entry_id))
+        self.repository.set_setting("open_memo_ids", ",".join(open_ids))
+        if persist:
+            self.repository.save()
+
+    def _restore_open_memos(self) -> None:
+        raw = self.repository.get_setting("open_memo_ids", "")
+        if not raw:
+            return
+        try:
+            ids = [int(x) for x in raw.split(",") if x.strip()]
+        except Exception:
+            ids = []
+        for memo_id in ids:
+            entry = self.repository.get_entry(memo_id)
+            if entry and entry.entry_type == EntryType.MEMO:
+                self._edit_entry(EntryType.MEMO, entry)
 
     def _toggle_complete(self, entry: CalendarEntry) -> None:
         target_id = entry.source_entry_id or entry.entry_id
@@ -4475,6 +4686,9 @@ class MainWindow(QMainWindow):
         if self.hotkey_manager is not None:
             self.hotkey_manager.stop()
             self.hotkey_manager = None
+        if self.memo_hotkey_manager is not None:
+            self.memo_hotkey_manager.stop()
+            self.memo_hotkey_manager = None
         if self.tray_icon is not None:
             self.tray_icon.hide()
         super().closeEvent(event)

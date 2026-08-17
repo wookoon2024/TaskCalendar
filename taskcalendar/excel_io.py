@@ -86,6 +86,24 @@ def _parse_json_list(value: object) -> list:
     return parsed if isinstance(parsed, list) else []
 
 
+def _strip_html_to_plain_text(text: str) -> str:
+    if not text:
+        return ""
+    if not text.strip().startswith("<"):
+        return text
+    import re
+    # Remove script and style elements
+    clean = re.sub(r'<(script|style)\b[^>]*>([\s\S]*?)<\/\1>', '', text, flags=re.IGNORECASE)
+    # Replace common block elements with newlines
+    clean = re.sub(r'</?(p|div|tr|h[1-6])\b[^>]*>', '\n', clean, flags=re.IGNORECASE)
+    clean = re.sub(r'<br\s*/?>', '\n', clean, flags=re.IGNORECASE)
+    # Strip remaining HTML tags
+    clean = re.sub(r'<[^>]+>', '', clean)
+    # Decode basic entities
+    clean = clean.replace('&nbsp;', ' ').replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&').replace('&quot;', '"')
+    return "\n".join(line.strip() for line in clean.splitlines() if line.strip())
+
+
 def export_entries_to_excel(file_path: Path, entries: list[CalendarEntry]) -> int:
     Workbook, _ = _require_openpyxl()
     wb = Workbook()
@@ -98,7 +116,7 @@ def export_entries_to_excel(file_path: Path, entries: list[CalendarEntry]) -> in
             [
                 entry.entry_type.value,
                 entry.title,
-                entry.description,
+                _strip_html_to_plain_text(entry.description),
                 _iso_date(entry.day),
                 _iso_date(entry.start_date),
                 _iso_date(entry.end_date),

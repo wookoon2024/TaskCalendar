@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <defs>
+    <!-- Needle metallic gradient -->
+    <linearGradient id="needleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="45%" stop-color="#cbd5e1"/>
+      <stop offset="100%" stop-color="#64748b"/>
+    </linearGradient>
+
+    <!-- Pin Head Gradient (Modern Coral Red with rich depth) -->
+    <linearGradient id="pinHeadGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff5e62"/>
+      <stop offset="50%" stop-color="#e63946"/>
+      <stop offset="100%" stop-color="#9d0208"/>
+    </linearGradient>
+
+    <!-- Dark shadow gradient for underside / rim -->
+    <linearGradient id="pinDarkRim" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ba181b"/>
+      <stop offset="100%" stop-color="#6a040f"/>
+    </linearGradient>
+
+    <!-- Pin Top Cap Gradient -->
+    <linearGradient id="pinCapGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff7b84"/>
+      <stop offset="70%" stop-color="#d90429"/>
+      <stop offset="100%" stop-color="#900c3f"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Needle -->
+  <path d="M10 14 L3.5 20.5" stroke="url(#needleGrad)" stroke-width="2.2" stroke-linecap="round"/>
+  
+  <!-- Lower rim collar -->
+  <path d="M8.2 13.2 L10.8 15.8 L12.6 14.0 L10.0 11.4 Z" fill="url(#pinDarkRim)"/>
+
+  <!-- Lower conical section -->
+  <path d="M9.8 11.6 L12.4 14.2 L13.8 12.8 L11.2 10.2 Z" fill="url(#pinHeadGrad)"/>
+
+  <!-- Narrow neck / waist -->
+  <path d="M11.0 10.4 L13.6 13.0 L14.8 11.8 L12.2 9.2 Z" fill="url(#pinDarkRim)"/>
+
+  <!-- Upper flared body -->
+  <path d="M12.0 9.4 L14.6 12.0 L17.2 9.4 L14.6 6.8 Z" fill="url(#pinHeadGrad)"/>
+
+  <!-- Flange rim under cap -->
+  <ellipse cx="16.5" cy="7.5" rx="4.2" ry="2.0" transform="rotate(-45 16.5 7.5)" fill="url(#pinDarkRim)"/>
+
+  <!-- Top round cap -->
+  <ellipse cx="17.0" cy="7.0" rx="3.8" ry="1.8" transform="rotate(-45 17.0 7.0)" fill="url(#pinCapGrad)"/>
+
+  <!-- High-gloss shine / reflection -->
+  <ellipse cx="16.5" cy="6.5" rx="2.4" ry="0.8" transform="rotate(-45 16.5 6.5)" fill="#ffffff" opacity="0.75"/>
+</svg>

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import ctypes
 import logging
@@ -21,8 +21,13 @@ def _set_windows_app_id() -> None:
 
 
 def _configure_logging() -> None:
-    # Disable runtime logging output/file creation.
-    logging.disable(logging.CRITICAL)
+    log_file = runtime_root() / "debug_run.log"
+    logging.basicConfig(
+        filename=str(log_file),
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        force=True,
+    )
 
 
 def _acquire_single_instance_lock() -> bool:
@@ -70,4 +75,6 @@ def run() -> None:
 
     window = MainWindow(repository)
     window.show()
+    window.raise_()
+    window.activateWindow()
     app.exec()
