@@ -588,9 +588,9 @@ class EditableTitleLineEdit(QLineEdit):
 
 
 class EntryDialog(QDialog):
-    def __init__(self, parent, entry_type: EntryType, selected_day: date | None, entry: CalendarEntry | None = None) -> None:
+    def __init__(self, parent, entry_type: EntryType, selected_day: date | None, entry: CalendarEntry | None = None, restore_mode: bool = False) -> None:
         self._owner_window = parent
-        logger.info(f"[EntryDialog.__init__] entry_type={entry_type}, id={entry.entry_id if entry else None}, title='{entry.title if entry else ''}'")
+        logger.info(f"[EntryDialog.__init__] entry_type={entry_type}, id={entry.entry_id if entry else None}, title='{entry.title if entry else ''}', restore={restore_mode}")
         if entry_type == EntryType.MEMO:
             super().__init__(None)
             self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
@@ -644,7 +644,7 @@ class EntryDialog(QDialog):
                         except Exception:
                             pass
                     collapsed_saved = parent.repository.get_setting(f"memo_collapsed_{entry.entry_id}", "0") == "1"
-                    self._is_collapsed = False
+                    self._is_collapsed = (collapsed_saved if restore_mode else False)
                     self._expanded_height = max(150, getattr(self, "_expanded_height", 360))
                     opacity_saved = parent.repository.get_setting(f"memo_opacity_{entry.entry_id}", "100")
                     try:
@@ -1766,6 +1766,18 @@ class EntryDialog(QDialog):
         direct_p = Path(file_path)
         if direct_p.exists() and direct_p.is_file():
             return direct_p
+        # Fallback check across standard paths
+        for base in [
+            runtime_root() / "db" / "attachments",
+            runtime_root() / "attachments",
+            runtime_root().parent / "db" / "attachments",
+        ]:
+            try:
+                candidate = base / file_path
+                if candidate.exists() and candidate.is_file():
+                    return candidate
+            except Exception:
+                pass
         return None
 
     def _get_attachment_name(self, file_path: str) -> str:
@@ -1810,6 +1822,9 @@ class EntryDialog(QDialog):
             open_action = file_menu.addAction("파일 열기 (실행)")
             open_action.triggered.connect(lambda _=False, path=file_path: self._open_file(path))
             
+            folder_action = file_menu.addAction("파일 폴더 열기")
+            folder_action.triggered.connect(lambda _=False, path=file_path: self._open_folder(path))
+            
             save_action = file_menu.addAction("다른 이름으로 저장...")
             save_action.triggered.connect(lambda _=False, path=file_path: self._save_file_as(path))
             
@@ -1833,6 +1848,21 @@ class EntryDialog(QDialog):
             os.startfile(str(target.resolve()))
         except Exception:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.resolve())))
+
+    def _open_folder(self, file_path: str) -> None:
+        target = self._resolve_attachment_file(file_path)
+        if not target or not target.exists():
+            QMessageBox.warning(self, "오류", "첨부파일 원본을 찾을 수 없습니다.")
+            return
+        try:
+            import subprocess
+            subprocess.run(["explorer", f"/select,{str(target.resolve())}"])
+        except Exception:
+            try:
+                import os
+                os.startfile(str(target.parent.resolve()))
+            except Exception:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.parent.resolve())))
 
     def _save_file_as(self, file_path: str) -> None:
         target = self._resolve_attachment_file(file_path)
@@ -1943,6 +1973,8 @@ class EntryDialog(QDialog):
                     parent._active_memo_dialogs.pop(self._active_key, None)
                 parent._active_memo_dialogs[int(saved.entry_id)] = self
                 self._active_key = int(saved.entry_id)
+                if hasattr(parent, "_sync_open_memo_ids"):
+                    parent._sync_open_memo_ids(persist=False)
                 
             # Persist geometry and collapse state
             if saved.entry_id is not None:
@@ -1991,38 +2023,47 @@ class EntryDialog(QDialog):
 
     def _close_memo(self) -> None:
         if self.entry_type == EntryType.MEMO:
-            self.hide()
+            parent = getattr(self, "_owner_window", None) or self.parent()
+            if parent and getattr(parent, "_is_app_quitting", False):
+                self.close()
+                return
             try:
                 self._auto_save_to_db(persist_disk=True, refresh_parent=True)
             except Exception:
                 pass
-            parent = getattr(self, "_owner_window", None) or self.parent()
             if parent and hasattr(parent, "_active_memo_dialogs"):
                 to_remove = [k for k, v in list(parent._active_memo_dialogs.items()) if v is self]
                 for k in to_remove:
                     parent._active_memo_dialogs.pop(k, None)
                 if hasattr(parent, "_sync_open_memo_ids"):
-                    parent._sync_open_memo_ids(persist=False)
+                    parent._sync_open_memo_ids(persist=True)
             self.close()
 
     def closeEvent(self, event) -> None:
         if self.entry_type == EntryType.MEMO:
-            self.hide()
+            parent = getattr(self, "_owner_window", None) or self.parent()
+            if parent and getattr(parent, "_is_app_quitting", False):
+                super().closeEvent(event)
+                return
             try:
                 self._auto_save_to_db(persist_disk=True, refresh_parent=True)
             except Exception:
                 pass
-            parent = getattr(self, "_owner_window", None) or self.parent()
             if parent and hasattr(parent, "_active_memo_dialogs"):
                 to_remove = [k for k, v in list(parent._active_memo_dialogs.items()) if v is self]
                 for k in to_remove:
                     parent._active_memo_dialogs.pop(k, None)
                 if hasattr(parent, "_sync_open_memo_ids"):
-                    parent._sync_open_memo_ids(persist=False)
+                    parent._sync_open_memo_ids(persist=True)
         super().closeEvent(event)
 
     def reject(self) -> None:
-        self._close_memo()
+        parent = getattr(self, "_owner_window", None) or self.parent()
+        if parent and getattr(parent, "_is_app_quitting", False):
+            super().reject()
+            return
+        if self.entry_type == EntryType.MEMO:
+            self._close_memo()
         super().reject()
 
     def mouseDoubleClickEvent(self, event) -> None:
@@ -2154,6 +2195,14 @@ class EntryDialog(QDialog):
             self._resize_dir = None
             if hasattr(self, "_drag_position"):
                 delattr(self, "_drag_position")
+            if self.entry and self.entry.entry_id:
+                parent = getattr(self, "_owner_window", None) or self.parent()
+                if parent and hasattr(parent, "repository"):
+                    curr_geo = self.geometry()
+                    h_val = getattr(self, "_expanded_height", curr_geo.height()) if getattr(self, "_is_collapsed", False) else curr_geo.height()
+                    parent.repository.set_setting(f"memo_geo_{self.entry.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{curr_geo.width()},{h_val}")
+                    parent.repository.set_setting(f"memo_collapsed_{self.entry.entry_id}", "1" if getattr(self, "_is_collapsed", False) else "0")
+                    parent.repository.save()
         super().mouseReleaseEvent(event)
 
     def add_dropped_attachments(self, filepaths: list[str]) -> None:

@@ -372,7 +372,7 @@ class EncryptedRepository:
                 """,
                 values + (now, entry.entry_id),
             )
-        self._cleanup_unused_attachments(previous_attachments, entry.entry_id)
+        self._cleanup_unused_attachments(previous_attachments, entry.entry_id, entry.attachments)
         self.connection.commit()
         return entry
 
@@ -584,8 +584,11 @@ class EncryptedRepository:
         shutil.copy2(source, target)
         return str(target.relative_to(self.attachments_root).as_posix())
 
-    def _cleanup_unused_attachments(self, candidates: list[str], current_entry_id: int | None) -> None:
+    def _cleanup_unused_attachments(self, candidates: list[str], current_entry_id: int | None, current_attachments: list[str] | None = None) -> None:
+        current_set = set(current_attachments or [])
         for candidate in candidates:
+            if candidate in current_set:
+                continue
             path = Path(candidate)
             if not self._is_managed_attachment(path):
                 continue

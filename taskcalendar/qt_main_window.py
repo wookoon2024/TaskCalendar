@@ -942,6 +942,9 @@ class MainWindow(QMainWindow):
         self._setup_alert_timer()
         self.refresh()
         self._perform_auto_backup()
+        app_inst = QApplication.instance()
+        if app_inst:
+            app_inst.aboutToQuit.connect(self._on_app_about_to_quit)
         QTimer.singleShot(150, self._restore_open_memos)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
@@ -1352,7 +1355,11 @@ class MainWindow(QMainWindow):
 
     def _quit_from_tray(self) -> None:
         self._force_exit = True
+        self._on_app_about_to_quit()
         self.close()
+        app_inst = QApplication.instance()
+        if app_inst:
+            app_inst.quit()
 
     def _open_settings_from_tray(self) -> None:
         self._show_from_tray()
@@ -4402,9 +4409,9 @@ class MainWindow(QMainWindow):
             self._holidays_fixed, self._holidays_yearly = self._load_holidays()
             self.refresh()
 
-    def _edit_entry(self, entry_type: EntryType, entry: CalendarEntry | None) -> None:
+    def _edit_entry(self, entry_type: EntryType, entry: CalendarEntry | None, restore_mode: bool = False) -> None:
         try:
-            logger.info(f"[_edit_entry CALLED] entry_type={entry_type}, entry_id={entry.entry_id if entry else None}, title={entry.title if entry else None}")
+            logger.info(f"[_edit_entry CALLED] entry_type={entry_type}, entry_id={entry.entry_id if entry else None}, title={entry.title if entry else None}, restore_mode={restore_mode}")
             if entry_type == EntryType.TASK:
                 entry_type = EntryType.SCHEDULE
             edit_entry = entry
@@ -4417,7 +4424,7 @@ class MainWindow(QMainWindow):
                         existing_dlg = self._active_memo_dialogs.get(key)
                         if existing_dlg is not None:
                             logger.info(f"[_edit_entry] Reusing existing memo dialog for key={key}")
-                            if getattr(existing_dlg, "_is_collapsed", False):
+                            if not restore_mode and getattr(existing_dlg, "_is_collapsed", False):
                                 existing_dlg._toggle_collapse()
                             existing_dlg.show()
                             existing_dlg.raise_()
@@ -4428,13 +4435,13 @@ class MainWindow(QMainWindow):
                     key = f"new_{uuid4().hex}"
 
                 logger.info(f"[_edit_entry] Creating new memo EntryDialog key={key}")
-                dialog = EntryDialog(self, entry_type, self.selected_day, edit_entry)
+                dialog = EntryDialog(self, entry_type, self.selected_day, edit_entry, restore_mode=restore_mode)
                 dialog._active_key = key
                 self._active_memo_dialogs[key] = dialog
                 dialog.show()
                 dialog.raise_()
                 dialog.activateWindow()
-                self._sync_open_memo_ids()
+                self._sync_open_memo_ids(persist=True)
                 return
             logger.info(f"[_edit_entry] Creating modal EntryDialog for schedule/task: {edit_entry.entry_id if edit_entry else 'new'}")
             dialog = EntryDialog(self, entry_type, self.selected_day, edit_entry)
@@ -4503,9 +4510,13 @@ class MainWindow(QMainWindow):
     def _sync_open_memo_ids(self, persist: bool = False) -> None:
         open_ids: list[str] = []
         for k, dlg in list(self._active_memo_dialogs.items()):
-            if dlg is not None and dlg.isVisible():
-                if dlg.entry and dlg.entry.entry_id is not None:
-                    open_ids.append(str(dlg.entry.entry_id))
+            if dlg is not None and dlg.entry and dlg.entry.entry_id is not None:
+                open_ids.append(str(dlg.entry.entry_id))
+                curr_geo = dlg.geometry()
+                h_val = getattr(dlg, "_expanded_height", curr_geo.height()) if getattr(dlg, "_is_collapsed", False) else curr_geo.height()
+                self.repository.set_setting(f"memo_geo_{dlg.entry.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{curr_geo.width()},{h_val}")
+                self.repository.set_setting(f"memo_collapsed_{dlg.entry.entry_id}", "1" if getattr(dlg, "_is_collapsed", False) else "0")
+        logger.info(f"[_sync_open_memo_ids] open_ids={open_ids}, persist={persist}")
         self.repository.set_setting("open_memo_ids", ",".join(open_ids))
         if persist:
             self.repository.save()
@@ -4521,7 +4532,7 @@ class MainWindow(QMainWindow):
         for memo_id in ids:
             entry = self.repository.get_entry(memo_id)
             if entry and entry.entry_type == EntryType.MEMO:
-                self._edit_entry(EntryType.MEMO, entry)
+                self._edit_entry(EntryType.MEMO, entry, restore_mode=True)
 
     def _toggle_complete(self, entry: CalendarEntry) -> None:
         target_id = entry.source_entry_id or entry.entry_id
@@ -4660,17 +4671,35 @@ class MainWindow(QMainWindow):
         self._band_baseline_cell_w = max(1, body_w // 7)
         self._band_baseline_cell_h = max(1, body_h // 6)
 
+    def _on_app_about_to_quit(self) -> None:
+        if getattr(self, "_already_handled_quit", False):
+            return
+        self._already_handled_quit = True
+        try:
+            self._is_app_quitting = True
+            self._remember_window_state()
+            self._persist_window_state()
+            self._sync_open_memo_ids(persist=True)
+            for k, dlg in list(self._active_memo_dialogs.items()):
+                try:
+                    dlg.close()
+                except Exception:
+                    pass
+            self._active_memo_dialogs.clear()
+            self.repository.save()
+        except Exception:
+            pass
+
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.tray_icon is not None and not self._force_exit:
             self._remember_window_state()
             self._persist_window_state()
+            self._sync_open_memo_ids(persist=True)
             self.repository.save()
             self.hide()
             event.ignore()
             return
-        self._remember_window_state()
-        self._persist_window_state()
-        self.repository.save()
+        self._on_app_about_to_quit()
         if self._alert_timer is not None:
             self._alert_timer.stop()
             self._alert_timer = None
