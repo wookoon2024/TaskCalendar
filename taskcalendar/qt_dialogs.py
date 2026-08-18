@@ -57,6 +57,7 @@ from taskcalendar.models import (
     Alarm,
     calculate_next_alarm_trigger,
 )
+from taskcalendar import APP_VERSION
 from taskcalendar.desktop_services import _parse_hotkey, normalize_shortcut
 from taskcalendar.paths import asset_path
 
@@ -595,6 +596,7 @@ class EntryDialog(QDialog):
             super().__init__(None)
             self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
             self.setModal(False)
+            self.setAttribute(Qt.WA_StyledBackground, True)
         else:
             super().__init__(parent)
             self.setModal(True)
@@ -803,6 +805,9 @@ class EntryDialog(QDialog):
             if getattr(self, "_is_collapsed", False):
                 self.content_wrap.hide()
                 self.setFixedHeight(34)
+                if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
+                    self._collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg"))))
+                    self._collapse_btn.setToolTip("메모 펼치기")
 
             # Apply initial theme colors & topmost
             self._apply_memo_theme(self._current_memo_theme)
@@ -1094,18 +1099,8 @@ class EntryDialog(QDialog):
         self.content_card, content_layout = self._create_card()
         self.content_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        title_row = QHBoxLayout()
-        title_row.addWidget(self._section_title("내용"))
-        title_row.addStretch(1)
-
-        self.add_image_button = QPushButton("이미지 추가")
-        self.add_image_button.setObjectName("topbarButton")
-        self.add_image_button.setCursor(Qt.PointingHandCursor)
-        self.add_image_button.clicked.connect(self._add_image_from_file)
-        title_row.addWidget(self.add_image_button)
-        content_layout.addLayout(title_row)
-
         self.description_input = RichTextEdit()
+        self.description_input.setPlaceholderText("일정 내용을 입력하세요...")
         desc_val = entry.description if entry else ""
         if desc_val.strip().startswith("<"):
             self.description_input.setHtml(desc_val)
@@ -1892,12 +1887,18 @@ class EntryDialog(QDialog):
             if hasattr(self, "content_wrap"):
                 self.content_wrap.hide()
             self.setFixedHeight(34)
+            if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
+                self._collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg"))))
+                self._collapse_btn.setToolTip("메모 펼치기")
         else:
             if hasattr(self, "content_wrap"):
                 self.content_wrap.show()
             self.setMinimumHeight(200)
             self.setMaximumHeight(16777215)
             self.resize(self.width(), getattr(self, "_expanded_height", 420))
+            if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
+                self._collapse_btn.setIcon(QIcon(str(asset_path("memo_minimize.svg"))))
+                self._collapse_btn.setToolTip("메모 접기")
             
         parent = getattr(self, "_owner_window", None) or self.parent()
         if parent and hasattr(parent, "repository") and self.entry and self.entry.entry_id:
@@ -2022,13 +2023,17 @@ class EntryDialog(QDialog):
                 parent.repository.set_setting(f"memo_opacity_{self.entry.entry_id}", str(percent))
 
     def _close_memo(self) -> None:
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
+        self.hide()
         if self.entry_type == EntryType.MEMO:
             parent = getattr(self, "_owner_window", None) or self.parent()
             if parent and getattr(parent, "_is_app_quitting", False):
                 self.close()
                 return
             try:
-                self._auto_save_to_db(persist_disk=True, refresh_parent=True)
+                self._auto_save_to_db(persist_disk=False, refresh_parent=False)
             except Exception:
                 pass
             if parent and hasattr(parent, "_active_memo_dialogs"):
@@ -2037,7 +2042,12 @@ class EntryDialog(QDialog):
                     parent._active_memo_dialogs.pop(k, None)
                 if hasattr(parent, "_sync_open_memo_ids"):
                     parent._sync_open_memo_ids(persist=True)
-            self.close()
+            if parent and hasattr(parent, "refresh"):
+                try:
+                    parent.refresh()
+                except Exception:
+                    pass
+        self.close()
 
     def closeEvent(self, event) -> None:
         if self.entry_type == EntryType.MEMO:
@@ -2045,16 +2055,8 @@ class EntryDialog(QDialog):
             if parent and getattr(parent, "_is_app_quitting", False):
                 super().closeEvent(event)
                 return
-            try:
-                self._auto_save_to_db(persist_disk=True, refresh_parent=True)
-            except Exception:
-                pass
-            if parent and hasattr(parent, "_active_memo_dialogs"):
-                to_remove = [k for k, v in list(parent._active_memo_dialogs.items()) if v is self]
-                for k in to_remove:
-                    parent._active_memo_dialogs.pop(k, None)
-                if hasattr(parent, "_sync_open_memo_ids"):
-                    parent._sync_open_memo_ids(persist=True)
+            if not getattr(self, "_closing", False):
+                self._close_memo()
         super().closeEvent(event)
 
     def reject(self) -> None:
@@ -2064,6 +2066,7 @@ class EntryDialog(QDialog):
             return
         if self.entry_type == EntryType.MEMO:
             self._close_memo()
+            return
         super().reject()
 
     def mouseDoubleClickEvent(self, event) -> None:
@@ -2843,9 +2846,15 @@ class SettingsDialog(QDialog):
 
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
+        title_row = QHBoxLayout()
         title = QLabel("환경설정")
         title.setObjectName("title")
-        title_box.addWidget(title)
+        title_row.addWidget(title)
+        ver_badge = QLabel(APP_VERSION)
+        ver_badge.setStyleSheet("font-size: 11px; font-weight: bold; color: #475569; padding: 2px 6px; background: #e2e8f0; border-radius: 4px;")
+        title_row.addWidget(ver_badge)
+        title_row.addStretch(1)
+        title_box.addLayout(title_row)
         subtitle = QLabel("기본, 스킨, 단축키, 데이터 설정을 여기에서 관리합니다.")
         subtitle.setObjectName("subtitle")
         title_box.addWidget(subtitle)

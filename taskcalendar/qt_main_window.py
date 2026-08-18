@@ -57,6 +57,7 @@ from taskcalendar.desktop_services import (
     set_startup_enabled,
 )
 from taskcalendar.excel_io import export_entries_to_excel, import_entries_from_excel
+from taskcalendar import APP_VERSION
 from taskcalendar.backup_io import backup_to_zip, restore_from_zip
 from taskcalendar.models import AlertType, CalendarEntry, EntryType, Alarm, calculate_next_alarm_trigger
 from taskcalendar.paths import asset_path, data_path
@@ -359,11 +360,11 @@ class DayCell(QFrame):
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
-        if event.isAccepted():
-            return
-        child = self.childAt(event.position().toPoint())
-        if child is None or child is self or child is self.number_label or child is self.badge_label:
-            if self.day_value is not None:
+        if event.button() == Qt.LeftButton:
+            child = self.childAt(event.position().toPoint())
+            if isinstance(child, DraggableCalendarEntryChip) or (child is not None and isinstance(child.parent(), DraggableCalendarEntryChip)):
+                return
+            if self.day_value is not None and callable(self.callback_add):
                 self.callback_add(self.day_value)
                 event.accept()
                 return
@@ -924,7 +925,7 @@ class MainWindow(QMainWindow):
         self._calendar_rerender_pending = False
         self._window_state_dirty = False
 
-        self.setWindowTitle("캘린더")
+        self.setWindowTitle(f"캘린더 {APP_VERSION}")
         self.setWindowIcon(app_icon())
         self.resize(1024, 640)
         self.setMinimumSize(980, 620)
@@ -978,8 +979,23 @@ class MainWindow(QMainWindow):
         self.topbar = topbar
         topbar.setObjectName("panel")
         topbar_layout = QHBoxLayout(topbar)
-        topbar_layout.setContentsMargins(10, 10, 10, 10)
+        topbar_layout.setContentsMargins(12, 8, 12, 8)
         topbar_layout.setSpacing(6)
+
+        brand_layout = QHBoxLayout()
+        brand_layout.setSpacing(6)
+        brand_icon = QLabel()
+        ico = app_icon()
+        if not ico.isNull():
+            brand_icon.setPixmap(ico.pixmap(18, 18))
+        brand_layout.addWidget(brand_icon)
+        brand_label = QLabel("캘린더")
+        brand_label.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {self.palette['text']};")
+        ver_label = QLabel(APP_VERSION)
+        ver_label.setStyleSheet(f"font-size: 10px; font-weight: bold; color: {self.palette['muted']}; padding: 1px 5px; background: rgba(0,0,0,0.06); border-radius: 4px;")
+        brand_layout.addWidget(brand_label)
+        brand_layout.addWidget(ver_label)
+        topbar_layout.addLayout(brand_layout)
 
         left = QHBoxLayout()
         left.setSpacing(6)
@@ -3610,11 +3626,9 @@ class MainWindow(QMainWindow):
         meta_layout.setSpacing(4)
         if entry.entry_type == EntryType.MEMO:
             left_text = (entry.title or "메모").strip()
-            left_label = ClickableLabel(left_text)
-            left_label.doubleClicked.connect(lambda e=entry: self._open_entry_view(e))
+            left_label = QLabel(left_text)
             left_label.setStyleSheet(f"color: {self.palette['text']}; background: transparent; border: none;")
-            if isinstance(card, MemoDragCard):
-                left_label.installEventFilter(card)
+            left_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         else:
             left_text = "  ".join([part for part in [lead, *details] if part]).strip()
             left_label = ClickableLabel(left_text)
