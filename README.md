@@ -21,8 +21,7 @@ TaskCalendar는 Windows 데스크톱에서 사용하는 개인 일정/메모 관
 
 ## 💾 다운로드 (실행 프로그램)
 
-* 🚀 **[Calendar_v1.2.0_20260819.zip 다운로드 (Windows 64-bit 최신)](https://github.com/wookoon2024/TaskCalendar/raw/main/Calendar_v1.2.0_20260819.zip)**
-* 💾 **[Calendar.zip 다운로드 (기본 링크)](https://github.com/wookoon2024/TaskCalendar/raw/main/Calendar.zip)**
+* 🚀 **[Calendar_v1.2.0_20260819.zip 다운로드 (최신 버전)](https://github.com/wookoon2024/TaskCalendar/raw/main/Calendar_v1.2.0_20260819.zip)**
   * 다운로드 후 압축을 풀고 `Calendar.exe` 파일을 실행하면 별도 설치 없이 즉시 사용할 수 있습니다.
 
 ---
