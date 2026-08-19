@@ -1,4 +1,4 @@
-# 📅 TaskCalendar 기능 & 업무 활용 가이드 (v1.2.0)
+# 📅 TaskCalendar 기능 & 업무 활용 가이드 (v1.2.0 / 2026-08-19)
 
 > **사내 임직원의 업무 효율과 일정 관리를 극대화하기 위한 TaskCalendar 전체 기능(캘린더, 스마트 플로팅 메모, 사전 알람, 전역 단축키) 안내서입니다.**
 
@@ -6,23 +6,17 @@
 
 ## 📸 전체 기능 화면 미리보기
 
-````carousel
-![01. 메인 캘린더 화면](C:\Users\ADMIN\.gemini\antigravity\brain\f1bf9cdb-0cb1-4823-acb2-d1ea479a4ce2\01_main_calendar.png)
-<!-- slide -->
-![02. 스마트 플로팅 메모 (전화번호부/이미지/첨부파일)](C:\Users\ADMIN\.gemini\antigravity\brain\f1bf9cdb-0cb1-4823-acb2-d1ea479a4ce2\02_floating_memo.png)
-<!-- slide -->
-![03. 일정 등록 화면 (직접 입력 & 사전 알람)](C:\Users\ADMIN\.gemini\antigravity\brain\f1bf9cdb-0cb1-4823-acb2-d1ea479a4ce2\03_schedule_dialog.png)
-<!-- slide -->
-![04. 환경설정 및 전역 단축키](C:\Users\ADMIN\.gemini\antigravity\brain\f1bf9cdb-0cb1-4823-acb2-d1ea479a4ce2\04_settings_dialog.png)
-<!-- slide -->
-![05. 알림 관리자 (사전 알람 목록 & 반복 알림)](C:\Users\ADMIN\.gemini\antigravity\brain\f1bf9cdb-0cb1-4823-acb2-d1ea479a4ce2\05_alarm_manager.png)
-````
+![01. 메인 캘린더 화면](./01_main_calendar.png)
+![02. 스마트 플로팅 메모 (전화번호부/이미지/첨부파일)](./02_floating_memo.png)
+![03. 일정 등록 화면 (직접 입력 & 사전 알람)](./03_schedule_dialog.png)
+![04. 환경설정 및 전역 단축키](./04_settings_dialog.png)
+![05. 알림 관리자 (사전 알람 목록 & 반복 알림)](./05_alarm_manager.png)
 
 ---
 
 ## 📌 1. 메인 캘린더 화면
 
-![메인 캘린더](C:\Users\ADMIN\.gemini\antigravity\brain\f1bf9cdb-0cb1-4823-acb2-d1ea479a4ce2\01_main_calendar.png)
+![메인 캘린더](./01_main_calendar.png)
 
 * **캘린더 빈 곳 더블 클릭**: 날짜 셀의 빈 공간을 더블 클릭하면 해당 날짜로 **[일정 등록] 창이 즉시 열립니다.**
 * **상단 헤더 정보**: 최신 버전(`v1.2.0`) 확인 및 `< 2026년 8월 오늘 >` 버튼으로 연/월을 손쉽게 이동할 수 있습니다.
@@ -33,7 +27,7 @@
 
 ## 📝 2. 스마트 플로팅 메모 (바탕화면 포스트잇 & 업무 자료)
 
-![스마트 플로팅 메모](C:\Users\ADMIN\.gemini\antigravity\brain\f1bf9cdb-0cb1-4823-acb2-d1ea479a4ce2\02_floating_memo.png)
+![스마트 플로팅 메모](./02_floating_memo.png)
 
 | 주요 기능 | 설명 및 업무 활용 팁 |
 | :--- | :--- |
@@ -50,7 +44,7 @@
 
 ## ✍️ 3. 일정 & 할일 등록
 
-![일정 등록 창](C:\Users\ADMIN\.gemini\antigravity\brain\f1bf9cdb-0cb1-4823-acb2-d1ea479a4ce2\03_schedule_dialog.png)
+![일정 등록 창](./03_schedule_dialog.png)
 
 * **간소화된 직접 입력창**: 복잡한 헤더 라벨을 없애고 열자마자 바로 일정 내용을 타이핑할 수 있는 넓은 입력 영역을 제공합니다.
 * **반복 일정 지원**: 매일, 매주, 매월 특정 요일/날짜, 매년 등 다양한 반복 패턴을 지원합니다.
@@ -61,7 +55,7 @@
 
 ## ⚙️ 4. 환경설정 & 전역 단축키
 
-![환경설정](C:\Users\ADMIN\.gemini\antigravity\brain\f1bf9cdb-0cb1-4823-acb2-d1ea479a4ce2\04_settings_dialog.png)
+![환경설정](./04_settings_dialog.png)
 
 ```mermaid
 graph LR
@@ -82,7 +76,7 @@ graph LR
 
 ## ⏰ 5. 알림 관리자 (사전 알람 & 반복 알림)
 
-![알림 관리자](C:\Users\ADMIN\.gemini\antigravity\brain\f1bf9cdb-0cb1-4823-acb2-d1ea479a4ce2\05_alarm_manager.png)
+![알림 관리자](./05_alarm_manager.png)
 
 * **전체 알람 현황 조회**: 등록된 모든 사전 알람과 독립 알람 목록을 한눈에 조회하고 수정/삭제할 수 있습니다.
 * **정각/지정 알림**: 출퇴근 시간, 약 복용, 정기 회의 등 원하는 시간대별 커스텀 알람을 손쉽게 추가합니다.
