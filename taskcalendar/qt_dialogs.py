@@ -616,9 +616,9 @@ class IconPickerPopup(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("스티커 선택")
-        self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedSize(460, 370)
+        self.setFixedSize(480, 380)
         self.setStyleSheet("""
             QDialog {
                 background: #ffffff;
@@ -632,7 +632,7 @@ class IconPickerPopup(QDialog):
                 margin-top: -1px;
             }
             QTabBar::tab {
-                padding: 6px 10px;
+                padding: 5px 10px;
                 font-size: 11px;
                 font-weight: bold;
                 color: #64748b;
@@ -644,25 +644,12 @@ class IconPickerPopup(QDialog):
                 margin-right: 2px;
             }
             QTabBar::tab:selected {
-                color: #0f172a;
+                color: #0284c7;
                 background: #ffffff;
                 border-bottom: 2px solid #0284c7;
             }
             QTabBar::scroller {
-                width: 28px;
-            }
-            QTabBar QToolButton {
-                background: #f1f5f9;
-                border: 1px solid #94a3b8;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 12px;
-                color: #1e293b;
-                margin: 1px;
-            }
-            QTabBar QToolButton:hover {
-                background: #bae6fd;
-                border-color: #0284c7;
+                width: 0px;
             }
             QToolButton.sticker-btn {
                 border: 1px solid #e2e8f0;
@@ -690,25 +677,56 @@ class IconPickerPopup(QDialog):
         header_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #1e293b;")
         header_layout.addWidget(header_title)
         header_layout.addStretch(1)
+
         none_btn = QPushButton("스티커 제거")
         none_btn.setStyleSheet("font-size: 11px; padding: 3px 8px; background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; border-radius: 4px; font-weight: bold;")
         none_btn.setCursor(Qt.PointingHandCursor)
         none_btn.clicked.connect(self._select_none)
         header_layout.addWidget(none_btn)
+
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(22, 22)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setToolTip("닫기 (Esc)")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                font-size: 11px;
+                font-weight: bold;
+                color: #64748b;
+                background: transparent;
+                border: 1px solid #cbd5e1;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background: #f1f5f9;
+                color: #0f172a;
+                border-color: #94a3b8;
+            }
+        """)
+        close_btn.clicked.connect(self.reject)
+        header_layout.addWidget(close_btn)
+
         layout.addLayout(header_layout)
 
         self.tabs = QTabWidget()
-        self.tabs.setUsesScrollButtons(True)
+        self.tabs.setUsesScrollButtons(False)
 
-        # 1. 내 스티커 (PNG) Tab
-        self.tabs.addTab(self._build_custom_stickers_tab(), "내 스티커 (PNG)")
+        # 1. 내 스티커 Tab
+        self.tabs.addTab(self._build_custom_stickers_tab(), "내 스티커")
 
-        # 2. 기본 스티커 (PNG) Tab
-        self.tabs.addTab(self._build_builtin_stickers_tab(), "기본 스티커")
+        # 2. 기본 스티커 Tab
+        self.tabs.addTab(self._build_builtin_stickers_tab(), "기본")
 
-        # 3~6. Emoji Category Tabs
+        # 3~6. Emoji Category Tabs (업무, 기념일, 일상, 강조)
+        short_names = {
+            "업무/일정": "업무",
+            "기념일/가족": "기념일",
+            "일상/생활": "일상",
+            "강조/스티커": "강조",
+        }
         for cat_name, items in STICKER_CATEGORIES.items():
-            self.tabs.addTab(self._build_emoji_tab(items), cat_name)
+            disp_name = short_names.get(cat_name, cat_name)
+            self.tabs.addTab(self._build_emoji_tab(items), disp_name)
 
         layout.addWidget(self.tabs)
 
@@ -1737,7 +1755,14 @@ class EntryDialog(QDialog):
     def _open_icon_picker(self) -> None:
         popup = IconPickerPopup(self)
         btn_pos = self.sticker_btn.mapToGlobal(QPoint(0, self.sticker_btn.height() + 2))
-        popup.move(btn_pos)
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            px = max(avail.left() + 10, min(btn_pos.x(), avail.right() - popup.width() - 10))
+            py = max(avail.top() + 10, min(btn_pos.y(), avail.bottom() - popup.height() - 10))
+            popup.move(px, py)
+        else:
+            popup.move(btn_pos)
         if popup.exec() and popup.selected_icon is not None:
             self._selected_icon = popup.selected_icon
             self._refresh_sticker_button()
