@@ -39,6 +39,7 @@ peutils.py
 # Local directories
 db/
 data/
+backups/
 run_log.txt
 
 # Recovery/Utility scripts
@@ -52,3 +53,4 @@ browser_extension/
 
 # Scratch & temp
 scratch/
+.commandcode/

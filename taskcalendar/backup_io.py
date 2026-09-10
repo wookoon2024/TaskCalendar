@@ -1,16 +1,28 @@
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 import zipfile
 from pathlib import Path
 
 
-def backup_to_zip(db_path: Path, attachments_dir: Path, zip_filepath: Path) -> None:
-    """Compresses the encrypted database file and attachments directory into a single zip file."""
+def backup_to_zip(
+    db_path: Path,
+    attachments_dir: Path,
+    zip_filepath: Path,
+    settings_dict: dict[str, str] | None = None,
+) -> None:
+    """Compresses the encrypted database file, companion settings, and attachments into a single zip file."""
     with zipfile.ZipFile(zip_filepath, "w", zipfile.ZIP_DEFLATED) as zipf:
         if db_path.exists():
             zipf.write(db_path, arcname=db_path.name)
+        if settings_dict:
+            zipf.writestr("settings.json", json.dumps(settings_dict, ensure_ascii=False, indent=2))
+        else:
+            latest_settings = db_path.parent / "backups" / "settings_latest.json"
+            if latest_settings.exists():
+                zipf.write(latest_settings, arcname="settings.json")
         if attachments_dir.exists():
             for file in attachments_dir.rglob("*"):
                 if file.is_file():
@@ -18,13 +30,14 @@ def backup_to_zip(db_path: Path, attachments_dir: Path, zip_filepath: Path) -> N
                     zipf.write(file, arcname=arcname.as_posix())
 
 
-def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -> None:
+def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -> dict[str, str] | None:
     """Verifies and extracts database and attachments from zip backup, replacing existing files safely."""
     with zipfile.ZipFile(zip_filepath, "r") as zipf:
         names = zipf.namelist()
         if "taskcalendar.db.enc" not in names:
             raise ValueError("올바른 백업 ZIP 파일이 아닙니다. (taskcalendar.db.enc 파일 누락)")
 
+    extracted_settings: dict[str, str] | None = None
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         with zipfile.ZipFile(zip_filepath, "r") as zipf:
@@ -32,6 +45,13 @@ def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -
 
         extracted_db = tmp_path / "taskcalendar.db.enc"
         extracted_attachments = tmp_path / "attachments"
+        extracted_settings_file = tmp_path / "settings.json"
+
+        if extracted_settings_file.exists():
+            try:
+                extracted_settings = json.loads(extracted_settings_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
 
         if not extracted_db.exists():
             raise ValueError("임시 경로에 데이터베이스 파일 추출을 실패했습니다.")
@@ -67,6 +87,15 @@ def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(file, dest)
 
+            # Preserve extracted settings to backup directory if present
+            if extracted_settings_file.exists():
+                backup_dir = db_path.parent / "backups"
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    shutil.copy2(extracted_settings_file, backup_dir / "settings_latest.json")
+                except Exception:
+                    pass
+
         except Exception as e:
             # Rollback
             if db_backed_up and db_backup_path.exists():
@@ -82,15 +111,24 @@ def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -
             if attachments_backup_path.exists():
                 shutil.rmtree(attachments_backup_path)
 
+    return extracted_settings
 
-def run_auto_backup_db(db_path: Path, backup_dir: Path, interval_days: int, keep_count: int, last_backup_iso: str) -> str | None:
+
+def run_auto_backup_db(
+    db_path: Path,
+    backup_dir: Path,
+    interval_days: int,
+    keep_count: int,
+    last_backup_iso: str,
+    settings_dict: dict[str, str] | None = None,
+) -> str | None:
     """
     Checks if a backup is due based on interval_days and last_backup_iso.
-    If due, creates a copy of the database file in backup_dir, rotates old backups,
-    and returns the new backup ISO timestamp. Otherwise, returns None.
+    If due, creates a copy of the database file in backup_dir, writes companion settings JSON,
+    rotates old backups, and returns the new backup ISO timestamp. Otherwise, returns None.
     """
     from datetime import datetime, timedelta
-    
+
     if not db_path.exists():
         return None
 
@@ -111,12 +149,23 @@ def run_auto_backup_db(db_path: Path, backup_dir: Path, interval_days: int, keep
     stamp = now.strftime("%Y%m%d_%H%M%S")
     backup_filename = f"taskcalendar_backup_{stamp}.db.enc"
     backup_filepath = backup_dir / backup_filename
-    
+
     try:
         shutil.copy2(db_path, backup_filepath)
     except Exception:
         # Ignore errors during auto-backup to not crash startup
         return None
+
+    # Write companion settings JSON alongside .db.enc
+    if settings_dict:
+        try:
+            settings_json_path = backup_dir / f"taskcalendar_backup_{stamp}.settings.json"
+            settings_latest_path = backup_dir / "settings_latest.json"
+            json_text = json.dumps(settings_dict, ensure_ascii=False, indent=2)
+            settings_json_path.write_text(json_text, encoding="utf-8")
+            settings_latest_path.write_text(json_text, encoding="utf-8")
+        except Exception:
+            pass
 
     # Rotate old backups
     if keep_count > 0:
@@ -126,6 +175,11 @@ def run_auto_backup_db(db_path: Path, backup_dir: Path, interval_days: int, keep
                 to_delete = backups[:-keep_count]
                 for file_to_del in to_delete:
                     file_to_del.unlink(missing_ok=True)
+                    # Also remove companion .settings.json
+                    companion_json = file_to_del.with_name(
+                        file_to_del.name.replace(".db.enc", ".settings.json")
+                    )
+                    companion_json.unlink(missing_ok=True)
         except Exception:
             pass  # Ignore rotation errors to not crash startup
 

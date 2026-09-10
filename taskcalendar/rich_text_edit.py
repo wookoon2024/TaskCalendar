@@ -10,18 +10,23 @@ from PySide6.QtGui import (
     QPen,
     QBrush,
     QAbstractTextDocumentLayout,
+    QColor,
+    QTextCharFormat,
 )
 
 class RichTextEdit(QTextEdit):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setAcceptRichText(True)
+        self.is_todo_mode = False
         self._selected_cursor = None
         self._drag_handle = None
         self._initial_mouse_pos = None
         self._initial_img_size = None
         self._orig_aspect_ratio = 1.0
         self.viewport().setMouseTracking(True)
+        self.verticalScrollBar().valueChanged.connect(lambda _: self.viewport().update())
+        self.horizontalScrollBar().valueChanged.connect(lambda _: self.viewport().update())
         self.textChanged.connect(self._on_text_changed)
         self.cursorPositionChanged.connect(self._on_cursor_changed)
 
@@ -66,12 +71,10 @@ class RichTextEdit(QTextEdit):
         c2.setPosition(end)
         r2 = self.cursorRect(c2)
         
-        w = r2.left() - r1.left()
-        if w <= 0:
-            img_fmt = cursor.charFormat().toImageFormat()
-            w = int(img_fmt.width()) if img_fmt.width() > 0 else 60
-        h = max(20, r1.height())
-        return QRect(r1.left(), r1.top(), max(20, w), h)
+        img_fmt = cursor.charFormat().toImageFormat()
+        w = int(img_fmt.width()) if img_fmt.width() > 0 else max(20, r2.left() - r1.left())
+        h = int(img_fmt.height()) if img_fmt.height() > 0 else max(20, r1.height())
+        return QRect(r1.left(), r1.top(), max(20, w), max(20, h))
 
     def _get_handles(self, rect: QRect) -> dict[str, QRect]:
         hs = 8  # handle size
@@ -97,6 +100,8 @@ class RichTextEdit(QTextEdit):
         
         offset_y = self.verticalScrollBar().value()
         offset_x = self.horizontalScrollBar().value()
+        
+        painter.save()
         painter.translate(-offset_x, -offset_y)
         
         ctx.clip = QRectF(event.rect()).translated(offset_x, offset_y)
@@ -110,14 +115,16 @@ class RichTextEdit(QTextEdit):
             ctx.selections = [sel]
             
         self.document().documentLayout().draw(painter, ctx)
+        painter.restore()
         
-        # Draw image selection border and handles
+        # Draw image selection border and handles in viewport coordinates
         if self._selected_cursor:
             if not self._is_valid_image_cursor(self._selected_cursor):
                 self._selected_cursor = None
             else:
                 rect = self._get_image_rect(self._selected_cursor)
                 if rect.isValid() and rect.width() > 0 and rect.height() > 0:
+                    painter.setClipRect(self.viewport().rect())
                     pen = QPen(Qt.GlobalColor.blue, 1, Qt.PenStyle.DashLine)
                     painter.setPen(pen)
                     painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -139,11 +146,70 @@ class RichTextEdit(QTextEdit):
                 self.viewport().update()
                 event.accept()
                 return
+
+        if getattr(self, "is_todo_mode", False):
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                cursor = self.textCursor()
+                blk = cursor.block()
+                text = blk.text()
+
+                # 빈 체크박스만 있는 상태에서 엔터 -> 체크박스 삭제 후 일반 줄로
+                if text.strip() in ("☐", "☑"):
+                    cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                    cursor.removeSelectedText()
+                    event.accept()
+                    return
+
+                # 일반 내용이 있는 경우 엔터 -> 새 줄에 ☐ 자동 삽입
+                super().keyPressEvent(event)
+                new_cursor = self.textCursor()
+                fmt = new_cursor.charFormat()
+                fmt.setFontStrikeOut(False)
+                new_cursor.setCharFormat(fmt)
+                new_cursor.insertText("☐ ")
+                event.accept()
+                return
+
+            elif event.key() == Qt.Key.Key_Backspace:
+                cursor = self.textCursor()
+                blk = cursor.block()
+                text = blk.text()
+                # 맨 앞 체크박스 바로 뒤에서 백스페이스 누르면 체크박스 전체 삭제
+                if (text.startswith("☐ ") or text.startswith("☑ ")) and cursor.positionInBlock() <= 2:
+                    cursor.setPosition(blk.position(), QTextCursor.MoveMode.KeepAnchor)
+                    cursor.removeSelectedText()
+                    event.accept()
+                    return
+
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event) -> None:
         pos = event.position().toPoint()
-        
+
+        # Check if clicked on a To-Do checkbox (☐ or ☑)
+        if event.button() == Qt.MouseButton.LeftButton:
+            c = self.cursorForPosition(pos)
+            blk = c.block()
+            text = blk.text()
+            if text.startswith("☐") or text.startswith("☑"):
+                pos_in_blk = c.positionInBlock()
+                # If clicking on the checkbox area at start of block
+                if pos_in_blk <= 2:
+                    is_checking = text.startswith("☐")
+                    cur = QTextCursor(blk)
+                    cur.setPosition(blk.position())
+                    cur.setPosition(blk.position() + 1, QTextCursor.MoveMode.KeepAnchor)
+                    cur.insertText("☑" if is_checking else "☐")
+
+                    # Apply/remove strikeout for the remainder of the line while preserving color & font
+                    cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+                    fmt = QTextCharFormat()
+                    fmt.setFontStrikeOut(is_checking)
+                    cur.mergeCharFormat(fmt)
+                    self.viewport().update()
+                    event.accept()
+                    return
+
         # 1. If an image is selected, check if we clicked a resize handle
         if self._selected_cursor and self._is_valid_image_cursor(self._selected_cursor):
             rect = self._get_image_rect(self._selected_cursor)
@@ -179,7 +245,15 @@ class RichTextEdit(QTextEdit):
                 c2.setPosition(p + 1)
                 r2 = self.cursorRect(c2)
                 
-                rect = QRect(r1.left(), r1.top(), max(20, r2.left() - r1.left()), max(20, r1.height()))
+                fmt = c1.charFormat()
+                if fmt.isImageFormat():
+                    img_fmt = fmt.toImageFormat()
+                    w = int(img_fmt.width()) if img_fmt.width() > 0 else max(20, r2.left() - r1.left())
+                    h = int(img_fmt.height()) if img_fmt.height() > 0 else max(20, r1.height())
+                else:
+                    w = max(20, r2.left() - r1.left())
+                    h = max(20, r1.height())
+                rect = QRect(r1.left(), r1.top(), max(20, w), max(20, h))
                 if rect.contains(pos):
                     cursor = QTextCursor(doc)
                     cursor.setPosition(p)
@@ -415,3 +489,117 @@ class RichTextEdit(QTextEdit):
         disp_w = min(340, orig_w)
         disp_h = int(round(disp_w * (orig_h / max(1, orig_w))))
         self.insertHtml(f'<img src="data:image/png;base64,{base64_data}" width="{disp_w}" height="{disp_h}" />')
+
+    def toggle_todo_style(self) -> None:
+        self.is_todo_mode = not getattr(self, "is_todo_mode", False)
+        cursor = self.textCursor()
+        cursor.beginEditBlock()
+        try:
+            doc = self.document()
+            blk = doc.begin()
+            has_content = False
+            while blk.isValid():
+                txt = blk.text()
+                if txt.strip():
+                    has_content = True
+                    cur = QTextCursor(blk)
+                    if self.is_todo_mode:
+                        if not txt.startswith("☐") and not txt.startswith("☑"):
+                            cur.setPosition(blk.position())
+                            cur.insertText("☐ ")
+                    else:
+                        if txt.startswith("☐ ") or txt.startswith("☑ "):
+                            cur.setPosition(blk.position() + 2, QTextCursor.MoveMode.KeepAnchor)
+                            cur.removeSelectedText()
+                            cur.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+                            fmt = QTextCharFormat()
+                            fmt.setFontStrikeOut(False)
+                            cur.mergeCharFormat(fmt)
+                        elif txt.startswith("☐") or txt.startswith("☑"):
+                            cur.setPosition(blk.position() + 1, QTextCursor.MoveMode.KeepAnchor)
+                            cur.removeSelectedText()
+                blk = blk.next()
+
+            if self.is_todo_mode and not has_content:
+                cur = self.textCursor()
+                cur.movePosition(QTextCursor.MoveOperation.Start)
+                cur.insertText("☐ ")
+                self.setTextCursor(cur)
+        finally:
+            cursor.endEditBlock()
+        self.viewport().update()
+
+    def contextMenuEvent(self, event) -> None:
+        parent_dlg = self.window()
+        if parent_dlg and str(getattr(parent_dlg, "entry_type", "")) == "EntryType.MEMO":
+            menu = self.createStandardContextMenu()
+            menu.setStyleSheet("""
+                QMenu {
+                    background-color: #ffffff;
+                    border: 1px solid #d0d5dd;
+                    padding: 4px 0px;
+                    border-radius: 6px;
+                }
+                QMenu::item {
+                    padding: 6px 24px 6px 20px;
+                    font-size: 12px;
+                    color: #222222;
+                }
+                QMenu::item:selected {
+                    background-color: #f1f5f9;
+                    color: #0f172a;
+                }
+            """)
+            first_action = menu.actions()[0] if menu.actions() else None
+
+            tb = getattr(parent_dlg, "memo_editor_toolbar", None)
+            is_tb_vis = tb.isVisible() if tb is not None else False
+            ed_act = menu.addAction("에디터 보기/닫기")
+            ed_act.setCheckable(True)
+            ed_act.setChecked(is_tb_vis)
+            if hasattr(parent_dlg, "_toggle_editor_toolbar"):
+                ed_act.triggered.connect(lambda: parent_dlg._toggle_editor_toolbar())
+
+            is_todo = getattr(self, "is_todo_mode", False)
+            todo_act = menu.addAction("To-Do 스타일로 변경" if not is_todo else "일반 텍스트로 변경")
+            todo_act.setCheckable(True)
+            todo_act.setChecked(is_todo)
+            if hasattr(parent_dlg, "_toggle_todo_mode"):
+                todo_act.triggered.connect(parent_dlg._toggle_todo_mode)
+            else:
+                todo_act.triggered.connect(self.toggle_todo_style)
+
+            att_bar = getattr(parent_dlg, "attachment_bar", None)
+            is_att_vis = att_bar.isVisible() if att_bar is not None else True
+            att_act = menu.addAction("하단 파일첨부 열고/닫기")
+            att_act.setCheckable(True)
+            att_act.setChecked(is_att_vis)
+            if hasattr(parent_dlg, "_toggle_attachment_bar"):
+                att_act.triggered.connect(lambda: parent_dlg._toggle_attachment_bar())
+
+            if first_action:
+                menu.removeAction(ed_act)
+                menu.removeAction(todo_act)
+                menu.removeAction(att_act)
+                menu.insertAction(first_action, ed_act)
+                menu.insertAction(first_action, todo_act)
+                menu.insertAction(first_action, att_act)
+                menu.insertSeparator(first_action)
+
+            menu.addSeparator()
+            if hasattr(parent_dlg, "_create_new_group"):
+                new_grp_act = menu.addAction("새 그룹 추가...")
+                new_grp_act.triggered.connect(lambda: parent_dlg._create_new_group(assign_current=False))
+
+            if hasattr(parent_dlg, "_populate_group_menu"):
+                grp_sub = menu.addMenu("📁 그룹 지정 / 이동")
+                grp_sub.setStyleSheet(menu.styleSheet())
+                parent_dlg._populate_group_menu(grp_sub)
+
+            if hasattr(parent_dlg, "_show_memo_context_menu"):
+                memo_all_act = menu.addAction("플로팅 메모 전체 설정...")
+                memo_all_act.triggered.connect(lambda: parent_dlg._show_memo_context_menu(event.globalPosition().toPoint()))
+
+            menu.exec(event.globalPosition().toPoint())
+            return
+        super().contextMenuEvent(event)

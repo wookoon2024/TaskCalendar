@@ -69,6 +69,8 @@ from taskcalendar.qt_dialogs import (
     BackupRestoreFormatDialog,
     get_sticker_pixmap,
     CivilComplaintCalculatorDialog,
+    WelcomeFeatureIntroDialog,
+    ElidedLabel,
 )
 from taskcalendar.storage import EncryptedRepository
 from taskcalendar.themes import THEMES
@@ -628,30 +630,9 @@ class StickerItem(QLabel):
         super().mouseReleaseEvent(event)
 
 
-class ElidedLabel(QLabel):
-    def __init__(self, text: str = "", parent=None) -> None:
-        super().__init__(parent)
-        self._full_text = ""
-        self.setWordWrap(False)
-        self.set_full_text(text)
-
-    def set_full_text(self, text: str) -> None:
-        self._full_text = str(text or "")
-        self.setToolTip(self._full_text)
-        self._apply_elide()
-
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        self._apply_elide()
-
-    def _apply_elide(self) -> None:
-        width = max(8, self.contentsRect().width())
-        elided = self.fontMetrics().elidedText(self._full_text, Qt.ElideRight, width)
-        QLabel.setText(self, elided)
-
-
 class MemoDragCard(QFrame):
     reordered = Signal(int, int, bool)
+    clicked = Signal(int)
     _MIME_TYPE = "application/x-taskcalendar-memo-id"
 
     def __init__(self, parent, memo_id: int, drag_enabled: bool) -> None:
@@ -691,8 +672,11 @@ class MemoDragCard(QFrame):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        was_click = self._press_pos is not None
         self._press_pos = None
         super().mouseReleaseEvent(event)
+        if was_click and self.drag_enabled and event.button() == Qt.LeftButton:
+            self.clicked.emit(self.memo_id)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton and hasattr(self, "_on_double_click") and callable(self._on_double_click):
@@ -700,6 +684,14 @@ class MemoDragCard(QFrame):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        handler = getattr(self, "_on_context_menu", None)
+        if callable(handler):
+            handler(event.globalPos())
+            event.accept()
+            return
+        super().contextMenuEvent(event)
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         if self._is_valid_drag(event):
@@ -889,6 +881,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.repository = repository
         self.theme_name = self.repository.get_setting("theme", "light")
+        if self.theme_name not in THEMES:
+            self.theme_name = "light"
         self.palette = THEMES[self.theme_name]
 
         today = date.today()
@@ -907,14 +901,18 @@ class MainWindow(QMainWindow):
         self._sticker_animation_enabled = self.repository.get_setting("sticker_animation_enabled", "1") == "1"
         self.hide_completed_on_calendar = self.repository.get_setting("hide_completed_on_calendar", "1") == "1"
         self.show_lunar_calendar = self.repository.get_setting("show_lunar_calendar", "1") == "1"
+        self.lunar_display_frequency = self.repository.get_setting("lunar_display_frequency", "all")
         self.show_solar_terms = self.repository.get_setting("show_solar_terms", "1") == "1"
         self._action_icons: dict[str, QIcon] = self._load_action_icons()
         self._holidays_fixed, self._holidays_yearly = self._load_holidays()
         self.memo_title_only = self.repository.get_setting("memo_title_only", "0") == "1"
+        self._sidebar_visible = self.repository.get_setting("sidebar_visible", "1") == "1"
+        self._topbar_visible = self.repository.get_setting("topbar_visible", "1") == "1"
         self.search_query = ""
         self.search_results: list[CalendarEntry] = []
         self._memo_card_widgets: dict[int, QWidget] = {}
         self._active_memo_dialogs: dict[int | str, EntryDialog] = {}
+        self._active_group_dialogs: dict[str, QDialog] = {}
         self._pending_scroll_memo_id: int | None = None
         self._sticker_widgets: dict[str, StickerItem] = {}
         self._sticker_edit_mode = False
@@ -947,6 +945,7 @@ class MainWindow(QMainWindow):
         self._suspend_window_state_tracking = False
         self._calendar_rerender_pending = False
         self._window_state_dirty = False
+        self._did_memo_restore = False
 
         self.setWindowTitle(f"캘린더 {APP_VERSION}")
         self.setWindowIcon(app_icon())
@@ -969,7 +968,6 @@ class MainWindow(QMainWindow):
         app_inst = QApplication.instance()
         if app_inst:
             app_inst.aboutToQuit.connect(self._on_app_about_to_quit)
-        QTimer.singleShot(150, self._restore_open_memos)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if event.type() == QEvent.Type.KeyPress and self._handle_calendar_navigation_key(event):
@@ -995,6 +993,7 @@ class MainWindow(QMainWindow):
         self._apply_tooltip_palette()
 
         outer = QVBoxLayout(root)
+        self.outer_layout = outer
         outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(10)
 
@@ -1022,7 +1021,9 @@ class MainWindow(QMainWindow):
 
         left = QHBoxLayout()
         left.setSpacing(6)
-        self.prev_button = self._top_button("◀", 34)
+        self.prev_button = self._top_button("", 34)
+        self.prev_button.setIcon(QIcon(str(asset_path("chevron_left.svg"))))
+        self.prev_button.setIconSize(QSize(14, 14))
         self.prev_button.setToolTip("이전 달")
         self.prev_button.setStyleSheet("""
             QPushButton {
@@ -1053,7 +1054,9 @@ class MainWindow(QMainWindow):
         today_button = self._top_button("오늘")
         today_button.clicked.connect(self._go_today)
         left.addWidget(today_button)
-        self.next_button = self._top_button("▶", 34)
+        self.next_button = self._top_button("", 34)
+        self.next_button.setIcon(QIcon(str(asset_path("chevron_right.svg"))))
+        self.next_button.setIconSize(QSize(14, 14))
         self.next_button.setToolTip("다음 달")
         self.next_button.setStyleSheet("""
             QPushButton {
@@ -1092,17 +1095,84 @@ class MainWindow(QMainWindow):
         self.complaint_button.clicked.connect(self._open_complaint_calculator)
         right.addWidget(self.complaint_button)
 
-        self.alarm_button = self._top_button("알림")
+        self.alarm_button = self._top_button("알람")
+        self.alarm_button.setToolTip("알람 목록 및 소리/팝업 설정")
         self.alarm_button.clicked.connect(self._open_alarm_settings)
         right.addWidget(self.alarm_button)
 
         settings_button = self._top_button("환경설정")
         settings_button.clicked.connect(self._open_settings)
         right.addWidget(settings_button)
+
+
+
+        self.topbar_sidebar_btn = self._top_button("", 28)
+        self.topbar_sidebar_btn.setIcon(QIcon(str(asset_path("chevron_right.svg" if getattr(self, "_sidebar_visible", True) else "chevron_left.svg"))))
+        self.topbar_sidebar_btn.setIconSize(QSize(14, 14))
+        self.topbar_sidebar_btn.setToolTip("우측 사이드바 숨기기 (단축키: Ctrl+B)" if getattr(self, "_sidebar_visible", True) else "우측 사이드바 표시 (단축키: Ctrl+B)")
+        self.topbar_sidebar_btn.clicked.connect(self._toggle_sidebar)
+        right.addWidget(self.topbar_sidebar_btn)
+
+        self.topbar_collapse_btn = self._top_button("", 28)
+        self.topbar_collapse_btn.setIcon(QIcon(str(asset_path("chevron_up.svg"))))
+        self.topbar_collapse_btn.setIconSize(QSize(14, 14))
+        self.topbar_collapse_btn.setToolTip("상단바 숨기기 (단축키: Ctrl+T)")
+        self.topbar_collapse_btn.clicked.connect(self._toggle_topbar)
+        right.addWidget(self.topbar_collapse_btn)
+
         topbar_layout.addLayout(right)
         outer.addWidget(topbar)
 
+        self.topbar_expand_container = QWidget()
+        topbar_exp_layout = QHBoxLayout(self.topbar_expand_container)
+        topbar_exp_layout.setContentsMargins(0, 0, 0, 0)
+        topbar_exp_layout.setSpacing(4)
+        topbar_exp_layout.addStretch(1)
+
+        tab_style = """
+            QPushButton {
+                font-size: 10px;
+                font-weight: 500;
+                color: #475569;
+                background: #e2e8f0;
+                border: 1px solid #cbd5e1;
+                border-top: none;
+                border-top-left-radius: 0px;
+                border-top-right-radius: 0px;
+                border-bottom-left-radius: 4px;
+                border-bottom-right-radius: 4px;
+                padding: 0px 10px;
+            }
+            QPushButton:hover {
+                background: #cbd5e1;
+                color: #0f172a;
+            }
+        """
+
+        self.sidebar_expand_btn = QPushButton("  사이드바 표시")
+        self.sidebar_expand_btn.setIcon(QIcon(str(asset_path("chevron_left.svg"))))
+        self.sidebar_expand_btn.setIconSize(QSize(11, 11))
+        self.sidebar_expand_btn.setObjectName("topbarButton")
+        self.sidebar_expand_btn.setToolTip("우측 사이드바 다시 표시 (단축키: Ctrl+B)")
+        self.sidebar_expand_btn.setFixedHeight(18)
+        self.sidebar_expand_btn.setStyleSheet(tab_style)
+        self.sidebar_expand_btn.clicked.connect(self._toggle_sidebar)
+        topbar_exp_layout.addWidget(self.sidebar_expand_btn)
+
+        self.topbar_expand_btn = QPushButton("  상단바 표시")
+        self.topbar_expand_btn.setIcon(QIcon(str(asset_path("chevron_down.svg"))))
+        self.topbar_expand_btn.setIconSize(QSize(11, 11))
+        self.topbar_expand_btn.setObjectName("topbarButton")
+        self.topbar_expand_btn.setToolTip("상단바 다시 표시 (단축키: Ctrl+T)")
+        self.topbar_expand_btn.setFixedHeight(18)
+        self.topbar_expand_btn.setStyleSheet(tab_style)
+        self.topbar_expand_btn.clicked.connect(self._toggle_topbar)
+        topbar_exp_layout.addWidget(self.topbar_expand_btn)
+        self.topbar_expand_container.hide()
+        outer.addWidget(self.topbar_expand_container)
+
         body = QHBoxLayout()
+        self.body_layout = body
         body.setSpacing(10)
         outer.addLayout(body, 1)
 
@@ -1223,7 +1293,9 @@ class MainWindow(QMainWindow):
         sticker_toolbar_layout.addStretch(1)
         
         # Close Button
-        self.sticker_close_button = QPushButton("✕")
+        self.sticker_close_button = QPushButton()
+        self.sticker_close_button.setIcon(QIcon(str(asset_path("memo_close.svg"))))
+        self.sticker_close_button.setIconSize(QSize(12, 12))
         self.sticker_close_button.setObjectName("stickerCloseButton")
         self.sticker_close_button.setFixedWidth(24)
         self.sticker_close_button.setFixedHeight(24)
@@ -1297,6 +1369,23 @@ class MainWindow(QMainWindow):
         self.info_add_button.setObjectName("primary")
         self.info_add_button.clicked.connect(self._handle_add_button)
         info_layout.addWidget(self.info_add_button)
+        self.info_group_button = QPushButton("그룹")
+        self.info_group_button.setObjectName("topbarButton")
+        self.info_group_button.setFixedWidth(52)
+        self.info_group_button.setToolTip("플로팅 메모 그룹 관리")
+        self.info_group_button.clicked.connect(self._handle_group_button)
+        self.info_group_button.hide()
+        info_layout.addWidget(self.info_group_button)
+
+        self.sidebar_close_btn = QPushButton()
+        self.sidebar_close_btn.setIcon(QIcon(str(asset_path("chevron_right.svg"))))
+        self.sidebar_close_btn.setIconSize(QSize(14, 14))
+        self.sidebar_close_btn.setObjectName("topbarButton")
+        self.sidebar_close_btn.setFixedSize(26, 26)
+        self.sidebar_close_btn.setToolTip("우측 사이드바 숨기기 (단축키: Ctrl+B)")
+        self.sidebar_close_btn.clicked.connect(self._toggle_sidebar)
+        info_layout.addWidget(self.sidebar_close_btn)
+
         sidebar_layout.addWidget(info_card)
 
         self.sidebar_scroll = QScrollArea()
@@ -1312,9 +1401,22 @@ class MainWindow(QMainWindow):
         self.sidebar_layout.addStretch(1)
         self.sidebar_scroll.setWidget(self.sidebar_content)
         sidebar_layout.addWidget(self.sidebar_scroll, 1)
+
+        self.sidebar_expand_edge_btn = QPushButton()
+        self.sidebar_expand_edge_btn.hide()
+
         body.addWidget(self.sidebar_panel)
         self._sync_sticker_overlay()
         self._apply_clickable_cursor()
+
+        from PySide6.QtGui import QKeySequence, QShortcut
+        self.shortcut_sidebar = QShortcut(QKeySequence("Ctrl+B"), self)
+        self.shortcut_sidebar.activated.connect(self._toggle_sidebar)
+        self.shortcut_topbar = QShortcut(QKeySequence("Ctrl+T"), self)
+        self.shortcut_topbar.activated.connect(self._toggle_topbar)
+
+        self._apply_sidebar_visibility(self._sidebar_visible, save=False)
+        self._apply_topbar_visibility(self._topbar_visible, save=False)
 
     def _apply_clickable_cursor(self, root: QWidget | None = None) -> None:
         target = root or self
@@ -1735,15 +1837,18 @@ class MainWindow(QMainWindow):
         self._restore_window_state()
 
     def _toggle_memos_visibility(self) -> None:
-        if not hasattr(self, "_active_memo_dialogs") or not self._active_memo_dialogs:
+        memos = list(getattr(self, "_active_memo_dialogs", {}).values())
+        groups = list(getattr(self, "_active_group_dialogs", {}).values())
+        all_dlgs = memos + groups
+        if not all_dlgs:
             return
 
-        any_visible = any(dlg.isVisible() for dlg in self._active_memo_dialogs.values())
+        any_visible = any(dlg.isVisible() for dlg in all_dlgs)
         if any_visible:
-            for dlg in self._active_memo_dialogs.values():
+            for dlg in all_dlgs:
                 dlg.hide()
         else:
-            for dlg in self._active_memo_dialogs.values():
+            for dlg in all_dlgs:
                 dlg.show()
                 dlg.raise_()
                 dlg.activateWindow()
@@ -1796,6 +1901,7 @@ class MainWindow(QMainWindow):
     def _finish_window_restore(self) -> None:
         self._suspend_window_state_tracking = False
         self._remember_window_state()
+        self._raise_memos_above_calendar()
 
     def _load_window_state(self) -> None:
         raw = self.repository.get_setting("window_state_v1", "")
@@ -3489,7 +3595,40 @@ class MainWindow(QMainWindow):
                 cell.number_label.setStyleSheet(f"font-size: 11pt; color: {color}; background: transparent; border: none;")
 
             solar_term = get_solar_term(current_day) if getattr(self, "show_solar_terms", True) else ""
-            lunar_info = get_lunar_date(current_day) if getattr(self, "show_lunar_calendar", True) else None
+            show_lunar = getattr(self, "show_lunar_calendar", True)
+            lunar_freq = getattr(self, "lunar_display_frequency", "all")
+            raw_lunar = get_lunar_date(current_day) if show_lunar else None
+            lunar_info = None
+
+            if raw_lunar:
+                show_today = False
+                if lunar_freq == "all":
+                    show_today = True
+                elif lunar_freq == "weekly":
+                    show_today = (current_day.weekday() == 6)
+                elif lunar_freq == "monthly_1st":
+                    show_today = (current_day.day == 1)
+                elif lunar_freq == "lunar_1st":
+                    show_today = (raw_lunar.day == 1)
+                elif lunar_freq == "lunar_1st_15th":
+                    show_today = (raw_lunar.day in (1, 15))
+                elif lunar_freq == "ten_days":
+                    show_today = (current_day.day in (1, 11, 21))
+                else:
+                    show_today = True
+
+                if show_today:
+                    lunar_info = raw_lunar
+
+            num_tip_parts = [current_day.strftime("%Y-%m-%d")]
+            if holiday_name:
+                num_tip_parts.append(holiday_name)
+            if solar_term:
+                num_tip_parts.append(f"24절기: {solar_term}")
+            if raw_lunar:
+                leap_pfx = "윤" if raw_lunar.is_leap else ""
+                num_tip_parts.append(f"음력 {leap_pfx}{raw_lunar.month}월 {raw_lunar.day}일")
+            cell.number_label.setToolTip(" | ".join(num_tip_parts))
 
             label_parts = []
             tooltip_parts = []
@@ -3569,6 +3708,7 @@ class MainWindow(QMainWindow):
 
         if self.sidebar_mode == "search":
             self.info_add_button.hide()
+            self.info_group_button.hide()
             self.info_export_button.show()
             self.info_title.setText(f"검색결과 {len(self.search_results)}건")
             if not self.search_results:
@@ -3581,6 +3721,7 @@ class MainWindow(QMainWindow):
         if self.sidebar_mode == "memo":
             self.info_export_button.hide()
             self.info_add_button.show()
+            self.info_group_button.show()
             items = self._ordered_memos(self.repository.list_memos())
             self.info_title.setText(f"메모 {len(items)}개")
             self.info_add_button.setText("메모 추가")
@@ -3600,6 +3741,7 @@ class MainWindow(QMainWindow):
             return
         self.info_export_button.hide()
         self.info_add_button.show()
+        self.info_group_button.hide()
 
         self.info_title.setText(self.selected_day.strftime("%Y.%m.%d"))
         self.info_add_button.setText("일정 추가")
@@ -3682,6 +3824,8 @@ class MainWindow(QMainWindow):
         if drag_enabled and entry.entry_id is not None:
             card = MemoDragCard(self.sidebar_content, int(entry.entry_id), True)
             card._on_double_click = lambda e=entry: self._open_entry_view(e)
+            card._on_context_menu = lambda pos, e=entry: self._show_memo_card_context_menu(e, pos)
+            card.clicked.connect(lambda _id, e=entry: self._open_entry_view(e))
             card.reordered.connect(self._on_memo_card_reordered)
         else:
             card = QFrame()
@@ -3713,23 +3857,50 @@ class MainWindow(QMainWindow):
         meta_layout.setContentsMargins(0, 0, 0, 0)
         meta_layout.setSpacing(4)
         if entry.entry_type == EntryType.MEMO:
+            left_col = QWidget()
+            left_col.setStyleSheet("background: transparent; border: none;")
+            left_col_layout = QHBoxLayout(left_col)
+            left_col_layout.setContentsMargins(0, 0, 0, 0)
+            left_col_layout.setSpacing(6)
+            left_col_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
             left_text = (entry.title or "메모").strip()
-            left_label = QLabel(left_text)
-            left_label.setStyleSheet(f"color: {self.palette['text']}; background: transparent; border: none;")
+            left_label = ElidedLabel(left_text)
+            left_label.setStyleSheet(f"color: {self.palette['text']}; font-size: 13px; background: transparent; border: none;")
             left_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            left_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            left_label.setMinimumWidth(0)
+            left_col_layout.addWidget(left_label, 1)
+
+            reg_date_str = ""
+            if entry.created_at:
+                reg_date_str = entry.created_at.strftime("%Y.%m.%d %H:%M")
+            elif entry.day:
+                reg_date_str = entry.day.strftime("%Y.%m.%d")
+            elif entry.start_date:
+                reg_date_str = entry.start_date.strftime("%Y.%m.%d")
+
+            if reg_date_str:
+                date_label = QLabel(reg_date_str)
+                date_label.setStyleSheet(f"color: {self.palette.get('muted', '#64748b')}; font-size: 11px; background: transparent; border: none;")
+                date_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                left_col_layout.addWidget(date_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+            meta_layout.addWidget(left_col, 1)
         else:
             left_text = "  ".join([part for part in [lead, *details] if part]).strip()
             left_label = ClickableLabel(left_text)
             left_label.clicked.connect(lambda e=entry: self._open_entry_view(e))
             left_label.setObjectName("muted")
             left_label.setStyleSheet(f"color: {self.palette['muted']}; background: transparent; border: none;")
-        meta_layout.addWidget(left_label, 1)
+            meta_layout.addWidget(left_label, 1)
 
         actions_wrap = QWidget()
         actions_wrap.setStyleSheet("background: transparent;")
         actions = QHBoxLayout(actions_wrap)
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(4)
+        actions.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         if entry.entry_type != EntryType.MEMO:
             complete = QToolButton()
             complete.setAutoRaise(False)
@@ -3757,16 +3928,25 @@ class MainWindow(QMainWindow):
             actions.addWidget(edit)
         delete = QToolButton()
         delete.setAutoRaise(False)
-        delete.setToolTip("삭제")
+        delete.setToolTip("메모 삭제" if entry.entry_type == EntryType.MEMO else "삭제")
         delete.setText("")
-        if "delete" in self._action_icons:
-            delete.setIcon(self._action_icons["delete"])
-            delete.setIconSize(QSize(46, 20))
-        delete.setFixedSize(46, 20)
-        delete.setStyleSheet("QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; }")
+        if entry.entry_type == EntryType.MEMO:
+            delete.setIcon(QIcon(str(asset_path("memo_close.svg"))))
+            delete.setIconSize(QSize(11, 11))
+            delete.setFixedSize(20, 20)
+            delete.setStyleSheet(
+                "QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; border-radius: 4px; }"
+                "QToolButton:hover { background: rgba(0, 0, 0, 0.08); }"
+            )
+        else:
+            if "delete" in self._action_icons:
+                delete.setIcon(self._action_icons["delete"])
+                delete.setIconSize(QSize(46, 20))
+            delete.setFixedSize(46, 20)
+            delete.setStyleSheet("QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; }")
         delete.clicked.connect(lambda _checked=False, e=entry: self._delete_entry(e))
         actions.addWidget(delete)
-        meta_layout.addWidget(actions_wrap, 0, Qt.AlignRight)
+        meta_layout.addWidget(actions_wrap, 0, Qt.AlignVCenter | Qt.AlignRight)
         layout.addWidget(meta_row)
 
         if entry.description and not hide_memo_body:
@@ -3810,6 +3990,7 @@ class MainWindow(QMainWindow):
                 row_layout = QHBoxLayout(row_widget)
                 row_layout.setContentsMargins(0, 0, 0, 0)
                 row_layout.setSpacing(2)
+                row_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
                 full_name = self._attachment_display_name(attachment)
                 name_label = QLabel(self._attachment_elided_text(full_name))
                 name_label.setToolTip(full_name)
@@ -3860,6 +4041,120 @@ class MainWindow(QMainWindow):
         else:
             self._edit_entry(EntryType.SCHEDULE, None)
 
+    def _handle_group_button(self) -> None:
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #d0d5dd;
+                padding: 4px 0px;
+                border-radius: 6px;
+            }
+            QMenu::item {
+                padding: 6px 20px 6px 16px;
+                font-size: 12px;
+                color: #222222;
+            }
+            QMenu::item:selected {
+                background-color: #f1f5f9;
+                color: #0f172a;
+            }
+        """)
+        new_act = menu.addAction("➕ 새 플로팅 그룹 생성...")
+        new_act.triggered.connect(lambda: self._create_new_memo_group())
+
+        groups = self.repository.list_memo_groups()
+        if groups:
+            menu.addSeparator()
+            for grp in groups:
+                gid = grp.get("id", "")
+                gtitle = grp.get("title", "그룹")
+                is_open = gid in self._active_group_dialogs and self._active_group_dialogs[gid].isVisible()
+                icon = "📂" if is_open else "📁"
+                status_icon = "🟢" if is_open else "⚪"
+                act = menu.addAction(f"{icon} {gtitle}\t{status_icon}")
+                act.setToolTip("바탕화면에 열려 있음 (클릭 시 활성화)" if is_open else "바탕화면에 열기")
+                act.triggered.connect(lambda _=False, g=gid: self._open_memo_group(g))
+
+        menu.exec(self.info_group_button.mapToGlobal(QPoint(0, self.info_group_button.height())))
+
+    def _show_memo_card_context_menu(self, entry: CalendarEntry, global_pos: QPoint) -> None:
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #d0d5dd;
+                padding: 4px 0px;
+                border-radius: 6px;
+            }
+            QMenu::item {
+                padding: 6px 20px 6px 16px;
+                font-size: 12px;
+                color: #222222;
+            }
+            QMenu::item:selected {
+                background-color: #f1f5f9;
+                color: #0f172a;
+            }
+        """)
+
+        open_act = menu.addAction("📝 메모 열기")
+        open_act.triggered.connect(lambda _=False, e=entry: self._open_entry_view(e))
+
+        is_open = entry.entry_id is not None and int(entry.entry_id) in self._active_memo_dialogs
+        if is_open:
+            close_act = menu.addAction("❌ 메모 닫기")
+            close_act.triggered.connect(lambda _=False, e=entry: self._close_memo_entry(e))
+
+        menu.addSeparator()
+        open_all_act = menu.addAction("👁️ 모든 메모 열기")
+        open_all_act.triggered.connect(self._open_all_memos)
+        close_all_act = menu.addAction("📁 모든 메모 닫기")
+        close_all_act.triggered.connect(self._close_all_memos)
+
+        menu.addSeparator()
+        edit_act = menu.addAction("✏️ 메모 수정")
+        edit_act.triggered.connect(lambda _=False, e=entry: self._edit_entry(EntryType.MEMO, e))
+        del_act = menu.addAction("🗑️ 메모 삭제")
+        del_act.triggered.connect(lambda _=False, e=entry: self._delete_entry(e))
+
+        menu.exec(global_pos)
+
+    def _close_memo_entry(self, entry: CalendarEntry) -> None:
+        if entry.entry_id is None:
+            return
+        dlg = self._active_memo_dialogs.get(int(entry.entry_id))
+        if dlg is not None:
+            dlg.close()
+
+    def _open_all_memos(self) -> None:
+        memos = self._ordered_memos(self.repository.list_memos())
+        if not memos:
+            return
+        self._batch_updating_memos = True
+        try:
+            for memo in memos:
+                self._edit_entry(EntryType.MEMO, memo)
+        finally:
+            self._batch_updating_memos = False
+        self._sync_open_memo_ids(persist=True)
+        self._refresh_all_group_dialogs(status_only=True)
+        self.refresh()
+
+    def _close_all_memos(self) -> None:
+        if not self._active_memo_dialogs:
+            return
+        self._batch_updating_memos = True
+        try:
+            for dlg in list(self._active_memo_dialogs.values()):
+                if dlg is not None:
+                    dlg.close()
+        finally:
+            self._batch_updating_memos = False
+        self._sync_open_memo_ids(persist=True)
+        self._refresh_all_group_dialogs(status_only=True)
+        self.refresh()
+
     @staticmethod
     def _entry_chip_text(entry: CalendarEntry) -> str:
         icon = MainWindow._entry_icon(entry)
@@ -3896,8 +4191,81 @@ class MainWindow(QMainWindow):
         return entry.status == "완료"
 
     def _set_sidebar_mode(self, mode: str) -> None:
+        if not self._sidebar_visible:
+            self._apply_sidebar_visibility(True, save=True)
         self.sidebar_mode = mode
         self.refresh()
+
+    def _toggle_sidebar(self) -> None:
+        self._apply_sidebar_visibility(not self._sidebar_visible, save=True)
+
+    def _apply_sidebar_visibility(self, visible: bool, save: bool = True) -> None:
+        self._sidebar_visible = visible
+        if hasattr(self, "sidebar_panel"):
+            self.sidebar_panel.setVisible(visible)
+        if hasattr(self, "sidebar_expand_btn"):
+            self.sidebar_expand_btn.setVisible(not visible)
+        if hasattr(self, "topbar_sidebar_btn"):
+            self.topbar_sidebar_btn.setIcon(QIcon(str(asset_path("chevron_right.svg" if visible else "chevron_left.svg"))))
+            self.topbar_sidebar_btn.setToolTip("우측 사이드바 숨기기 (단축키: Ctrl+B)" if visible else "우측 사이드바 표시 (단축키: Ctrl+B)")
+        if hasattr(self, "sidebar_expand_edge_btn"):
+            self.sidebar_expand_edge_btn.setVisible(False)
+
+        self._update_expand_container_visibility()
+        self._apply_panel_margins()
+        if save and hasattr(self, "repository"):
+            self.repository.set_setting("sidebar_visible", "1" if visible else "0")
+            self.repository.save()
+        self._schedule_calendar_rerender()
+        self._sync_sticker_overlay()
+
+    def _toggle_topbar(self) -> None:
+        self._apply_topbar_visibility(not self._topbar_visible, save=True)
+
+    def _apply_panel_margins(self) -> None:
+        if not hasattr(self, "outer_layout"):
+            return
+        topbar_visible = getattr(self, "_topbar_visible", True)
+        sidebar_visible = getattr(self, "_sidebar_visible", True)
+        right_pad = 12
+        if topbar_visible:
+            self.outer_layout.setContentsMargins(12, 12, right_pad, 12)
+            self.outer_layout.setSpacing(6 if not sidebar_visible else 10)
+            if hasattr(self, "body_layout"):
+                self.body_layout.setContentsMargins(0, 0, 0, 0)
+        else:
+            self.outer_layout.setContentsMargins(12, 0, right_pad, 12)
+            self.outer_layout.setSpacing(2)
+            if hasattr(self, "body_layout"):
+                self.body_layout.setContentsMargins(0, 0, 0, 0)
+        if hasattr(self, "body_layout"):
+            self.body_layout.setSpacing(10 if sidebar_visible else 0)
+
+    def _apply_topbar_visibility(self, visible: bool, save: bool = True) -> None:
+        self._topbar_visible = visible
+        if hasattr(self, "topbar"):
+            self.topbar.setVisible(visible)
+        if hasattr(self, "topbar_expand_btn"):
+            self.topbar_expand_btn.setVisible(not visible)
+
+        self._update_expand_container_visibility()
+        self._apply_panel_margins()
+        if save and hasattr(self, "repository"):
+            self.repository.set_setting("topbar_visible", "1" if visible else "0")
+            self.repository.save()
+        self._schedule_calendar_rerender()
+        self._sync_sticker_overlay()
+
+    def _update_expand_container_visibility(self) -> None:
+        if not hasattr(self, "topbar_expand_container"):
+            return
+        topbar_hidden = not getattr(self, "_topbar_visible", True)
+        sidebar_hidden = not getattr(self, "_sidebar_visible", True)
+        if hasattr(self, "topbar_expand_btn"):
+            self.topbar_expand_btn.setVisible(topbar_hidden)
+        if hasattr(self, "sidebar_expand_btn"):
+            self.sidebar_expand_btn.setVisible(sidebar_hidden)
+        self.topbar_expand_container.setVisible(topbar_hidden or sidebar_hidden)
 
     def _run_search(self) -> None:
         query = self.search_input.text().strip()
@@ -3907,6 +4275,8 @@ class MainWindow(QMainWindow):
             self.sidebar_mode = "day"
             self.refresh()
             return
+        if not self._sidebar_visible:
+            self._apply_sidebar_visibility(True, save=True)
         self.search_query = query
         self.search_results = self.repository.search_entries(query)
         self.sidebar_mode = "search"
@@ -4127,11 +4497,115 @@ class MainWindow(QMainWindow):
             if not file_path:
                 return
             try:
-                backup_to_zip(self.repository.db_path, self.repository.attachments_root, Path(file_path))
+                self._flush_current_settings_to_repository()
+                backup_to_zip(
+                    self.repository.db_path,
+                    self.repository.attachments_root,
+                    Path(file_path),
+                    settings_dict=self.repository.get_all_settings(),
+                )
                 QMessageBox.information(self, "데이터 내보내기", f"백업 파일이 성공적으로 저장되었습니다.\n{file_path}")
             except Exception as exc:
                 logger.exception("zip backup failed")
                 QMessageBox.critical(self, "데이터 내보내기 실패", f"백업 중 오류가 발생했습니다.\n{exc}")
+
+    def _flush_current_settings_to_repository(self) -> None:
+        """Flushes all current in-memory UI preferences to the repository and saves."""
+        try:
+            self.repository.set_setting("theme", getattr(self, "theme_name", "light"))
+            self.repository.set_setting("sidebar_visible", "1" if getattr(self, "_sidebar_visible", True) else "0")
+            self.repository.set_setting("topbar_visible", "1" if getattr(self, "_topbar_visible", True) else "0")
+            self.repository.set_setting("hide_completed_on_calendar", "1" if getattr(self, "hide_completed_on_calendar", True) else "0")
+            self.repository.set_setting("show_lunar_calendar", "1" if getattr(self, "show_lunar_calendar", True) else "0")
+            self.repository.set_setting("lunar_display_frequency", getattr(self, "lunar_display_frequency", "all"))
+            self.repository.set_setting("show_solar_terms", "1" if getattr(self, "show_solar_terms", True) else "0")
+            self.repository.set_setting("sticker_animation_enabled", "1" if getattr(self, "_sticker_animation_enabled", True) else "0")
+            self.repository.set_setting("memo_title_only", "1" if getattr(self, "memo_title_only", False) else "0")
+            self._remember_window_state()
+            self._persist_window_state()
+            if getattr(self, "_memos_restored", False):
+                self._sync_open_memo_ids(persist=True)
+                self._sync_open_group_ids(persist=True)
+            self.repository.save()
+        except Exception:
+            pass
+
+    def _reload_and_apply_all_settings(self, companion_settings: dict[str, str] | None = None) -> None:
+        """
+        Reloads all user preferences from the repository and companion settings JSON,
+        and applies them to the UI immediately. Ensures full backward compatibility.
+        """
+        if companion_settings and isinstance(companion_settings, dict):
+            for k, v in companion_settings.items():
+                if not self.repository.get_setting(k):
+                    self.repository.set_setting(k, str(v))
+
+        # 1. Theme
+        stored_theme = self.repository.get_setting("theme", "light")
+        if stored_theme in THEMES:
+            self.theme_name = stored_theme
+            self.palette = THEMES[self.theme_name]
+
+        # 2. Lunar & Display preferences
+        self.hide_completed_on_calendar = self.repository.get_setting("hide_completed_on_calendar", "1") == "1"
+        self.show_lunar_calendar = self.repository.get_setting("show_lunar_calendar", "1") == "1"
+        self.lunar_display_frequency = self.repository.get_setting("lunar_display_frequency", "all")
+        self.show_solar_terms = self.repository.get_setting("show_solar_terms", "1") == "1"
+        self.memo_title_only = self.repository.get_setting("memo_title_only", "0") == "1"
+        self._sticker_animation_enabled = self.repository.get_setting("sticker_animation_enabled", "1") == "1"
+
+        # 3. Sidebar & Topbar visibility
+        self._sidebar_visible = self.repository.get_setting("sidebar_visible", "1") == "1"
+        self._topbar_visible = self.repository.get_setting("topbar_visible", "1") == "1"
+        self._apply_sidebar_visibility(self._sidebar_visible, save=False)
+        self._apply_topbar_visibility(self._topbar_visible, save=False)
+
+        # 4. Stickers
+        self._sticker_store = self._load_sticker_store()
+        self._sticker_favorites = self._load_sticker_pref_list("sticker_favorites_v1")
+        self._sticker_recent = self._load_sticker_pref_list("sticker_recent_v1")
+
+        # 5. Global Hotkeys
+        try:
+            if self.hotkey_manager is not None:
+                self.hotkey_manager.stop()
+                self.hotkey_manager = None
+            if self.memo_hotkey_manager is not None:
+                self.memo_hotkey_manager.stop()
+                self.memo_hotkey_manager = None
+            self._setup_global_hotkey()
+        except Exception:
+            pass
+
+        # 6. Window State
+        try:
+            self._load_window_state()
+            self._apply_initial_window_state()
+        except Exception:
+            pass
+
+        # 7. Close currently open memo & group dialogs and reopen based on restored DB
+        for dlg in list(self._active_memo_dialogs.values()):
+            try:
+                dlg.close()
+            except Exception:
+                pass
+        self._active_memo_dialogs.clear()
+
+        for dlg in list(getattr(self, "_active_group_dialogs", {}).values()):
+            try:
+                dlg.close()
+            except Exception:
+                pass
+        getattr(self, "_active_group_dialogs", {}).clear()
+
+        try:
+            self._restore_open_memos()
+        except Exception:
+            pass
+
+        # 8. Refresh UI
+        self.refresh()
 
     def _import_data_flow(self) -> None:
         dialog = BackupRestoreFormatDialog(self, mode="import")
@@ -4162,17 +4636,17 @@ class MainWindow(QMainWindow):
                 return
 
             try:
-                restore_from_zip(Path(file_path), self.repository.db_path, self.repository.attachments_root)
+                extracted_settings = restore_from_zip(Path(file_path), self.repository.db_path, self.repository.attachments_root)
                 self.repository.reload_database()
+                self._reload_and_apply_all_settings(companion_settings=extracted_settings)
                 self.search_query = ""
                 self.search_results = []
                 self.sidebar_mode = "day"
                 self.refresh()
-                QMessageBox.information(self, "데이터 가져오기", "백업 데이터가 성공적으로 복원되었습니다.")
+                QMessageBox.information(self, "데이터 가져오기", "백업 데이터 및 환경설정이 성공적으로 복원되었습니다.")
             except Exception as exc:
                 logger.exception("zip restore failed")
                 QMessageBox.critical(self, "데이터 가져오기 실패", f"복원 중 오류가 발생했습니다.\n{exc}")
-
 
     def _restore_auto_backup_flow(self) -> None:
         backup_dir = self.repository.db_path.parent / "backups"
@@ -4233,8 +4707,8 @@ class MainWindow(QMainWindow):
                 f"선택한 백업 파일에서 복원을 진행하시겠습니까?\n\n"
                 f"- 복원 대상: {db_path.name}\n"
                 f"- 일정/메모 건수: {count}건\n\n"
-                f"※ 주의: 현재 입력되어 있는 모든 데이터가 덮어씌워집니다.\n"
-                f"(기존 데이터는 복원 직전 백업본으로 저장됩니다.)",
+                f"※ 주의: 현재 입력되어 있는 모든 데이터 및 환경설정이 복원본으로 적용됩니다.\n"
+                f"(기존 데이터는 복원 직전 백업본으로 안전하게 보관됩니다.)",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -4251,14 +4725,24 @@ class MainWindow(QMainWindow):
             shutil.copy2(db_path, current_db)
             shutil.copy2(db_path, current_db.with_suffix(current_db.suffix + ".bak"))
 
-            # Reload repository
+            # Check companion settings file
+            companion_settings = None
+            companion_settings_path = db_path.with_name(db_path.name.replace(".db.enc", ".settings.json"))
+            if companion_settings_path.exists():
+                try:
+                    companion_settings = json.loads(companion_settings_path.read_text(encoding="utf-8"))
+                except Exception:
+                    companion_settings = None
+
+            # Reload repository and apply all settings
             self.repository.reload_database()
+            self._reload_and_apply_all_settings(companion_settings=companion_settings)
             self.search_query = ""
             self.search_results = []
             self.sidebar_mode = "day"
             self.refresh()
 
-            QMessageBox.information(self, "복원 완료", f"성공적으로 데이터를 복구했습니다!\n일정/메모 {count}건을 로드했습니다.")
+            QMessageBox.information(self, "복원 완료", f"성공적으로 데이터와 환경설정을 복원했습니다!\n일정/메모 {count}건을 로드했습니다.")
 
         except Exception as exc:
             logger.exception("auto backup restore failed")
@@ -4339,6 +4823,9 @@ class MainWindow(QMainWindow):
         self._save_memo_order_ids(ids, persist=True)
         if self.sidebar_mode == "memo":
             self._render_sidebar()
+        for grp_dlg in getattr(self, "_active_group_dialogs", {}).values():
+            if grp_dlg and grp_dlg.isVisible():
+                grp_dlg.refresh_memos()
 
     def _select_day_by_date(self, selected_day: date) -> None:
         if self.selected_day == selected_day and self.sidebar_mode == "day":
@@ -4486,6 +4973,14 @@ class MainWindow(QMainWindow):
             initial_tab=initial_tab,
             show_lunar_calendar=self.show_lunar_calendar,
             show_solar_terms=self.show_solar_terms,
+            lunar_display_frequency=self.lunar_display_frequency,
+            memo_default_color=self.repository.get_setting("memo_default_color", "yellow"),
+            memo_show_attachment_bar=self.repository.get_setting("memo_show_attachment_bar", "1") != "0",
+            memo_default_floating=self.repository.get_setting("memo_default_floating", "0") == "1",
+            memo_default_opacity=int(self.repository.get_setting("memo_default_opacity", "100")),
+            memo_default_size=self.repository.get_setting("memo_default_size", "380,360"),
+            memo_default_font_size=int(self.repository.get_setting("memo_default_font_size", "11")),
+            memo_title_only=getattr(self, "memo_title_only", False),
         )
         if dialog.exec() and dialog.result is not None:
             action = str(dialog.result.get("action", "apply"))
@@ -4524,9 +5019,24 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("hide_completed_on_calendar", "1" if self.hide_completed_on_calendar else "0")
             self.show_lunar_calendar = bool(dialog.result.get("show_lunar_calendar", True))
             self.repository.set_setting("show_lunar_calendar", "1" if self.show_lunar_calendar else "0")
+            self.lunar_display_frequency = str(dialog.result.get("lunar_display_frequency", "all"))
+            self.repository.set_setting("lunar_display_frequency", self.lunar_display_frequency)
             self.show_solar_terms = bool(dialog.result.get("show_solar_terms", True))
             self.repository.set_setting("show_solar_terms", "1" if self.show_solar_terms else "0")
             
+            # Memo Settings
+            self.repository.set_setting("memo_default_color", str(dialog.result.get("memo_default_color", "yellow")))
+            self.repository.set_setting("memo_show_attachment_bar", "1" if dialog.result.get("memo_show_attachment_bar", True) else "0")
+            self.repository.set_setting("memo_default_floating", "1" if dialog.result.get("memo_default_floating", False) else "0")
+            self.repository.set_setting("memo_default_opacity", str(dialog.result.get("memo_default_opacity", 100)))
+            self.repository.set_setting("memo_default_size", str(dialog.result.get("memo_default_size", "380,360")))
+            self.repository.set_setting("memo_default_font_size", str(dialog.result.get("memo_default_font_size", 11)))
+            new_title_only = bool(dialog.result.get("memo_title_only", False))
+            if getattr(self, "memo_title_only", False) != new_title_only:
+                self.memo_title_only = new_title_only
+                if hasattr(self, "_render_sidebar") and getattr(self, "sidebar_mode", "") == "memo":
+                    self._render_sidebar()
+
             auto_bk_enabled = bool(dialog.result.get("auto_backup_enabled", True))
             self.repository.set_setting("auto_backup_enabled", "1" if auto_bk_enabled else "0")
             self.repository.set_setting("auto_backup_interval_days", str(dialog.result.get("auto_backup_interval_days", 1)))
@@ -4575,8 +5085,11 @@ class MainWindow(QMainWindow):
                 self._active_memo_dialogs[key] = dialog
                 dialog.show()
                 dialog.raise_()
-                dialog.activateWindow()
-                self._sync_open_memo_ids(persist=True)
+                if not restore_mode:
+                    dialog.activateWindow()
+                if not getattr(self, "_batch_updating_memos", False):
+                    self._sync_open_memo_ids(persist=True)
+                    self._refresh_all_group_dialogs(status_only=True)
                 return
             logger.info(f"[_edit_entry] Creating modal EntryDialog for schedule/task: {edit_entry.entry_id if edit_entry else 'new'}")
             dialog = EntryDialog(self, entry_type, self.selected_day, edit_entry)
@@ -4642,32 +5155,165 @@ class MainWindow(QMainWindow):
         self.repository.save()
         self.refresh()
 
-    def _sync_open_memo_ids(self, persist: bool = False) -> None:
+    def _sync_open_memo_ids(self, persist: bool = True) -> None:
         open_ids: list[str] = []
         for k, dlg in list(self._active_memo_dialogs.items()):
             if dlg is not None and dlg.entry and dlg.entry.entry_id is not None:
                 open_ids.append(str(dlg.entry.entry_id))
-                curr_geo = dlg.geometry()
-                h_val = getattr(dlg, "_expanded_height", curr_geo.height()) if getattr(dlg, "_is_collapsed", False) else curr_geo.height()
-                self.repository.set_setting(f"memo_geo_{dlg.entry.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{curr_geo.width()},{h_val}")
-                self.repository.set_setting(f"memo_collapsed_{dlg.entry.entry_id}", "1" if getattr(dlg, "_is_collapsed", False) else "0")
+                if hasattr(dlg, "_save_memo_geometry"):
+                    dlg._save_memo_geometry()
+                else:
+                    curr_geo = dlg.geometry()
+                    h_val = getattr(dlg, "_expanded_height", curr_geo.height()) if getattr(dlg, "_is_collapsed", False) else curr_geo.height()
+                    self.repository.set_setting(f"memo_geo_{dlg.entry.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{curr_geo.width()},{h_val}")
+                    self.repository.set_setting(f"memo_collapsed_{dlg.entry.entry_id}", "1" if getattr(dlg, "_is_collapsed", False) else "0")
         logger.info(f"[_sync_open_memo_ids] open_ids={open_ids}, persist={persist}")
         self.repository.set_setting("open_memo_ids", ",".join(open_ids))
         if persist:
             self.repository.save()
 
     def _restore_open_memos(self) -> None:
+        self._memos_restored = True
         raw = self.repository.get_setting("open_memo_ids", "")
+        if raw:
+            try:
+                ids = [int(x) for x in raw.split(",") if x.strip()]
+            except Exception:
+                ids = []
+            for memo_id in ids:
+                entry = self.repository.get_entry(memo_id)
+                if entry and entry.entry_type == EntryType.MEMO:
+                    self._edit_entry(EntryType.MEMO, entry, restore_mode=True)
+        self._restore_open_groups()
+        self._raise_memos_above_calendar()
+        QTimer.singleShot(100, self._raise_memos_above_calendar)
+
+    def _raise_memos_above_calendar(self) -> None:
+        memos = list(getattr(self, "_active_memo_dialogs", {}).values())
+        groups = list(getattr(self, "_active_group_dialogs", {}).values())
+        all_dlgs = memos + groups
+        if not all_dlgs:
+            return
+        user32 = None
+        try:
+            user32 = ctypes.windll.user32
+        except Exception:
+            pass
+
+        for dlg in all_dlgs:
+            if dlg and dlg.isVisible():
+                dlg.raise_()
+                if user32 and hasattr(dlg, "winId"):
+                    try:
+                        hwnd = int(dlg.winId())
+                        is_floating = getattr(dlg, "_is_floating", False)
+                        target_z = ctypes.c_void_p(-1) if is_floating else ctypes.c_void_p(0)
+                        SWP_NOMOVE = 0x0002
+                        SWP_NOSIZE = 0x0001
+                        SWP_NOACTIVATE = 0x0010
+                        user32.SetWindowPos(
+                            ctypes.c_void_p(hwnd),
+                            target_z,
+                            0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+                        )
+                    except Exception:
+                        pass
+
+    def _open_memo_group(self, group_id: str) -> QDialog | None:
+        from taskcalendar.qt_dialogs import FloatingGroupDialog
+        if not hasattr(self, "_active_group_dialogs"):
+            self._active_group_dialogs = {}
+
+        if group_id in self._active_group_dialogs:
+            dlg = self._active_group_dialogs[group_id]
+            dlg.show()
+            dlg.raise_()
+            dlg.activateWindow()
+            return dlg
+
+        grp = self.repository.get_memo_group(group_id)
+        if not grp:
+            grp = {"id": group_id, "title": "새 그룹", "color": "yellow"}
+            self.repository.upsert_memo_group(grp)
+
+        dlg = FloatingGroupDialog(self, grp)
+        self._active_group_dialogs[group_id] = dlg
+        dlg.show()
+        dlg.raise_()
+        self._sync_open_group_ids(persist=True)
+        return dlg
+
+    def _create_new_memo_group(self, title: str = "", assign_memo_id: int | None = None) -> QDialog | None:
+        if not title:
+            title, ok = QInputDialog.getText(self, "새 메모 그룹", "새 그룹 이름을 입력하세요:", text="새 그룹")
+            if not ok or not title.strip():
+                return None
+            title = title.strip()
+
+        grp = {"title": title, "color": "yellow"}
+        saved_grp = self.repository.upsert_memo_group(grp)
+        gid = saved_grp.get("id", "")
+
+        if assign_memo_id is not None:
+            entry = self.repository.get_entry(assign_memo_id)
+            if entry:
+                entry.memo_group = gid
+                self.repository.upsert_entry(entry)
+                self.repository.save()
+                if assign_memo_id in self._active_memo_dialogs:
+                    memo_dlg = self._active_memo_dialogs[assign_memo_id]
+                    if hasattr(memo_dlg, "entry"):
+                        memo_dlg.entry.memo_group = gid
+
+        dlg = self._open_memo_group(gid)
+        self._refresh_all_group_dialogs()
+        return dlg
+
+    def _refresh_all_group_dialogs(self, status_only: bool = False) -> None:
+        if getattr(self, "_batch_updating_memos", False):
+            return
+        if not hasattr(self, "_active_group_dialogs"):
+            return
+        for dlg in list(self._active_group_dialogs.values()):
+            if dlg and dlg.isVisible():
+                if status_only and hasattr(dlg, "update_open_statuses"):
+                    dlg.update_open_statuses()
+                else:
+                    dlg.refresh_memos()
+
+    def _update_group_dialog_memos(self, entry) -> None:
+        if entry is None or getattr(entry, "entry_id", None) is None:
+            return
+        if getattr(self, "_batch_updating_memos", False):
+            return
+        if not hasattr(self, "_active_group_dialogs"):
+            return
+        for dlg in list(self._active_group_dialogs.values()):
+            if dlg and dlg.isVisible() and hasattr(dlg, "update_memo_content"):
+                dlg.update_memo_content(entry)
+
+    def _sync_open_group_ids(self, persist: bool = True) -> None:
+        if not hasattr(self, "_active_group_dialogs"):
+            return
+        open_ids = []
+        for gid, dlg in list(self._active_group_dialogs.items()):
+            if dlg and dlg.isVisible():
+                open_ids.append(gid)
+                if hasattr(dlg, "_save_group_state"):
+                    dlg._save_group_state()
+        self.repository.set_setting("open_group_ids", ",".join(open_ids))
+        if persist:
+            self.repository.save()
+
+    def _restore_open_groups(self) -> None:
+        raw = self.repository.get_setting("open_group_ids", "")
         if not raw:
             return
-        try:
-            ids = [int(x) for x in raw.split(",") if x.strip()]
-        except Exception:
-            ids = []
-        for memo_id in ids:
-            entry = self.repository.get_entry(memo_id)
-            if entry and entry.entry_type == EntryType.MEMO:
-                self._edit_entry(EntryType.MEMO, entry, restore_mode=True)
+        gids = [x.strip() for x in raw.split(",") if x.strip()]
+        for gid in gids:
+            if self.repository.get_memo_group(gid):
+                self._open_memo_group(gid)
 
     def _toggle_complete(self, entry: CalendarEntry) -> None:
         target_id = entry.source_entry_id or entry.entry_id
@@ -4744,6 +5390,9 @@ class MainWindow(QMainWindow):
         if not self._did_onboarding_check:
             self._did_onboarding_check = True
             QTimer.singleShot(120, self._maybe_show_onboarding_tip)
+        if not self._did_memo_restore:
+            self._did_memo_restore = True
+            QTimer.singleShot(250, self._restore_open_memos)
         if self._did_initial_sticker_sync:
             return
         self._did_initial_sticker_sync = True
@@ -4758,39 +5407,25 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(80, self._stabilize_first_layout)
 
     def _maybe_show_onboarding_tip(self) -> None:
-        if self.repository.get_setting("onboarding_seen_v1", "0") == "1":
+        self.show_feature_intro_dialog(force=False)
+
+    def show_feature_intro_dialog(self, force: bool = False) -> None:
+        is_dismissed = self.repository.get_setting("feature_intro_dismissed_v2", "0") == "1"
+        if is_dismissed and not force:
             return
 
-        self.repository.set_setting("onboarding_seen_v1", "1")
-        self.repository.save()
+        dialog = WelcomeFeatureIntroDialog(self, is_dismissed=is_dismissed)
+        def _on_finished(result: int) -> None:
+            if dialog.is_dismissed_checked():
+                self.repository.set_setting("feature_intro_dismissed_v2", "1")
+                self.repository.save()
+            else:
+                self.repository.set_setting("feature_intro_dismissed_v2", "0")
+                self.repository.save()
+            if dialog.open_settings_requested:
+                QTimer.singleShot(100, self._open_settings)
 
-        dialog = QDialog(self)
-        dialog.setWindowTitle("처음 사용 안내")
-        dialog.setModal(False)
-        dialog.setWindowModality(Qt.NonModal)
-        dialog.resize(360, 180)
-
-        root = QVBoxLayout(dialog)
-        root.setContentsMargins(14, 12, 14, 12)
-        root.setSpacing(8)
-
-        title = QLabel("[캘린더 프로그램 안내]")
-        title.setStyleSheet("font-weight: 700;")
-        root.addWidget(title)
-
-        line1 = QLabel("1) 기본 단축키는 F3입니다.")
-        line2 = QLabel("2) 오른쪽 위 '꾸미기'에서 스티커를 추가하고 배치할 수 있습니다.")
-        for label in (line1, line2):
-            label.setWordWrap(True)
-            root.addWidget(label)
-
-        row = QHBoxLayout()
-        row.addStretch(1)
-        ok = QPushButton("확인")
-        ok.clicked.connect(dialog.close)
-        row.addWidget(ok)
-        root.addLayout(row)
-
+        dialog.finished.connect(_on_finished)
         dialog.show()
 
     def _stabilize_first_layout(self) -> None:
@@ -4810,26 +5445,39 @@ class MainWindow(QMainWindow):
         if getattr(self, "_already_handled_quit", False):
             return
         self._already_handled_quit = True
+        self._is_app_quitting = True
         try:
-            self._is_app_quitting = True
             self._remember_window_state()
             self._persist_window_state()
             self._sync_open_memo_ids(persist=True)
+            self._sync_open_group_ids(persist=True)
+            self.repository.set_setting("sidebar_visible", "1" if getattr(self, "_sidebar_visible", True) else "0")
+            self.repository.set_setting("topbar_visible", "1" if getattr(self, "_topbar_visible", True) else "0")
             for k, dlg in list(self._active_memo_dialogs.items()):
                 try:
                     dlg.close()
                 except Exception:
                     pass
-            self._active_memo_dialogs.clear()
+            for k, dlg in list(getattr(self, "_active_group_dialogs", {}).items()):
+                try:
+                    dlg.close()
+                except Exception:
+                    pass
             self.repository.save()
         except Exception:
             pass
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if getattr(self, "_already_handled_quit", False) or getattr(self, "_is_app_quitting", False):
+            super().closeEvent(event)
+            return
         if self.tray_icon is not None and not self._force_exit:
             self._remember_window_state()
             self._persist_window_state()
             self._sync_open_memo_ids(persist=True)
+            self._sync_open_group_ids(persist=True)
+            self.repository.set_setting("sidebar_visible", "1" if getattr(self, "_sidebar_visible", True) else "0")
+            self.repository.set_setting("topbar_visible", "1" if getattr(self, "_topbar_visible", True) else "0")
             self.repository.save()
             self.hide()
             event.ignore()
@@ -4886,12 +5534,22 @@ class MainWindow(QMainWindow):
             keep_count = int(self.repository.get_setting("auto_backup_keep_count", "5"))
             last_backup = self.repository.get_setting("last_auto_backup_time", "")
 
+            # Ensure all current in-memory UI preferences are flushed and saved before backup
+            self._flush_current_settings_to_repository()
+
             db_path = self.repository.db_path
             backup_dir = db_path.parent / "backups"
 
             from taskcalendar.backup_io import run_auto_backup_db
 
-            new_stamp = run_auto_backup_db(db_path, backup_dir, interval_days, keep_count, last_backup)
+            new_stamp = run_auto_backup_db(
+                db_path,
+                backup_dir,
+                interval_days,
+                keep_count,
+                last_backup,
+                settings_dict=self.repository.get_all_settings(),
+            )
             if new_stamp:
                 self.repository.set_setting("last_auto_backup_time", new_stamp)
                 self.repository.save()

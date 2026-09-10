@@ -50,7 +50,9 @@ def show_settings_dialog(
     auto_backup_enabled: bool = True,
     auto_backup_interval_days: int = 1,
     auto_backup_keep_count: int = 5,
-    db_path: Path | None = None,
+    show_lunar_calendar: bool = True,
+    show_solar_terms: bool = True,
+    lunar_display_frequency: str = "all",
 ) -> dict[str, object] | None:
     from pathlib import Path
     app = ensure_qt_application()
@@ -66,6 +68,9 @@ def show_settings_dialog(
         auto_backup_interval_days,
         auto_backup_keep_count,
         db_p,
+        show_lunar_calendar=show_lunar_calendar,
+        show_solar_terms=show_solar_terms,
+        lunar_display_frequency=lunar_display_frequency,
     )
     _center_dialog_on_screen(dialog)
     accepted = dialog.exec()

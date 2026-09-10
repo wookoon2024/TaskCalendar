@@ -10,16 +10,18 @@ from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
-from PySide6.QtCore import QDate, QTime, Qt, QTimer, QRect, QPoint, QSize, QUrl, QEvent
-from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QTextCursor, QPainter, QPen, QColor, QDesktopServices, QCursor, QPixmap
+from PySide6.QtCore import QDate, QTime, Qt, QTimer, QRect, QPoint, QSize, QUrl, QEvent, Signal, QMimeData
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QTextCursor, QPainter, QPen, QColor, QDesktopServices, QCursor, QPixmap, QFont, QTextCharFormat, QDrag
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDateEdit,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFontComboBox,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -43,6 +45,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QScrollArea,
+    QStyle,
+    QStyleOption,
+    QStylePainter,
 )
 
 from taskcalendar.rich_text_edit import RichTextEdit
@@ -600,6 +605,10 @@ class EditableTitleLineEdit(QLineEdit):
                 dlg._show_memo_context_menu(event.globalPosition().toPoint())
                 event.accept()
                 return
+            elif dlg and hasattr(dlg, "_show_context_menu"):
+                dlg._show_context_menu(event.globalPosition().toPoint())
+                event.accept()
+                return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
@@ -610,6 +619,48 @@ class EditableTitleLineEdit(QLineEdit):
                 event.accept()
                 return
         super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        dlg = self.window()
+        if dlg and hasattr(dlg, "_end_window_drag"):
+            dlg._end_window_drag()
+        super().mouseReleaseEvent(event)
+
+
+class ElidedLabel(QLabel):
+    def __init__(self, text: str = "", parent=None, is_elastic: bool = False) -> None:
+        super().__init__(parent)
+        self._full_text = ""
+        self._is_elastic = is_elastic
+        self.setWordWrap(False)
+        self.set_full_text(text)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0 if self._is_elastic else 20, super().minimumSizeHint().height())
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        if self._is_elastic:
+            return QSize(0, super().sizeHint().height())
+        fm = self.fontMetrics()
+        return QSize(fm.horizontalAdvance(self._full_text), super().sizeHint().height())
+
+    def set_full_text(self, text: str) -> None:
+        self._full_text = str(text or "")
+        self.setToolTip(self._full_text)
+        self._apply_elide()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self) -> None:
+        width = max(0, self.contentsRect().width())
+        if width <= 8:
+            elided = ""
+        else:
+            elided = self.fontMetrics().elidedText(self._full_text, Qt.ElideRight, width)
+        if elided != self.text():
+            QLabel.setText(self, elided)
 
 
 class IconPickerPopup(QDialog):
@@ -684,7 +735,9 @@ class IconPickerPopup(QDialog):
         none_btn.clicked.connect(self._select_none)
         header_layout.addWidget(none_btn)
 
-        close_btn = QPushButton("✕")
+        close_btn = QPushButton()
+        close_btn.setIcon(QIcon(str(asset_path("memo_close.svg"))))
+        close_btn.setIconSize(QSize(11, 11))
         close_btn.setFixedSize(22, 22)
         close_btn.setCursor(Qt.PointingHandCursor)
         close_btn.setToolTip("닫기 (Esc)")
@@ -952,17 +1005,36 @@ class EntryDialog(QDialog):
         root.setSpacing(12)
 
         if self.entry_type == EntryType.MEMO:
-            self._current_memo_theme = entry.bg_color if (entry and entry.bg_color in MEMO_THEMES) else "yellow"
-            self._is_floating = (entry and entry.icon_type == "floating") if entry else False
+            parent = getattr(self, "_owner_window", None) or self.parent()
+            repo = getattr(parent, "repository", None) if parent else None
+
+            # 1. Theme Color: if existing entry has bg_color in MEMO_THEMES, use it. Otherwise use default setting.
+            if entry and entry.bg_color in MEMO_THEMES:
+                self._current_memo_theme = entry.bg_color
+            else:
+                def_color_setting = repo.get_setting("memo_default_color", "yellow") if repo else "yellow"
+                if def_color_setting == "random":
+                    import random
+                    self._current_memo_theme = random.choice(["yellow", "green", "pink", "purple", "blue"])
+                elif def_color_setting in MEMO_THEMES:
+                    self._current_memo_theme = def_color_setting
+                else:
+                    self._current_memo_theme = "yellow"
+
+            # 2. Pin / Floating: if existing entry, check icon_type. If new memo, use default setting.
+            if entry and entry.entry_id:
+                self._is_floating = (entry.icon_type == "floating")
+            else:
+                self._is_floating = (repo.get_setting("memo_default_floating", "0") == "1") if repo else False
+
             self.setMinimumWidth(180)
-            self.setMinimumHeight(34)
+            self.setMinimumHeight(36)
             
             # Load remembered geometry, collapse state, and opacity
             has_saved_geo = False
             if entry and entry.entry_id:
-                parent = getattr(self, "_owner_window", None)
-                if parent and hasattr(parent, "repository"):
-                    geo_str = parent.repository.get_setting(f"memo_geo_{entry.entry_id}", "")
+                if repo:
+                    geo_str = repo.get_setting(f"memo_geo_{entry.entry_id}", "")
                     if geo_str:
                         try:
                             pts = [int(p) for p in geo_str.split(",")]
@@ -972,35 +1044,52 @@ class EntryDialog(QDialog):
                                 has_saved_geo = True
                         except Exception:
                             pass
-                    collapsed_saved = parent.repository.get_setting(f"memo_collapsed_{entry.entry_id}", "0") == "1"
+                    collapsed_saved = repo.get_setting(f"memo_collapsed_{entry.entry_id}", "0") == "1"
                     self._is_collapsed = (collapsed_saved if restore_mode else False)
                     self._expanded_height = max(150, getattr(self, "_expanded_height", 360))
-                    opacity_saved = parent.repository.get_setting(f"memo_opacity_{entry.entry_id}", "100")
-                    try:
-                        self.setWindowOpacity(int(opacity_saved) / 100.0)
-                    except Exception:
-                        pass
+                    opacity_saved = repo.get_setting(f"memo_opacity_{entry.entry_id}", "")
+                    if opacity_saved:
+                        try:
+                            self.setWindowOpacity(int(opacity_saved) / 100.0)
+                        except Exception:
+                            pass
             
             if not has_saved_geo:
+                # Default opacity setting
+                def_op = int(repo.get_setting("memo_default_opacity", "100") if repo else 100)
+                try:
+                    self.setWindowOpacity(def_op / 100.0)
+                except Exception:
+                    pass
+
+                # Default size setting
+                def_size_str = repo.get_setting("memo_default_size", "380,360") if repo else "380,360"
+                try:
+                    sw_str, sh_str = def_size_str.split(",")
+                    init_w = max(180, int(sw_str))
+                    init_h = max(150, int(sh_str))
+                except Exception:
+                    init_w, init_h = 380, 360
+
                 screen = self.screen() or QApplication.primaryScreen()
                 if screen:
                     avail = screen.availableGeometry()
-                    cx = avail.x() + (avail.width() - 380) // 2
-                    cy = avail.y() + (avail.height() - 360) // 2
-                    self.setGeometry(cx, cy, 380, 360)
+                    cx = avail.x() + (avail.width() - init_w) // 2
+                    cy = avail.y() + (avail.height() - init_h) // 2
+                    self.setGeometry(cx, cy, init_w, init_h)
                 else:
-                    self.resize(380, 360)
+                    self.resize(init_w, init_h)
             else:
                 screen = self.screen() or QApplication.primaryScreen()
                 if screen:
                     avail = screen.availableGeometry()
                     geo = self.geometry()
                     nx = max(avail.left(), min(geo.x(), avail.right() - 100))
-                    ny = max(avail.top(), min(geo.y(), avail.bottom() - 34))
+                    ny = max(avail.top(), min(geo.y(), avail.bottom() - 36))
                     self.move(nx, ny)
 
             if getattr(self, "_is_collapsed", False):
-                self.setFixedHeight(34)
+                self.setFixedHeight(36)
                 
             self.setMouseTracking(True)
             root.setContentsMargins(0, 0, 0, 0)
@@ -1008,26 +1097,22 @@ class EntryDialog(QDialog):
 
             # Header bar with integrated title field
             self.header = QWidget()
-            self.header.setFixedHeight(34)
+            self.header.setFixedHeight(36)
             self.header.setMouseTracking(True)
             self.header.installEventFilter(self)
             h_layout = QHBoxLayout(self.header)
             h_layout.setContentsMargins(8, 0, 6, 0)
             h_layout.setSpacing(4)
-
-            self._pin_icon = QLabel()
-            self._pin_icon.setPixmap(QIcon(str(asset_path("memo_pin.svg"))).pixmap(18, 18))
-            self._pin_icon.setFixedSize(18, 18)
-            self._pin_icon.setStyleSheet("background: transparent; border: none;")
-            self._pin_icon.setToolTip("항상 위에 표시 중")
-            self._pin_icon.setVisible(self._is_floating)
-            h_layout.addWidget(self._pin_icon)
+            h_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
             self.title_input = EditableTitleLineEdit(entry.title if entry else "", self.header)
             self.title_input.setPlaceholderText("메모 제목")
             self._update_title_input_width()
             self.title_input.textChanged.connect(self._update_title_input_width)
             h_layout.addWidget(self.title_input)
+
+            if entry and entry.created_at:
+                self.header.setToolTip(f"등록일: {entry.created_at.strftime('%Y.%m.%d %H:%M')}")
 
             h_layout.addStretch(1)
 
@@ -1057,6 +1142,14 @@ class EntryDialog(QDialog):
             self._opacity_bar.hide()
             h_layout.addWidget(self._opacity_bar)
 
+            self._pin_btn = QPushButton()
+            self._pin_btn.setIconSize(QSize(13, 13))
+            self._pin_btn.setFixedSize(22, 22)
+            self._pin_btn.setCursor(Qt.PointingHandCursor)
+            self._pin_btn.clicked.connect(self._toggle_pin_memo)
+            self._update_pin_btn()
+            h_layout.addWidget(self._pin_btn)
+
             self._collapse_btn = QPushButton()
             self._collapse_btn.setIcon(QIcon(str(asset_path("memo_minimize.svg"))))
             self._collapse_btn.setIconSize(QSize(12, 12))
@@ -1084,18 +1177,24 @@ class EntryDialog(QDialog):
             content_layout.setContentsMargins(6, 4, 6, 6)
             content_layout.setSpacing(4)
 
+            self._setup_memo_editor_toolbar(content_layout)
+
             self.description_input = RichTextEdit()
             self.description_input.setPlaceholderText("메모 내용을 입력하세요...")
             self.description_input.setTabChangesFocus(True)
             self.description_input.document().setDocumentMargin(2)
             desc_val = entry.description if entry else ""
-            if desc_val.strip().startswith("<"):
+            if desc_val.strip().startswith("<") or "<html" in desc_val.lower() or "<p" in desc_val.lower():
                 self.description_input.setHtml(desc_val)
             else:
                 self.description_input.setPlainText(desc_val)
+            if "☐" in desc_val or "☑" in desc_val:
+                self.description_input.is_todo_mode = True
+            self.description_input.cursorPositionChanged.connect(self._sync_editor_toolbar_state)
             content_layout.addWidget(self.description_input, 1)
 
-            bottom_row = QHBoxLayout()
+            self.attachment_bar = QWidget()
+            bottom_row = QHBoxLayout(self.attachment_bar)
             bottom_row.setContentsMargins(0, 0, 0, 0)
             bottom_row.setSpacing(4)
 
@@ -1125,13 +1224,32 @@ class EntryDialog(QDialog):
             self.attachments_label.clicked.connect(self._show_attachments_menu)
             bottom_row.addWidget(self.attachments_label, 1)
 
-            content_layout.addLayout(bottom_row)
+            content_layout.addWidget(self.attachment_bar)
+
+            # Apply initial attachment bar visibility based on setting & attachments
+            show_attach_setting = (repo.get_setting("memo_show_attachment_bar", "1") != "0") if repo else True
+            if not show_attach_setting and not self.attachments:
+                self.attachment_bar.hide()
+
+            # Apply initial default font size
+            def_font_size = int(repo.get_setting("memo_default_font_size", "11") if repo else 11)
+            self._current_memo_font_size = def_font_size
+            desc_font = self.description_input.font()
+            desc_font.setPointSize(def_font_size)
+            self.description_input.setFont(desc_font)
+            if hasattr(self, "size_combo"):
+                s_idx = self.size_combo.findData(def_font_size)
+                if s_idx >= 0:
+                    self.size_combo.blockSignals(True)
+                    self.size_combo.setCurrentIndex(s_idx)
+                    self.size_combo.blockSignals(False)
+
             root.addWidget(self.content_wrap, 1)
 
             # Apply initial collapse state if remembered
             if getattr(self, "_is_collapsed", False):
                 self.content_wrap.hide()
-                self.setFixedHeight(34)
+                self.setFixedHeight(36)
                 if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
                     self._collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg"))))
                     self._collapse_btn.setToolTip("메모 펼치기")
@@ -2002,6 +2120,8 @@ class EntryDialog(QDialog):
         if filenames:
             self.attachments.extend(filenames)
             self.attachments_label.setText(self._attachments_text())
+            if hasattr(self, "attachment_bar") and not self.attachment_bar.isVisible():
+                self.attachment_bar.show()
             if self.entry_type == EntryType.MEMO:
                 self._auto_save_to_db()
 
@@ -2023,8 +2143,9 @@ class EntryDialog(QDialog):
             if not title:
                 QMessageBox.warning(self, "입력 오류", "메모 제목을 입력해 주세요.")
                 return
+            plain_content = self.description_input.toPlainText().strip()
             html_content = self.description_input.toHtml()
-            description_to_save = html_content if "<img" in html_content else self.description_input.toPlainText().strip()
+            description_to_save = html_content if plain_content else ""
             self.result = CalendarEntry(
                 entry_type=self.entry_type,
                 title=title,
@@ -2099,7 +2220,13 @@ class EntryDialog(QDialog):
 
     def _trigger_auto_save(self) -> None:
         if self.entry_type == EntryType.MEMO:
-            self._save_timer.start(1000)
+            if self.entry is not None:
+                self.entry.title = self.title_input.text().strip() or "제목 없음"
+                self.entry.description = self.description_input.toHtml()
+            parent = getattr(self, "_owner_window", None) or self.parent()
+            if parent and hasattr(parent, "_update_group_dialog_memos"):
+                parent._update_group_dialog_memos(self.entry)
+            self._save_timer.start(400)
 
     def _update_title_input_width(self) -> None:
         if hasattr(self, "title_input"):
@@ -2116,13 +2243,30 @@ class EntryDialog(QDialog):
         self.setStyleSheet(f"QDialog#entryDialog {{ background-color: {theme['bg']}; border: 1px solid {theme['border']}; }}")
         self.header.setStyleSheet(f"background-color: {theme['header']};")
         self.title_input.setStyleSheet(f"font-size: 13px; font-weight: bold; border: none; background: transparent; padding: 2px; color: {theme['text']};")
-        self.description_input.setStyleSheet(f"border: none; background: transparent; font-size: 13px; padding: 0px; color: {theme['text']};")
-        if hasattr(self, "_close_btn"):
-            self._close_btn.setStyleSheet(f"background: transparent; border: none; font-weight: bold; color: {theme['text']}; font-size: 13px;")
-        if hasattr(self, "_collapse_btn"):
-            self._collapse_btn.setStyleSheet(f"background: transparent; border: none; font-weight: bold; color: {theme['text']}; font-size: 14px;")
-        if hasattr(self, "_pin_btn"):
-            self._pin_btn.setStyleSheet(f"background: transparent; border: none; font-weight: bold; color: {theme['text']}; font-size: 13px;")
+        font_size_pt = getattr(self, "_current_memo_font_size", 11)
+        self.description_input.setStyleSheet(f"border: none; background: transparent; font-size: {font_size_pt}pt; padding: 0px; color: {theme['text']};")
+        icon_btn_style = (
+            "QPushButton {"
+            "  background-color: rgba(255, 255, 255, 0.7);"
+            "  border: 1px solid rgba(0, 0, 0, 0.15);"
+            "  border-radius: 4px;"
+            "  padding: 0px;"
+            "  font-size: 11px;"
+            "  font-weight: 600;"
+            f"  color: {theme['text']};"
+            "  text-align: center;"
+            "  width: 22px;"
+            "  height: 22px;"
+            "}"
+            "QPushButton:hover {"
+            "  background-color: rgba(255, 255, 255, 0.95);"
+            "  border: 1px solid rgba(0, 0, 0, 0.35);"
+            "}"
+        )
+        for btn_attr in ("_pin_btn", "_collapse_btn", "_close_btn"):
+            btn = getattr(self, btn_attr, None)
+            if btn is not None:
+                btn.setStyleSheet(icon_btn_style)
             
         btn_style = (
             "QPushButton {"
@@ -2180,6 +2324,11 @@ class EntryDialog(QDialog):
                     self._initial_geometry = self.geometry()
                     self._initial_mouse_pos = event.globalPosition().toPoint()
                     return True
+            elif event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
+                if getattr(self, "_resize_dir", None):
+                    self._resize_dir = None
+                    self._save_memo_geometry()
+                    return True
         return super().eventFilter(watched, event)
 
     def _show_memo_context_menu(self, global_pos: QPoint) -> None:
@@ -2204,6 +2353,22 @@ class EntryDialog(QDialog):
         
         new_memo_action = menu.addAction("새 메모 추가")
         new_memo_action.triggered.connect(self._create_new_memo)
+        new_group_action = menu.addAction("새 그룹 추가...")
+        new_group_action.triggered.connect(lambda: self._create_new_group(assign_current=False))
+        menu.addSeparator()
+
+        curr_group_id = getattr(self.entry, "memo_group", "") if self.entry else ""
+        if curr_group_id:
+            parent = getattr(self, "_owner_window", None) or self.parent()
+            grp = parent.repository.get_memo_group(curr_group_id) if parent and hasattr(parent, "repository") else None
+            grp_name = grp.get("title", "그룹") if grp else "소속 그룹"
+            open_grp_act = menu.addAction(f"📂 소속 그룹 열기 ({grp_name})")
+            open_grp_act.triggered.connect(lambda: parent._open_memo_group(curr_group_id) if parent and hasattr(parent, "_open_memo_group") else None)
+            menu.addSeparator()
+
+        group_menu = menu.addMenu("📁 그룹 지정 / 이동")
+        group_menu.setStyleSheet(menu.styleSheet())
+        self._populate_group_menu(group_menu)
         menu.addSeparator()
 
         color_menu = menu.addMenu("메모 색상 변경")
@@ -2216,6 +2381,24 @@ class EntryDialog(QDialog):
         op_action.setCheckable(True)
         op_action.setChecked(hasattr(self, "_opacity_bar") and self._opacity_bar.isVisible())
         op_action.triggered.connect(lambda: self._toggle_opacity_bar())
+
+        is_editor_vis = hasattr(self, "memo_editor_toolbar") and self.memo_editor_toolbar.isVisible()
+        editor_action = menu.addAction("에디터 보기/닫기")
+        editor_action.setCheckable(True)
+        editor_action.setChecked(is_editor_vis)
+        editor_action.triggered.connect(lambda: self._toggle_editor_toolbar())
+
+        is_todo = hasattr(self, "description_input") and getattr(self.description_input, "is_todo_mode", False)
+        todo_action = menu.addAction("To-Do 스타일로 변경" if not is_todo else "일반 텍스트로 변경")
+        todo_action.setCheckable(True)
+        todo_action.setChecked(is_todo)
+        todo_action.triggered.connect(self._toggle_todo_mode)
+
+        is_attach_vis = hasattr(self, "attachment_bar") and self.attachment_bar.isVisible()
+        attach_action = menu.addAction("하단 파일첨부 열고/닫기")
+        attach_action.setCheckable(True)
+        attach_action.setChecked(is_attach_vis)
+        attach_action.triggered.connect(lambda: self._toggle_attachment_bar())
 
         menu.addSeparator()
         
@@ -2233,6 +2416,58 @@ class EntryDialog(QDialog):
         del_action.triggered.connect(self._delete_memo)
         
         menu.exec(global_pos)
+
+    def _populate_group_menu(self, group_menu: QMenu) -> None:
+        parent = getattr(self, "_owner_window", None) or self.parent()
+        curr_group_id = getattr(self.entry, "memo_group", "") if self.entry else ""
+
+        none_act = group_menu.addAction("그룹 없음 (지정 해제)")
+        none_act.setCheckable(True)
+        none_act.setChecked(not curr_group_id)
+        none_act.triggered.connect(lambda: self._set_memo_group(""))
+        group_menu.addSeparator()
+
+        groups = parent.repository.list_memo_groups() if parent and hasattr(parent, "repository") else []
+        if groups:
+            for grp in groups:
+                gid = grp.get("id", "")
+                gtitle = grp.get("title", "그룹")
+                act = group_menu.addAction(f"📁 {gtitle}")
+                act.setCheckable(True)
+                act.setChecked(curr_group_id == gid)
+                act.triggered.connect(lambda _=False, target_id=gid: self._set_memo_group(target_id))
+            group_menu.addSeparator()
+
+        new_grp_act = group_menu.addAction("➕ 새 그룹 생성 및 이동...")
+        new_grp_act.triggered.connect(lambda: self._create_new_group(assign_current=True))
+
+    def _set_memo_group(self, group_id: str) -> None:
+        if not self.entry:
+            return
+        self.entry.memo_group = group_id
+        parent = getattr(self, "_owner_window", None) or self.parent()
+        if parent and hasattr(parent, "repository"):
+            self.entry = parent.repository.upsert_entry(self.entry)
+            parent.repository.save()
+            if hasattr(parent, "refresh"):
+                parent.refresh()
+            if hasattr(parent, "_refresh_all_group_dialogs"):
+                parent._refresh_all_group_dialogs()
+
+    def _create_new_group(self, assign_current: bool = False) -> None:
+        parent = getattr(self, "_owner_window", None) or self.parent()
+        if not parent:
+            return
+        title, ok = QInputDialog.getText(self, "새 메모 그룹", "새 그룹 이름을 입력하세요:", text="새 그룹")
+        if not ok or not title.strip():
+            return
+        assign_id = self.entry.entry_id if assign_current and self.entry and self.entry.entry_id else None
+        if hasattr(parent, "_create_new_memo_group"):
+            parent._create_new_memo_group(title=title.strip(), assign_memo_id=assign_id)
+        if hasattr(parent, "refresh"):
+            parent.refresh()
+        if hasattr(parent, "_refresh_all_group_dialogs"):
+            parent._refresh_all_group_dialogs()
 
     def _create_new_memo(self) -> None:
         parent = getattr(self, "_owner_window", None) or self.parent()
@@ -2297,12 +2532,282 @@ class EntryDialog(QDialog):
         except Exception:
             pass
 
+    def _update_pin_btn(self) -> None:
+        btn = getattr(self, "_pin_btn", None)
+        if btn is None:
+            return
+        if getattr(self, "_is_floating", False):
+            btn.setIcon(QIcon(str(asset_path("pin_active.svg"))))
+            btn.setToolTip("항상 위에 고정 해제")
+        else:
+            btn.setIcon(QIcon(str(asset_path("pin_inactive.svg"))))
+            btn.setToolTip("항상 위에 고정")
+
+    def _toggle_pin_memo(self) -> None:
+        self._toggle_floating(not getattr(self, "_is_floating", False))
+
     def _toggle_floating(self, checked: bool) -> None:
         self._is_floating = checked
         self._set_topmost_native(checked)
-        if hasattr(self, "_pin_icon"):
-            self._pin_icon.setVisible(checked)
+        self._update_pin_btn()
         self._auto_save_to_db()
+
+    def _setup_memo_editor_toolbar(self, parent_layout: QVBoxLayout) -> None:
+        self.memo_editor_toolbar = QWidget()
+        self.memo_editor_toolbar.setObjectName("memoEditorToolbar")
+        self.memo_editor_toolbar.setStyleSheet("""
+            QWidget#memoEditorToolbar {
+                background: rgba(255, 255, 255, 0.95);
+                border: 1px solid rgba(0, 0, 0, 0.15);
+                border-radius: 5px;
+                padding: 1px 2px;
+            }
+            QPushButton.editorBtn {
+                min-width: 22px;
+                max-width: 24px;
+                height: 22px;
+                border: 1px solid rgba(0, 0, 0, 0.15);
+                border-radius: 3px;
+                background: #ffffff;
+                color: #222222;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 0px;
+            }
+            QPushButton.editorBtn:hover {
+                background: #f1f5f9;
+            }
+            QPushButton.editorBtn:checked {
+                background: #2563eb;
+                color: #ffffff;
+                border-color: #1d4ed8;
+            }
+            QComboBox#editorCombo, QFontComboBox#editorFontCombo {
+                height: 22px;
+                font-size: 11px;
+                background: #ffffff;
+                border: 1px solid rgba(0, 0, 0, 0.15);
+                border-radius: 3px;
+                padding: 0 2px;
+            }
+            QPushButton#editorCloseBtn {
+                min-width: 18px;
+                max-width: 18px;
+                height: 18px;
+                border: none;
+                background: transparent;
+                color: #64748b;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton#editorCloseBtn:hover {
+                color: #ef4444;
+                background: rgba(239, 68, 68, 0.1);
+                border-radius: 2px;
+            }
+        """)
+
+        tb = QHBoxLayout(self.memo_editor_toolbar)
+        tb.setContentsMargins(3, 2, 3, 2)
+        tb.setSpacing(3)
+
+        self.btn_bold = QPushButton("B")
+        self.btn_bold.setProperty("class", "editorBtn")
+        self.btn_bold.setCheckable(True)
+        self.btn_bold.setToolTip("굵게 (Ctrl+B)")
+        self.btn_bold.clicked.connect(self._format_bold)
+        tb.addWidget(self.btn_bold)
+
+        self.btn_italic = QPushButton("I")
+        self.btn_italic.setProperty("class", "editorBtn")
+        self.btn_italic.setCheckable(True)
+        font_i = QFont("Segoe UI", 10)
+        font_i.setItalic(True)
+        self.btn_italic.setFont(font_i)
+        self.btn_italic.setToolTip("기울임 (Ctrl+I)")
+        self.btn_italic.clicked.connect(self._format_italic)
+        tb.addWidget(self.btn_italic)
+
+        self.btn_underline = QPushButton("U")
+        self.btn_underline.setProperty("class", "editorBtn")
+        self.btn_underline.setCheckable(True)
+        font_u = QFont("Segoe UI", 10)
+        font_u.setUnderline(True)
+        self.btn_underline.setFont(font_u)
+        self.btn_underline.setToolTip("밑줄 (Ctrl+U)")
+        self.btn_underline.clicked.connect(self._format_underline)
+        tb.addWidget(self.btn_underline)
+
+        self.btn_strike = QPushButton("S")
+        self.btn_strike.setProperty("class", "editorBtn")
+        self.btn_strike.setCheckable(True)
+        font_s = QFont("Segoe UI", 10)
+        font_s.setStrikeOut(True)
+        self.btn_strike.setFont(font_s)
+        self.btn_strike.setToolTip("취소선")
+        self.btn_strike.clicked.connect(self._format_strike)
+        tb.addWidget(self.btn_strike)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        tb.addWidget(sep)
+
+        self.font_combo = QFontComboBox()
+        self.font_combo.setObjectName("editorFontCombo")
+        self.font_combo.setToolTip("글꼴")
+        self.font_combo.setMaximumWidth(95)
+        self.font_combo.currentFontChanged.connect(self._format_font)
+        tb.addWidget(self.font_combo)
+
+        self.size_combo = QComboBox()
+        self.size_combo.setObjectName("editorCombo")
+        self.size_combo.setToolTip("글자 크기")
+        self.size_combo.setMaximumWidth(48)
+        for s in [8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20, 24]:
+            self.size_combo.addItem(str(s), s)
+        self.size_combo.setCurrentIndex(max(0, self.size_combo.findData(10)))
+        self.size_combo.currentIndexChanged.connect(self._format_size)
+        tb.addWidget(self.size_combo)
+
+        self.btn_color = QPushButton("🎨")
+        self.btn_color.setProperty("class", "editorBtn")
+        self.btn_color.setToolTip("글자 색상")
+        self.btn_color.clicked.connect(self._format_color)
+        tb.addWidget(self.btn_color)
+
+        tb.addStretch(1)
+
+        close_btn = QPushButton()
+        close_btn.setIcon(QIcon(str(asset_path("memo_close.svg"))))
+        close_btn.setIconSize(QSize(10, 10))
+        close_btn.setObjectName("editorCloseBtn")
+        close_btn.setToolTip("에디터 도구 닫기")
+        close_btn.clicked.connect(lambda: self._toggle_editor_toolbar(False))
+        tb.addWidget(close_btn)
+
+        parent_layout.addWidget(self.memo_editor_toolbar)
+
+        # 기본 상태는 닫힘 (숨김)
+        self.memo_editor_toolbar.setVisible(False)
+
+    def _format_bold(self) -> None:
+        fmt = QTextCharFormat()
+        fmt.setFontWeight(QFont.Weight.Bold if self.btn_bold.isChecked() else QFont.Weight.Normal)
+        self._apply_char_format(fmt)
+
+    def _format_italic(self) -> None:
+        fmt = QTextCharFormat()
+        fmt.setFontItalic(self.btn_italic.isChecked())
+        self._apply_char_format(fmt)
+
+    def _format_underline(self) -> None:
+        fmt = QTextCharFormat()
+        fmt.setFontUnderline(self.btn_underline.isChecked())
+        self._apply_char_format(fmt)
+
+    def _format_strike(self) -> None:
+        fmt = QTextCharFormat()
+        fmt.setFontStrikeOut(self.btn_strike.isChecked())
+        self._apply_char_format(fmt)
+
+    def _format_font(self, font: QFont) -> None:
+        fmt = QTextCharFormat()
+        fmt.setFontFamilies([font.family()])
+        self._apply_char_format(fmt)
+
+    def _format_size(self) -> None:
+        val = self.size_combo.currentData()
+        if val is not None:
+            fmt = QTextCharFormat()
+            fmt.setFontPointSize(float(val))
+            self._apply_char_format(fmt)
+
+    def _format_color(self) -> None:
+        color = QColorDialog.getColor(Qt.GlobalColor.black, self, "글자 색상 선택")
+        if color.isValid():
+            fmt = QTextCharFormat()
+            fmt.setForeground(color)
+            self._apply_char_format(fmt)
+
+    def _apply_char_format(self, fmt: QTextCharFormat) -> None:
+        cursor = self.description_input.textCursor()
+        if not cursor.hasSelection():
+            cursor.select(QTextCursor.SelectionType.WordUnderCursor)
+        cursor.mergeCharFormat(fmt)
+        self.description_input.mergeCurrentCharFormat(fmt)
+        self.description_input.setFocus()
+
+    def _sync_editor_toolbar_state(self) -> None:
+        if not hasattr(self, "memo_editor_toolbar") or not self.memo_editor_toolbar.isVisible():
+            return
+        try:
+            fmt = self.description_input.currentCharFormat()
+
+            self.btn_bold.blockSignals(True)
+            self.btn_bold.setChecked(fmt.fontWeight() == QFont.Weight.Bold or fmt.fontWeight() >= 700)
+            self.btn_bold.blockSignals(False)
+
+            self.btn_italic.blockSignals(True)
+            self.btn_italic.setChecked(fmt.fontItalic())
+            self.btn_italic.blockSignals(False)
+
+            self.btn_underline.blockSignals(True)
+            self.btn_underline.setChecked(fmt.fontUnderline())
+            self.btn_underline.blockSignals(False)
+
+            self.btn_strike.blockSignals(True)
+            self.btn_strike.setChecked(fmt.fontStrikeOut())
+            self.btn_strike.blockSignals(False)
+
+            fams = fmt.fontFamilies()
+            if fams:
+                fam = fams[0] if isinstance(fams, (list, tuple)) else str(fams)
+                self.font_combo.blockSignals(True)
+                self.font_combo.setCurrentFont(QFont(fam))
+                self.font_combo.blockSignals(False)
+
+            pt = int(round(fmt.fontPointSize()))
+            if pt > 0:
+                idx = self.size_combo.findData(pt)
+                if idx >= 0:
+                    self.size_combo.blockSignals(True)
+                    self.size_combo.setCurrentIndex(idx)
+                    self.size_combo.blockSignals(False)
+        except Exception:
+            pass
+
+    def _toggle_editor_toolbar(self, show: bool | None = None) -> None:
+        if not hasattr(self, "memo_editor_toolbar"):
+            return
+        try:
+            if show is None:
+                show = not self.memo_editor_toolbar.isVisible()
+
+            was_visible = self.memo_editor_toolbar.isVisible()
+            self.memo_editor_toolbar.setVisible(show)
+            if show:
+                if not was_visible and self.height() < 240:
+                    self.resize(self.width(), self.height() + 32)
+                self._sync_editor_toolbar_state()
+            self.description_input.setFocus()
+        except Exception as exc:
+            logger.exception("Error in _toggle_editor_toolbar: %s", exc)
+
+    def _toggle_todo_mode(self) -> None:
+        if hasattr(self, "description_input") and hasattr(self.description_input, "toggle_todo_style"):
+            self.description_input.toggle_todo_style()
+            self._trigger_auto_save()
+
+    def _toggle_attachment_bar(self, show: bool | None = None) -> None:
+        if not hasattr(self, "attachment_bar"):
+            return
+        try:
+            if show is None:
+                show = not self.attachment_bar.isVisible()
+            self.attachment_bar.setVisible(show)
+        except Exception as exc:
+            logger.exception("Error in _toggle_attachment_bar: %s", exc)
 
     def _on_attach_button_clicked(self) -> None:
         if self.attachments:
@@ -2439,6 +2944,11 @@ class EntryDialog(QDialog):
         if 0 <= index < len(self.attachments):
             self.attachments.pop(index)
             self.attachments_label.setText(self._attachments_text())
+            parent = getattr(self, "_owner_window", None) or self.parent()
+            repo = getattr(parent, "repository", None) if parent else None
+            show_attach_setting = (repo.get_setting("memo_show_attachment_bar", "1") != "0") if repo else True
+            if not show_attach_setting and not self.attachments and hasattr(self, "attachment_bar"):
+                self.attachment_bar.hide()
             self._auto_save_to_db()
 
     def _toggle_collapse(self) -> None:
@@ -2447,7 +2957,7 @@ class EntryDialog(QDialog):
             self._expanded_height = self.height()
             if hasattr(self, "content_wrap"):
                 self.content_wrap.hide()
-            self.setFixedHeight(34)
+            self.setFixedHeight(36)
             if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
                 self._collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg"))))
                 self._collapse_btn.setToolTip("메모 펼치기")
@@ -2461,11 +2971,21 @@ class EntryDialog(QDialog):
                 self._collapse_btn.setIcon(QIcon(str(asset_path("memo_minimize.svg"))))
                 self._collapse_btn.setToolTip("메모 접기")
             
+        self._save_memo_geometry()
+
+    def _save_memo_geometry(self) -> None:
         parent = getattr(self, "_owner_window", None) or self.parent()
         if parent and hasattr(parent, "repository") and self.entry and self.entry.entry_id:
-            parent.repository.set_setting(f"memo_collapsed_{self.entry.entry_id}", "1" if self._is_collapsed else "0")
-            h_val = getattr(self, "_expanded_height", self.height())
-            parent.repository.set_setting(f"memo_geo_{self.entry.entry_id}", f"{self.x()},{self.y()},{self.width()},{h_val}")
+            curr_geo = self.geometry()
+            h_val = getattr(self, "_expanded_height", curr_geo.height()) if getattr(self, "_is_collapsed", False) else curr_geo.height()
+            parent.repository.set_setting(f"memo_geo_{self.entry.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{curr_geo.width()},{h_val}")
+            parent.repository.set_setting(f"memo_collapsed_{self.entry.entry_id}", "1" if getattr(self, "_is_collapsed", False) else "0")
+            parent.repository.save()
+
+    def _end_window_drag(self) -> None:
+        if hasattr(self, "_drag_position"):
+            delattr(self, "_drag_position")
+        self._save_memo_geometry()
 
     def _start_window_drag(self, global_pos: QPoint) -> None:
         self._drag_position = global_pos - self.frameGeometry().topLeft()
@@ -2500,9 +3020,11 @@ class EntryDialog(QDialog):
             return
             
         html_content = self.description_input.toHtml()
-        description_to_save = html_content if "<img" in html_content else plain_content
+        description_to_save = html_content if plain_content else ""
         
         from taskcalendar.models import CalendarEntry
+        curr_memo_group = getattr(self.entry, "memo_group", "") if self.entry else ""
+        curr_created_at = self.entry.created_at if self.entry else None
         self.result = CalendarEntry(
             entry_type=self.entry_type,
             title=title or "제목 없음",
@@ -2510,6 +3032,8 @@ class EntryDialog(QDialog):
             attachments=list(self.attachments),
             bg_color=getattr(self, "_current_memo_theme", "yellow"),
             icon_type="floating" if getattr(self, "_is_floating", False) else "",
+            memo_group=curr_memo_group,
+            created_at=curr_created_at,
         )
         
         if self.entry and self.entry.entry_id:
@@ -2549,6 +3073,11 @@ class EntryDialog(QDialog):
                 parent.repository.save()
             if refresh_parent:
                 parent.refresh()
+            if is_new and curr_memo_group:
+                if hasattr(parent, "_refresh_all_group_dialogs"):
+                    parent._refresh_all_group_dialogs()
+            elif hasattr(parent, "_update_group_dialog_memos"):
+                parent._update_group_dialog_memos(self.entry)
 
     def _focus_title_for_new_memo(self) -> None:
         if hasattr(self, "title_input") and self.title_input is not None:
@@ -2601,17 +3130,25 @@ class EntryDialog(QDialog):
                 to_remove = [k for k, v in list(parent._active_memo_dialogs.items()) if v is self]
                 for k in to_remove:
                     parent._active_memo_dialogs.pop(k, None)
-                if hasattr(parent, "_sync_open_memo_ids"):
-                    parent._sync_open_memo_ids(persist=True)
-            if parent and hasattr(parent, "refresh"):
-                try:
-                    parent.refresh()
-                except Exception:
-                    pass
+                if not getattr(parent, "_batch_updating_memos", False):
+                    if hasattr(parent, "_sync_open_memo_ids"):
+                        parent._sync_open_memo_ids(persist=True)
+            if not getattr(parent, "_batch_updating_memos", False):
+                if parent and hasattr(parent, "refresh"):
+                    try:
+                        parent.refresh()
+                    except Exception:
+                        pass
+                if parent and hasattr(parent, "_refresh_all_group_dialogs"):
+                    try:
+                        parent._refresh_all_group_dialogs(status_only=True)
+                    except Exception:
+                        pass
         self.close()
 
     def closeEvent(self, event) -> None:
         if self.entry_type == EntryType.MEMO:
+            self._save_memo_geometry()
             parent = getattr(self, "_owner_window", None) or self.parent()
             if parent and getattr(parent, "_is_app_quitting", False):
                 super().closeEvent(event)
@@ -2703,7 +3240,7 @@ class EntryDialog(QDialog):
                         new_w = max(180, geom.width() + delta.x())
                         geom.setWidth(new_w)
                         if getattr(self, "_is_collapsed", False):
-                            geom.setHeight(34)
+                            geom.setHeight(36)
                     elif self._resize_dir == "b":
                         if not getattr(self, "_is_collapsed", False):
                             geom.setHeight(max(150, geom.height() + delta.y()))
@@ -2711,7 +3248,7 @@ class EntryDialog(QDialog):
                         new_w = max(180, geom.width() + delta.x())
                         geom.setWidth(new_w)
                         if getattr(self, "_is_collapsed", False):
-                            geom.setHeight(34)
+                            geom.setHeight(36)
                         else:
                             geom.setHeight(max(150, geom.height() + delta.y()))
                     elif self._resize_dir == "bl":
@@ -2720,7 +3257,7 @@ class EntryDialog(QDialog):
                         geom.setX(new_x)
                         geom.setWidth(new_w)
                         if getattr(self, "_is_collapsed", False):
-                            geom.setHeight(34)
+                            geom.setHeight(36)
                         else:
                             geom.setHeight(max(150, geom.height() + delta.y()))
                             
@@ -2738,7 +3275,7 @@ class EntryDialog(QDialog):
                     if snapped_geom.width() < 180:
                         snapped_geom.setWidth(180)
                     if getattr(self, "_is_collapsed", False):
-                        snapped_geom.setHeight(34)
+                        snapped_geom.setHeight(36)
                     elif snapped_geom.height() < 150:
                         snapped_geom.setHeight(150)
                         
@@ -2757,16 +3294,7 @@ class EntryDialog(QDialog):
     def mouseReleaseEvent(self, event) -> None:
         if self.entry_type == EntryType.MEMO:
             self._resize_dir = None
-            if hasattr(self, "_drag_position"):
-                delattr(self, "_drag_position")
-            if self.entry and self.entry.entry_id:
-                parent = getattr(self, "_owner_window", None) or self.parent()
-                if parent and hasattr(parent, "repository"):
-                    curr_geo = self.geometry()
-                    h_val = getattr(self, "_expanded_height", curr_geo.height()) if getattr(self, "_is_collapsed", False) else curr_geo.height()
-                    parent.repository.set_setting(f"memo_geo_{self.entry.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{curr_geo.width()},{h_val}")
-                    parent.repository.set_setting(f"memo_collapsed_{self.entry.entry_id}", "1" if getattr(self, "_is_collapsed", False) else "0")
-                    parent.repository.save()
+            self._end_window_drag()
         super().mouseReleaseEvent(event)
 
     def add_dropped_attachments(self, filepaths: list[str]) -> None:
@@ -2778,6 +3306,8 @@ class EntryDialog(QDialog):
         if added:
             if hasattr(self, "attachments_label"):
                 self.attachments_label.setText(self._attachments_text())
+            if hasattr(self, "attachment_bar") and not self.attachment_bar.isVisible():
+                self.attachment_bar.show()
             if self.entry_type == EntryType.MEMO:
                 self._auto_save_to_db()
 
@@ -2836,6 +3366,1388 @@ class EntryDialog(QDialog):
             painter.end()
 
 
+class MiniMemoCardWidget(QFrame):
+    clicked = Signal(object)
+    doubleClicked = Signal(object)
+    reordered = Signal(int, int, bool)
+    requestToggleOpen = Signal(object)
+    requestRemoveFromGroup = Signal(object)
+    requestDeleteMemo = Signal(object)
+
+    _MIME_TYPE = "application/x-taskcalendar-memo-id"
+
+    def __init__(self, entry: CalendarEntry, is_open_on_desktop: bool = False, view_mode: str = "card", parent=None) -> None:
+        super().__init__(parent)
+        self.entry = entry
+        self.is_open_on_desktop = is_open_on_desktop
+        self.view_mode = view_mode
+        if self.view_mode == "list":
+            self.setFixedHeight(34)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        else:
+            self.setFixedSize(105, 140)  # 3:4 aspect ratio
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAcceptDrops(True)
+        self._press_pos: QPoint | None = None
+        self._drag_started = False
+        self._drop_indicator: str | None = None
+        self._init_ui()
+
+    @staticmethod
+    def _plain_snippet(description: str) -> str:
+        desc_text = description or ""
+        if not desc_text:
+            return ""
+        if "<" in desc_text and ">" in desc_text:
+            import re
+            clean_html = re.sub(r"(?is)<head.*?</head>", "", desc_text)
+            clean_html = re.sub(r"(?is)<style.*?</style>", "", clean_html)
+            clean_html = re.sub(r"(?is)<script.*?</script>", "", clean_html)
+            from PySide6.QtGui import QTextDocument
+            doc = QTextDocument()
+            doc.setHtml(clean_html)
+            plain = doc.toPlainText().strip()
+            if not plain:
+                plain = re.sub(r"<[^>]+>", " ", clean_html).strip()
+            return plain
+        return desc_text.strip()
+
+    def update_content(self, entry: CalendarEntry) -> None:
+        self.entry = entry
+        title_text = (entry.title or "제목 없음").strip()
+        if hasattr(self, "title_lbl"):
+            if hasattr(self.title_lbl, "set_full_text"):
+                self.title_lbl.set_full_text(title_text)
+            else:
+                self.title_lbl.setText(title_text)
+        snippet = self._plain_snippet(entry.description)
+        if self.view_mode == "list":
+            clean_snippet = " · ".join([line.strip() for line in snippet.splitlines() if line.strip()])
+            if hasattr(self, "desc_lbl"):
+                if hasattr(self.desc_lbl, "set_full_text"):
+                    self.desc_lbl.set_full_text(clean_snippet)
+                else:
+                    self.desc_lbl.setText(clean_snippet)
+        else:
+            if len(snippet) > 80:
+                snippet = snippet[:80] + "..."
+            if hasattr(self, "desc_lbl"):
+                self.desc_lbl.setText(snippet)
+
+    def _init_ui(self) -> None:
+        theme = MEMO_THEMES.get(self.entry.bg_color, MEMO_THEMES["yellow"])
+        bg_col = theme.get("bg", "#fff7c2")
+        border_col = theme.get("border", "#d5c880")
+        text_col = theme.get("text", "#2c2c2c")
+
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {bg_col};
+                border: 1px solid {border_col};
+                border-radius: 6px;
+            }}
+            QFrame:hover {{
+                border: 1.5px solid rgba(0, 0, 0, 0.45);
+            }}
+        """)
+
+        title_text = (self.entry.title or "제목 없음").strip()
+
+        # Content snippet (strip html if html)
+        snippet = self._plain_snippet(self.entry.description)
+
+        dot_color = "#16a34a" if self.is_open_on_desktop else "#94a3b8"
+        dot_tip = "바탕화면에 열려 있음" if self.is_open_on_desktop else "바탕화면에서 닫힘"
+        date_str = self.entry.created_at.strftime("%m.%d") if self.entry.created_at else ""
+
+        if self.view_mode == "list":
+            self.setMinimumWidth(0)
+            layout = QHBoxLayout(self)
+            layout.setContentsMargins(10, 4, 10, 4)
+            layout.setSpacing(8)
+            layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+            self.status_dot = QLabel("●" if self.is_open_on_desktop else "○")
+            self.status_dot.setStyleSheet(f"font-size: 10px; color: {dot_color}; font-weight: bold; background: transparent; border: none;")
+            self.status_dot.setToolTip(dot_tip)
+            self.status_dot.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self.status_dot.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            layout.addWidget(self.status_dot)
+
+            self.title_lbl = ElidedLabel(title_text, is_elastic=False)
+            self.title_lbl.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {text_col}; background: transparent; border: none;")
+            self.title_lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.title_lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+            self.title_lbl.setMinimumWidth(20)
+            layout.addWidget(self.title_lbl)
+
+            clean_snippet = " · ".join([line.strip() for line in snippet.splitlines() if line.strip()])
+            self.desc_lbl = ElidedLabel(clean_snippet, is_elastic=True)
+            self.desc_lbl.setStyleSheet(f"font-size: 10px; color: {text_col}; opacity: 0.75; background: transparent; border: none;")
+            self.desc_lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self.desc_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.desc_lbl.setMinimumWidth(0)
+            layout.addWidget(self.desc_lbl, 1)
+
+            date_lbl = QLabel(date_str)
+            date_lbl.setStyleSheet(f"font-size: 9px; color: {text_col}; opacity: 0.65; background: transparent; border: none;")
+            date_lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            date_lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            layout.addWidget(date_lbl)
+        else:
+            layout = QVBoxLayout(self)
+            layout.setContentsMargins(6, 6, 6, 5)
+            layout.setSpacing(3)
+
+            # Header with Title
+            self.title_lbl = QLabel(title_text)
+            self.title_lbl.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {text_col}; background: transparent; border: none;")
+            self.title_lbl.setWordWrap(True)
+            self.title_lbl.setFixedHeight(28)
+            self.title_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            self.title_lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            layout.addWidget(self.title_lbl)
+
+            # Separator line
+            self._sep = QFrame()
+            self._sep.setFixedHeight(1)
+            self._sep.setStyleSheet(f"background-color: {border_col}; border: none;")
+            self._sep.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            layout.addWidget(self._sep)
+
+            if len(snippet) > 80:
+                snippet = snippet[:80] + "..."
+
+            self.desc_lbl = QLabel(snippet)
+            self.desc_lbl.setStyleSheet(f"font-size: 10px; color: {text_col}; background: transparent; border: none;")
+            self.desc_lbl.setWordWrap(True)
+            self.desc_lbl.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+            self.desc_lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            layout.addWidget(self.desc_lbl, 1)
+
+            # Bottom status row
+            footer = QHBoxLayout()
+            footer.setContentsMargins(0, 0, 0, 0)
+            footer.setSpacing(2)
+
+            self.status_dot = QLabel("●" if self.is_open_on_desktop else "○")
+            self.status_dot.setStyleSheet(f"font-size: 9px; color: {dot_color}; font-weight: bold; background: transparent; border: none;")
+            self.status_dot.setToolTip(dot_tip)
+            footer.addWidget(self.status_dot)
+
+            date_lbl = QLabel(date_str)
+            date_lbl.setStyleSheet(f"font-size: 9px; color: {text_col}; opacity: 0.7; background: transparent; border: none;")
+            footer.addStretch(1)
+            footer.addWidget(date_lbl)
+
+            layout.addLayout(footer)
+
+    def set_open_on_desktop(self, is_open: bool) -> None:
+        if self.is_open_on_desktop == is_open:
+            return
+        self.is_open_on_desktop = is_open
+        dot_color = "#16a34a" if is_open else "#94a3b8"
+        dot_tip = "바탕화면에 열려 있음" if is_open else "바탕화면에서 닫힘"
+        if hasattr(self, "status_dot"):
+            self.status_dot.setText("●" if is_open else "○")
+            font_size = "10px" if self.view_mode == "list" else "9px"
+            self.status_dot.setStyleSheet(f"font-size: {font_size}; color: {dot_color}; font-weight: bold; background: transparent; border: none;")
+            self.status_dot.setToolTip(dot_tip)
+
+    def set_preview_visible(self, visible: bool) -> None:
+        if not hasattr(self, "desc_lbl"):
+            return
+        self.desc_lbl.setVisible(visible)
+        sep = getattr(self, "_sep", None)
+        if sep is not None:
+            sep.setVisible(visible)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.globalPosition().toPoint()
+            self._drag_started = False
+        elif event.button() == Qt.MouseButton.RightButton:
+            self._show_context_menu(event.globalPosition().toPoint())
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._press_pos is not None and (event.buttons() & Qt.MouseButton.LeftButton):
+            dist = (event.globalPosition().toPoint() - self._press_pos).manhattanLength()
+            if dist >= QApplication.startDragDistance():
+                self._drag_started = True
+                self._start_drag()
+                self._press_pos = None
+                event.accept()
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            if self._press_pos is not None and not self._drag_started:
+                self.clicked.emit(self.entry)
+            self._press_pos = None
+            self._drag_started = False
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.doubleClicked.emit(self.entry)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def _start_drag(self) -> None:
+        if self.entry.entry_id is None:
+            return
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(self._MIME_TYPE, str(self.entry.entry_id).encode("utf-8"))
+        drag.setMimeData(mime)
+        pixmap = self.grab()
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
+        drag.exec(Qt.DropAction.MoveAction)
+
+    def _is_valid_drag(self, event) -> bool:
+        data = event.mimeData().data(self._MIME_TYPE)
+        if not data:
+            return False
+        try:
+            source_id = int(bytes(data).decode("utf-8"))
+            return self.entry.entry_id is not None and source_id != int(self.entry.entry_id)
+        except Exception:
+            return False
+
+    def dragEnterEvent(self, event) -> None:
+        if self._is_valid_drag(event):
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        if self._is_valid_drag(event):
+            event.acceptProposedAction()
+            if self.view_mode == "list":
+                before = event.position().y() < (self.height() / 2.0)
+                indicator = "top" if before else "bottom"
+            else:
+                before = event.position().x() < (self.width() / 2.0)
+                indicator = "left" if before else "right"
+            if self._drop_indicator != indicator:
+                self._drop_indicator = indicator
+                self.update()
+            return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        if self._drop_indicator is not None:
+            self._drop_indicator = None
+            self.update()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        if self._drop_indicator is not None:
+            self._drop_indicator = None
+            self.update()
+        if not self._is_valid_drag(event):
+            event.ignore()
+            return
+        try:
+            source_id = int(bytes(event.mimeData().data(self._MIME_TYPE)).decode("utf-8"))
+            target_id = int(self.entry.entry_id)
+            if self.view_mode == "list":
+                before = event.position().y() < (self.height() / 2.0)
+            else:
+                before = event.position().x() < (self.width() / 2.0)
+            self.reordered.emit(source_id, target_id, before)
+            event.acceptProposedAction()
+        except Exception:
+            event.ignore()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self._drop_indicator:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing, False)
+            pen = QPen(QColor("#0284c7"), 3)
+            painter.setPen(pen)
+            if self._drop_indicator == "left":
+                painter.drawLine(1, 4, 1, self.height() - 4)
+            elif self._drop_indicator == "right":
+                painter.drawLine(self.width() - 2, 4, self.width() - 2, self.height() - 4)
+            elif self._drop_indicator == "top":
+                painter.drawLine(4, 1, self.width() - 4, 1)
+            elif self._drop_indicator == "bottom":
+                painter.drawLine(4, self.height() - 2, self.width() - 4, self.height() - 2)
+            painter.end()
+
+    def _show_context_menu(self, global_pos: QPoint) -> None:
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #d0d5dd;
+                padding: 4px 0px;
+                border-radius: 6px;
+            }
+            QMenu::item {
+                padding: 6px 20px 6px 16px;
+                font-size: 12px;
+                color: #222222;
+            }
+            QMenu::item:selected {
+                background-color: #f1f5f9;
+                color: #0f172a;
+            }
+        """)
+        open_act = menu.addAction("바탕화면에서 닫기" if self.is_open_on_desktop else "바탕화면에 열기")
+        open_act.triggered.connect(lambda: self.requestToggleOpen.emit(self.entry))
+
+        remove_act = menu.addAction("이 그룹에서 제외 (그룹 해제)")
+        remove_act.triggered.connect(lambda: self.requestRemoveFromGroup.emit(self.entry))
+
+        menu.addSeparator()
+        del_act = menu.addAction("메모 삭제")
+        del_act.triggered.connect(lambda: self.requestDeleteMemo.emit(self.entry))
+
+        menu.exec(global_pos)
+
+
+class FloatingGroupDialog(QDialog):
+    def __init__(self, parent, group_dict: dict) -> None:
+        super().__init__(None)
+        self._owner_window = parent
+        self.group_dict = dict(group_dict)
+        self.group_id = str(group_dict.get("id", ""))
+        self.group_title = str(group_dict.get("title", "새 그룹"))
+        self.group_color = str(group_dict.get("color", "yellow"))
+        self.view_mode = str(group_dict.get("view_mode", "card"))
+        self._is_floating = bool(group_dict.get("is_floating", False))
+        self._is_collapsed = bool(group_dict.get("is_collapsed", False))
+        self._initial_mouse_pos = QPoint()
+        self._initial_geometry = QRect()
+        self._resize_dir: str | None = None
+        self._expanded_height = 420
+        self._drag_pos: QPoint | None = None
+        self._cards: list[MiniMemoCardWidget] = []
+        self._current_cols: int = 0
+        self._preview_hidden: bool | None = None
+
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
+        self.setModal(False)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setMouseTracking(True)
+        self.setMinimumSize(250, 180)
+
+        # Load saved geo or default
+        geo_str = self.group_dict.get("geo", "")
+        has_geo = False
+        if geo_str:
+            try:
+                pts = [int(p) for p in geo_str.split(",")]
+                if len(pts) == 4:
+                    self.setGeometry(pts[0], pts[1], max(250, pts[2]), max(180, pts[3]))
+                    self._expanded_height = max(180, pts[3])
+                    has_geo = True
+            except Exception:
+                pass
+        if has_geo:
+            screen = self.screen() or QApplication.primaryScreen()
+            if screen:
+                avail = screen.availableGeometry()
+                geo = self.geometry()
+                nx = max(avail.left(), min(geo.x(), avail.right() - 100))
+                ny = max(avail.top(), min(geo.y(), avail.bottom() - 36))
+                self.move(nx, ny)
+        else:
+            screen = self.screen() or QApplication.primaryScreen()
+            if screen:
+                avail = screen.availableGeometry()
+                cx = avail.x() + (avail.width() - 360) // 2 + 50
+                cy = avail.y() + (avail.height() - 420) // 2 + 50
+                self.setGeometry(cx, cy, 360, 420)
+            else:
+                self.resize(360, 420)
+
+        self._build_ui()
+        self._apply_theme(self.group_color)
+        if self._is_collapsed:
+            self.content_wrap.hide()
+            self.setFixedHeight(36)
+            self._update_collapse_btn()
+            self._apply_theme(self.group_color)
+        else:
+            self.setMinimumSize(250, 180)
+            self.setMaximumHeight(16777215)
+        if self._is_floating:
+            self._set_topmost_native(True)
+        self._update_header_mode(force=True)
+        self.refresh_memos()
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # 1. Header Bar
+        self.header = QWidget()
+        self.header.setFixedHeight(36)
+        self.header.setMouseTracking(True)
+        self.header.installEventFilter(self)
+        h_layout = QHBoxLayout(self.header)
+        h_layout.setContentsMargins(8, 0, 6, 0)
+        h_layout.setSpacing(4)
+        h_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self.icon_lbl = QLabel()
+        self.icon_lbl.setPixmap(QIcon(str(asset_path("folder.svg"))).pixmap(18, 18))
+        self.icon_lbl.setStyleSheet("background: transparent; border: none;")
+        self.icon_lbl.setFixedSize(18, 22)
+        self.icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_lbl.installEventFilter(self)
+        h_layout.addWidget(self.icon_lbl)
+
+        self.title_input = EditableTitleLineEdit(self.group_title, self.header)
+        self.title_input.setPlaceholderText("그룹 이름")
+        self.title_input.setFixedHeight(24)
+        self.title_input.setMinimumWidth(60)
+        self.title_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.title_input.textChanged.connect(self._on_title_changed)
+        h_layout.addWidget(self.title_input, 1)
+
+        self.count_badge = QLabel("0개")
+        self.count_badge.setStyleSheet("font-size: 11px; font-weight: bold; background: rgba(0,0,0,0.08); padding: 2px 6px; border-radius: 4px; color: #333333;")
+        self.count_badge.setFixedHeight(20)
+        self.count_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.count_badge.installEventFilter(self)
+        h_layout.addWidget(self.count_badge)
+
+        self.add_memo_btn = QPushButton("+ 메모")
+        self.add_memo_btn.setToolTip("이 그룹에 새 메모 추가")
+        self.add_memo_btn.setCursor(Qt.PointingHandCursor)
+        self.add_memo_btn.setFixedHeight(22)
+        self.add_memo_btn.clicked.connect(self._on_add_memo_clicked)
+        h_layout.addWidget(self.add_memo_btn)
+
+        self.open_all_btn = QPushButton("모두 열기")
+        self.open_all_btn.setToolTip("그룹 내 모든 메모 바탕화면에 열기")
+        self.open_all_btn.setCursor(Qt.PointingHandCursor)
+        self.open_all_btn.setFixedHeight(22)
+        self.open_all_btn.clicked.connect(self._open_all_memos)
+        h_layout.addWidget(self.open_all_btn)
+
+        self.close_all_btn = QPushButton("모두 닫기")
+        self.close_all_btn.setToolTip("그룹 내 모든 메모 바탕화면에서 닫기")
+        self.close_all_btn.setCursor(Qt.PointingHandCursor)
+        self.close_all_btn.setFixedHeight(22)
+        self.close_all_btn.clicked.connect(self._close_all_memos)
+        h_layout.addWidget(self.close_all_btn)
+
+        self.view_mode_btn = QPushButton()
+        self.view_mode_btn.setFixedSize(22, 22)
+        self.view_mode_btn.setIconSize(QSize(12, 12))
+        self.view_mode_btn.setCursor(Qt.PointingHandCursor)
+        self.view_mode_btn.clicked.connect(self._toggle_view_mode)
+        self._update_view_mode_btn()
+        h_layout.addWidget(self.view_mode_btn)
+
+        self.pin_btn = QPushButton()
+        self.pin_btn.setFixedSize(22, 22)
+        self.pin_btn.setIconSize(QSize(13, 13))
+        self.pin_btn.setCursor(Qt.PointingHandCursor)
+        self.pin_btn.clicked.connect(self._toggle_pin)
+        self._update_pin_btn()
+        h_layout.addWidget(self.pin_btn)
+
+        self.collapse_btn = QPushButton()
+        self.collapse_btn.setFixedSize(22, 22)
+        self.collapse_btn.setIconSize(QSize(12, 12))
+        self.collapse_btn.setToolTip("접기 / 펼치기")
+        self.collapse_btn.setCursor(Qt.PointingHandCursor)
+        self.collapse_btn.clicked.connect(self._toggle_collapse)
+        self._update_collapse_btn()
+        h_layout.addWidget(self.collapse_btn)
+
+        self.close_btn = QPushButton()
+        self.close_btn.setIcon(QIcon(str(asset_path("memo_close.svg"))))
+        self.close_btn.setIconSize(QSize(12, 12))
+        self.close_btn.setFixedSize(22, 22)
+        self.close_btn.setToolTip("그룹 창 닫기")
+        self.close_btn.setCursor(Qt.PointingHandCursor)
+        self.close_btn.clicked.connect(self.close)
+        h_layout.addWidget(self.close_btn)
+
+        root.addWidget(self.header)
+
+        # 2. Content Area
+        self.content_wrap = QWidget()
+        self.content_wrap.setMouseTracking(True)
+        self.content_wrap.installEventFilter(self)
+        c_layout = QVBoxLayout(self.content_wrap)
+        c_layout.setContentsMargins(8, 8, 8, 8)
+        c_layout.setSpacing(0)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet("border: none; background: transparent;")
+        self.scroll.setAcceptDrops(True)
+        self.scroll.setMouseTracking(True)
+        self.scroll.installEventFilter(self)
+        if self.scroll.viewport():
+            self.scroll.viewport().setMouseTracking(True)
+            self.scroll.viewport().installEventFilter(self)
+
+        self.cards_container = QWidget()
+        self.cards_container.setStyleSheet("background: transparent;")
+        self.cards_container.setAcceptDrops(True)
+        self.cards_container.setMouseTracking(True)
+        self.cards_container.installEventFilter(self)
+        self.cards_grid = QGridLayout(self.cards_container)
+        self.cards_grid.setContentsMargins(4, 4, 4, 4)
+        self.cards_grid.setSpacing(8)
+        self.cards_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+
+        self.scroll.setWidget(self.cards_container)
+        c_layout.addWidget(self.scroll)
+
+        root.addWidget(self.content_wrap, 1)
+
+    def _apply_theme(self, color_key: str) -> None:
+        self.group_color = color_key
+        theme = MEMO_THEMES.get(color_key, MEMO_THEMES["yellow"])
+        bg_col = theme.get("bg", "#fff7c2")
+        hdr_col = theme.get("header", "#f5e99f")
+        border_col = theme.get("border", "#d5c880")
+        text_col = theme.get("text", "#2c2c2c")
+
+        self.setStyleSheet(f"""
+            FloatingGroupDialog {{
+                background-color: {bg_col};
+                border: 2px solid {border_col};
+                border-radius: 8px;
+            }}
+        """)
+        is_collapsed = getattr(self, "_is_collapsed", False)
+        header_border_bottom = "none" if is_collapsed else f"1px solid {border_col}"
+        header_bottom_radius = "6px" if is_collapsed else "0px"
+        self.header.setStyleSheet(f"""
+            QWidget {{
+                background-color: {hdr_col};
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                border-bottom-left-radius: {header_bottom_radius};
+                border-bottom-right-radius: {header_bottom_radius};
+                border-bottom: {header_border_bottom};
+            }}
+        """)
+        self._text_btn_style = f"""
+            QPushButton {{
+                background-color: rgba(255, 255, 255, 0.7);
+                border: 1px solid rgba(0, 0, 0, 0.15);
+                border-radius: 4px;
+                padding: 1px 6px;
+                font-size: 11px;
+                font-weight: 600;
+                color: {text_col};
+                height: 22px;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(255, 255, 255, 0.95);
+                border: 1px solid rgba(0, 0, 0, 0.35);
+            }}
+        """
+        self._icon_btn_style = f"""
+            QPushButton {{
+                background-color: rgba(255, 255, 255, 0.7);
+                border: 1px solid rgba(0, 0, 0, 0.15);
+                border-radius: 4px;
+                padding: 0px;
+                font-size: 11px;
+                font-weight: 600;
+                color: {text_col};
+                text-align: center;
+                width: 22px;
+                height: 22px;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(255, 255, 255, 0.95);
+                border: 1px solid rgba(0, 0, 0, 0.35);
+            }}
+        """
+        self.view_mode_btn.setStyleSheet(self._icon_btn_style)
+        self.pin_btn.setStyleSheet(self._icon_btn_style)
+        self.collapse_btn.setStyleSheet(self._icon_btn_style)
+        self.close_btn.setStyleSheet(self._icon_btn_style)
+        self._update_header_mode(force=True)
+
+    def _update_header_mode(self, force: bool = False) -> None:
+        is_narrow = self.width() < 480
+        if not force and getattr(self, "_header_is_narrow", None) == is_narrow:
+            return
+        self._header_is_narrow = is_narrow
+
+        txt_style = getattr(self, "_text_btn_style", "")
+        if is_narrow:
+            self.count_badge.hide()
+            self.add_memo_btn.hide()
+            self.open_all_btn.hide()
+            self.close_all_btn.hide()
+        else:
+            self.count_badge.show()
+            self.add_memo_btn.show()
+            self.open_all_btn.show()
+            self.close_all_btn.show()
+
+            self.add_memo_btn.setText("+ 메모")
+            self.add_memo_btn.setFixedHeight(22)
+            if txt_style:
+                self.add_memo_btn.setStyleSheet(txt_style)
+
+            self.open_all_btn.setText("모두 열기")
+            self.open_all_btn.setFixedHeight(22)
+            if txt_style:
+                self.open_all_btn.setStyleSheet(txt_style)
+
+            self.close_all_btn.setText("모두 닫기")
+            self.close_all_btn.setFixedHeight(22)
+            if txt_style:
+                self.close_all_btn.setStyleSheet(txt_style)
+
+    def update_open_statuses(self) -> None:
+        parent = self._owner_window
+        if not parent:
+            return
+        active_ids = set()
+        if hasattr(parent, "_active_memo_dialogs"):
+            for k, dlg in parent._active_memo_dialogs.items():
+                if dlg and getattr(dlg, "entry", None) and dlg.entry.entry_id:
+                    if dlg.isVisible():
+                        active_ids.add(dlg.entry.entry_id)
+        for card in getattr(self, "_cards", []):
+            if hasattr(card, "entry") and card.entry and card.entry.entry_id:
+                card.set_open_on_desktop(card.entry.entry_id in active_ids)
+
+    def update_memo_content(self, entry: CalendarEntry) -> None:
+        if entry is None or getattr(entry, "entry_id", None) is None:
+            return
+        for card in getattr(self, "_cards", []):
+            card_entry = getattr(card, "entry", None)
+            if card_entry is not None and card_entry.entry_id == entry.entry_id:
+                card.update_content(entry)
+                return
+
+    def _update_preview_visibility(self) -> None:
+        hide_preview = self.width() < 300
+        if self._preview_hidden == hide_preview:
+            return
+        self._preview_hidden = hide_preview
+        for card in getattr(self, "_cards", []):
+            if hasattr(card, "set_preview_visible"):
+                card.set_preview_visible(not hide_preview)
+
+    def _realign_cards_on_resize(self) -> None:
+        if self.view_mode == "list":
+            return
+        cards = getattr(self, "_cards", [])
+        if not cards:
+            return
+        cols = max(1, (self.width() - 28) // 115)
+        if cols == getattr(self, "_current_cols", None):
+            return
+        self._current_cols = cols
+
+        self.cards_container.setUpdatesEnabled(False)
+        try:
+            for r in range(self.cards_grid.rowCount()):
+                self.cards_grid.setRowStretch(r, 0)
+            for c in range(self.cards_grid.columnCount()):
+                self.cards_grid.setColumnStretch(c, 0)
+
+            while self.cards_grid.count():
+                self.cards_grid.takeAt(0)
+
+            for i, card in enumerate(cards):
+                row = i // cols
+                col = i % cols
+                self.cards_grid.addWidget(card, row, col, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+
+            total_rows = (len(cards) + cols - 1) // cols
+            self.cards_grid.setRowStretch(total_rows, 1)
+        finally:
+            self.cards_container.setUpdatesEnabled(True)
+
+    def refresh_memos(self) -> None:
+        # Clear existing grid items and detach immediately
+        while self.cards_grid.count():
+            item = self.cards_grid.takeAt(0)
+            w = item.widget()
+            if w:
+                w.setParent(None)
+                w.deleteLater()
+        self._cards = []
+
+        for r in range(self.cards_grid.rowCount()):
+            self.cards_grid.setRowStretch(r, 0)
+        for c in range(self.cards_grid.columnCount()):
+            self.cards_grid.setColumnStretch(c, 0)
+
+        parent = self._owner_window
+        if not parent or not hasattr(parent, "repository"):
+            return
+
+        db_memos = parent._ordered_memos(parent.repository.list_memos()) if hasattr(parent, "_ordered_memos") else parent.repository.list_memos()
+        active_entries = {}
+        active_ids = set()
+        if hasattr(parent, "_active_memo_dialogs"):
+            for k, dlg in parent._active_memo_dialogs.items():
+                if dlg and getattr(dlg, "entry", None) and dlg.entry.entry_id:
+                    active_entries[dlg.entry.entry_id] = dlg.entry
+                    if dlg.isVisible():
+                        active_ids.add(dlg.entry.entry_id)
+
+        memos = []
+        for m in db_memos:
+            live_entry = active_entries.get(m.entry_id, m)
+            if getattr(live_entry, "memo_group", "") == self.group_id:
+                memos.append(live_entry)
+
+        self._current_memos = memos
+        self.count_badge.setText(f"{len(memos)}개")
+
+        if not memos:
+            empty_lbl = QLabel("그룹에 속한 메모가 없습니다.\n\n상단의 [+ 메모]를 누르거나\n기존 메모 우클릭으로 이 그룹을 지정하세요.")
+            empty_lbl.setAlignment(Qt.AlignCenter)
+            empty_lbl.setStyleSheet("font-size: 12px; color: rgba(0,0,0,0.45); padding: 40px 10px; line-height: 1.5; background: transparent;")
+            self.cards_grid.addWidget(empty_lbl, 0, 0)
+            return
+
+        if self.view_mode == "list":
+            self.cards_grid.setAlignment(Qt.AlignTop)
+            self.cards_grid.setSpacing(6)
+            self.cards_grid.setColumnStretch(0, 1)
+            if hasattr(self, "cards_container") and hasattr(self, "scroll") and self.scroll.viewport():
+                vp_w = self.scroll.viewport().width()
+                if vp_w > 0:
+                    self.cards_container.setMaximumWidth(vp_w)
+            for i, memo in enumerate(memos):
+                is_open = memo.entry_id in active_ids
+                card = MiniMemoCardWidget(memo, is_open_on_desktop=is_open, view_mode="list", parent=self.cards_container)
+                card.clicked.connect(self._on_card_clicked)
+                card.doubleClicked.connect(self._on_card_double_clicked)
+                card.reordered.connect(self._on_memo_reordered)
+                card.requestToggleOpen.connect(self._on_card_toggle_open)
+                card.requestRemoveFromGroup.connect(self._on_card_remove_group)
+                card.requestDeleteMemo.connect(self._on_card_delete_memo)
+                self.cards_grid.addWidget(card, i, 0)
+                self._cards.append(card)
+            self.cards_grid.setRowStretch(len(memos), 1)
+        else:
+            self.cards_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+            self.cards_grid.setSpacing(8)
+            cols = max(1, (self.width() - 28) // 115)
+            self._current_cols = cols
+            for i, memo in enumerate(memos):
+                is_open = memo.entry_id in active_ids
+                card = MiniMemoCardWidget(memo, is_open_on_desktop=is_open, view_mode="card", parent=self.cards_container)
+                card.clicked.connect(self._on_card_clicked)
+                card.doubleClicked.connect(self._on_card_double_clicked)
+                card.reordered.connect(self._on_memo_reordered)
+                card.requestToggleOpen.connect(self._on_card_toggle_open)
+                card.requestRemoveFromGroup.connect(self._on_card_remove_group)
+                card.requestDeleteMemo.connect(self._on_card_delete_memo)
+                row = i // cols
+                col = i % cols
+                self.cards_grid.addWidget(card, row, col, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+                self._cards.append(card)
+            total_rows = (len(memos) + cols - 1) // cols
+            self.cards_grid.setRowStretch(total_rows, 1)
+
+        self._preview_hidden = None
+        self._update_preview_visibility()
+
+    def _on_memo_reordered(self, source_id: int, target_id: int, before: bool) -> None:
+        parent = self._owner_window
+        if not parent or not hasattr(parent, "repository"):
+            return
+        source_id = int(source_id)
+        target_id = int(target_id)
+        source_entry = parent.repository.get_entry(source_id)
+        if source_entry and getattr(source_entry, "memo_group", "") != self.group_id:
+            source_entry.memo_group = self.group_id
+            parent.repository.upsert_entry(source_entry)
+            parent.repository.save()
+        if hasattr(parent, "_on_memo_card_reordered"):
+            parent._on_memo_card_reordered(source_id, target_id, before)
+        self.refresh_memos()
+
+    def _on_card_clicked(self, entry: CalendarEntry) -> None:
+        self._open_memo(entry)
+
+    def _on_card_double_clicked(self, entry: CalendarEntry) -> None:
+        self._open_memo(entry)
+
+    def _open_memo(self, entry: CalendarEntry) -> None:
+        if self._owner_window and hasattr(self._owner_window, "_edit_entry"):
+            self._owner_window._edit_entry(EntryType.MEMO, entry)
+            self.update_open_statuses()
+
+    def _on_card_toggle_open(self, entry: CalendarEntry) -> None:
+        parent = self._owner_window
+        if not parent or not hasattr(parent, "_active_memo_dialogs"):
+            return
+        key = int(entry.entry_id) if entry.entry_id is not None else None
+        if key in parent._active_memo_dialogs:
+            dlg = parent._active_memo_dialogs.get(key)
+            if dlg and dlg.isVisible():
+                dlg.close()
+            else:
+                self._open_memo(entry)
+        else:
+            self._open_memo(entry)
+        self.update_open_statuses()
+
+    def _on_card_remove_group(self, entry: CalendarEntry) -> None:
+        parent = self._owner_window
+        if parent and hasattr(parent, "repository"):
+            entry.memo_group = ""
+            parent.repository.upsert_entry(entry)
+            parent.repository.save()
+            self.refresh_memos()
+
+    def _on_card_delete_memo(self, entry: CalendarEntry) -> None:
+        parent = self._owner_window
+        if parent and hasattr(parent, "repository") and entry.entry_id:
+            if QMessageBox.question(self, "메모 삭제", f"'{entry.title or '메모'}'를 삭제할까요?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+                parent.repository.delete_entry(entry.entry_id)
+                parent.repository.save()
+                if hasattr(parent, "_active_memo_dialogs") and entry.entry_id in parent._active_memo_dialogs:
+                    dlg = parent._active_memo_dialogs.pop(entry.entry_id)
+                    dlg.close()
+                self.refresh_memos()
+
+    def _on_add_memo_clicked(self) -> None:
+        parent = self._owner_window
+        if parent and hasattr(parent, "_edit_entry"):
+            from taskcalendar.models import CalendarEntry, EntryType
+            new_memo = CalendarEntry(EntryType.MEMO, title="새 메모", memo_group=self.group_id)
+            saved = parent.repository.upsert_entry(new_memo)
+            parent.repository.save()
+            parent._edit_entry(EntryType.MEMO, saved)
+            self.refresh_memos()
+
+    def _open_all_memos(self) -> None:
+        parent = self._owner_window
+        if not parent or not hasattr(parent, "repository"):
+            return
+        memos = [m for m in parent.repository.list_memos() if getattr(m, "memo_group", "") == self.group_id]
+        if not memos:
+            return
+        setattr(parent, "_batch_updating_memos", True)
+        self.setUpdatesEnabled(False)
+        try:
+            for m in memos:
+                parent._edit_entry(EntryType.MEMO, m)
+        finally:
+            setattr(parent, "_batch_updating_memos", False)
+            self.setUpdatesEnabled(True)
+        if hasattr(parent, "_sync_open_memo_ids"):
+            parent._sync_open_memo_ids(persist=True)
+        if hasattr(parent, "_refresh_all_group_dialogs"):
+            parent._refresh_all_group_dialogs(status_only=True)
+        else:
+            self.update_open_statuses()
+
+    def _close_all_memos(self) -> None:
+        parent = self._owner_window
+        if not parent or not hasattr(parent, "_active_memo_dialogs"):
+            return
+        memos = [m for m in parent.repository.list_memos() if getattr(m, "memo_group", "") == self.group_id]
+        if not memos:
+            return
+        setattr(parent, "_batch_updating_memos", True)
+        self.setUpdatesEnabled(False)
+        try:
+            for m in memos:
+                if m.entry_id in parent._active_memo_dialogs:
+                    dlg = parent._active_memo_dialogs[m.entry_id]
+                    if dlg and dlg.isVisible():
+                        dlg.close()
+        finally:
+            setattr(parent, "_batch_updating_memos", False)
+            self.setUpdatesEnabled(True)
+        if hasattr(parent, "_sync_open_memo_ids"):
+            parent._sync_open_memo_ids(persist=True)
+        if hasattr(parent, "refresh"):
+            try:
+                parent.refresh()
+            except Exception:
+                pass
+        if hasattr(parent, "_refresh_all_group_dialogs"):
+            parent._refresh_all_group_dialogs(status_only=True)
+        else:
+            self.update_open_statuses()
+
+    def _on_title_changed(self, new_title: str) -> None:
+        self.group_title = new_title.strip() or "새 그룹"
+        self.group_dict["title"] = self.group_title
+        self._save_group_state()
+
+    def _update_view_mode_btn(self) -> None:
+        if self.view_mode == "card":
+            self.view_mode_btn.setIcon(QIcon(str(asset_path("view_list.svg"))))
+            self.view_mode_btn.setToolTip("한줄 목록으로 보기")
+        else:
+            self.view_mode_btn.setIcon(QIcon(str(asset_path("view_grid.svg"))))
+            self.view_mode_btn.setToolTip("카드형으로 보기")
+
+    def _update_pin_btn(self) -> None:
+        if self._is_floating:
+            self.pin_btn.setIcon(QIcon(str(asset_path("pin_active.svg"))))
+            self.pin_btn.setToolTip("항상 위에 고정 해제")
+        else:
+            self.pin_btn.setIcon(QIcon(str(asset_path("pin_inactive.svg"))))
+            self.pin_btn.setToolTip("항상 위에 고정")
+
+    def _update_collapse_btn(self) -> None:
+        if getattr(self, "_is_collapsed", False):
+            self.collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg"))))
+        else:
+            self.collapse_btn.setIcon(QIcon(str(asset_path("memo_minimize.svg"))))
+
+    def _toggle_pin(self) -> None:
+        self._is_floating = not self._is_floating
+        self.group_dict["is_floating"] = self._is_floating
+        self._set_topmost_native(self._is_floating)
+        self._update_pin_btn()
+        self._save_group_state()
+
+    def _toggle_collapse(self) -> None:
+        self._is_collapsed = not self._is_collapsed
+        if self._is_collapsed:
+            self._expanded_height = self.height()
+            self.content_wrap.hide()
+            self.setFixedHeight(36)
+        else:
+            self.content_wrap.show()
+            self.setMinimumHeight(180)
+            self.setMaximumHeight(16777215)
+            self.resize(self.width(), max(180, self._expanded_height))
+        self._update_collapse_btn()
+        self._apply_theme(self.group_color)
+        self._save_group_state()
+
+    def paintEvent(self, event) -> None:
+        opt = QStyleOption()
+        opt.initFrom(self)
+        painter = QStylePainter(self)
+        painter.drawPrimitive(QStyle.PrimitiveElement.PE_Widget, opt)
+        super().paintEvent(event)
+
+        if not getattr(self, "_is_collapsed", False):
+            p = QPainter(self)
+            theme = MEMO_THEMES.get(getattr(self, "group_color", "yellow"), MEMO_THEMES["yellow"])
+            grip_color = QColor(theme.get("border", "#d5c880"))
+            p.setPen(QPen(grip_color, 1.5))
+            w = self.width()
+            h = self.height()
+            p.drawLine(w - 4, h - 14, w - 14, h - 4)
+            p.drawLine(w - 4, h - 10, w - 10, h - 4)
+            p.drawLine(w - 4, h - 6, w - 6, h - 4)
+
+    def _toggle_view_mode(self) -> None:
+        self.view_mode = "list" if self.view_mode == "card" else "card"
+        self.group_dict["view_mode"] = self.view_mode
+        self._update_view_mode_btn()
+        if hasattr(self, "cards_container") and hasattr(self, "scroll") and self.scroll.viewport():
+            if self.view_mode == "list":
+                vp_w = self.scroll.viewport().width()
+                if vp_w > 0:
+                    self.cards_container.setMaximumWidth(vp_w)
+            else:
+                self.cards_container.setMaximumWidth(16777215)
+        self._save_group_state()
+        self.refresh_memos()
+
+    def _save_group_state(self) -> None:
+        parent = self._owner_window
+        if parent and hasattr(parent, "repository"):
+            curr_geo = self.geometry()
+            h_val = getattr(self, "_expanded_height", curr_geo.height()) if self._is_collapsed else curr_geo.height()
+            self.group_dict["geo"] = f"{curr_geo.x()},{curr_geo.y()},{curr_geo.width()},{h_val}"
+            self.group_dict["color"] = self.group_color
+            self.group_dict["is_floating"] = self._is_floating
+            self.group_dict["view_mode"] = self.view_mode
+            self.group_dict["is_collapsed"] = self._is_collapsed
+            parent.repository.upsert_memo_group(self.group_dict)
+            parent.repository.save()
+
+    def _set_topmost_native(self, topmost: bool) -> None:
+        try:
+            hwnd = int(self.winId())
+            user32 = ctypes.windll.user32
+            HWND_TOPMOST = ctypes.c_void_p(-1)
+            HWND_NOTOPMOST = ctypes.c_void_p(-2)
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            user32.SetWindowPos(
+                ctypes.c_void_p(hwnd),
+                HWND_TOPMOST if topmost else HWND_NOTOPMOST,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+            )
+        except Exception:
+            pass
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_header_mode()
+        if hasattr(self, "cards_container") and hasattr(self, "scroll") and self.scroll.viewport():
+            if self.view_mode == "list":
+                vp_w = self.scroll.viewport().width()
+                if vp_w > 0:
+                    self.cards_container.setMaximumWidth(vp_w)
+            else:
+                self.cards_container.setMaximumWidth(16777215)
+        self._update_preview_visibility()
+        self._realign_cards_on_resize()
+
+    def _other_window_geometries(self) -> list[QRect]:
+        geos: list[QRect] = []
+        parent = self._owner_window
+        if not parent:
+            return geos
+        for attr in ("_active_group_dialogs", "_active_memo_dialogs"):
+            dialogs = getattr(parent, attr, None)
+            if not dialogs:
+                continue
+            for dlg in list(dialogs.values()):
+                if dlg is not None and dlg is not self and dlg.isVisible():
+                    geos.append(dlg.geometry())
+        return geos
+
+    def _screen_geometry(self) -> QRect:
+        screen = self.screen()
+        return screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+
+    def _start_window_drag(self, global_pos: QPoint) -> None:
+        self._drag_pos = global_pos - self.frameGeometry().topLeft()
+
+    def _perform_window_drag(self, global_pos: QPoint) -> None:
+        if hasattr(self, "_drag_pos") and self._drag_pos is not None:
+            target_pos = global_pos - self._drag_pos
+            curr_geo = QRect(target_pos, self.size())
+            snapped_pos = snap_window_rect(curr_geo, self._other_window_geometries(), self._screen_geometry(), threshold=16)
+            self.move(snapped_pos)
+
+    def _end_window_drag(self) -> None:
+        if hasattr(self, "_drag_pos") and self._drag_pos is not None:
+            self._drag_pos = None
+            self._save_group_state()
+
+    def _get_resize_direction(self, global_pos: QPoint) -> str | None:
+        local_pos = self.mapFromGlobal(global_pos)
+        w = self.width()
+        h = self.height()
+        border = 10
+
+        if not (0 <= local_pos.x() <= w and 0 <= local_pos.y() <= h):
+            return None
+
+        if getattr(self, "_is_collapsed", False):
+            if local_pos.x() >= w - border:
+                return "r"
+            elif local_pos.x() <= border:
+                return "l"
+            return None
+
+        # Corners
+        if local_pos.x() >= w - border and local_pos.y() >= h - border:
+            return "br"
+        if local_pos.x() <= border and local_pos.y() >= h - border:
+            return "bl"
+
+        # Edges
+        if local_pos.x() >= w - border:
+            return "r"
+        if local_pos.x() <= border:
+            return "l"
+        if local_pos.y() >= h - border:
+            return "b"
+
+        return None
+
+    def _perform_resize(self, global_pos: QPoint) -> None:
+        if not self._resize_dir:
+            return
+        delta = global_pos - self._initial_mouse_pos
+        geom = QRect(self._initial_geometry)
+
+        if self._resize_dir == "r":
+            geom.setWidth(max(250, geom.width() + delta.x()))
+        elif self._resize_dir == "l":
+            new_w = max(250, geom.width() - delta.x())
+            new_x = geom.right() - new_w
+            geom.setX(new_x)
+            geom.setWidth(new_w)
+        elif self._resize_dir == "b" and not self._is_collapsed:
+            geom.setHeight(max(180, geom.height() + delta.y()))
+        elif self._resize_dir == "br" and not self._is_collapsed:
+            geom.setWidth(max(250, geom.width() + delta.x()))
+            geom.setHeight(max(180, geom.height() + delta.y()))
+        elif self._resize_dir == "bl" and not self._is_collapsed:
+            new_w = max(250, geom.width() - delta.x())
+            new_x = geom.right() - new_w
+            geom.setX(new_x)
+            geom.setWidth(new_w)
+            geom.setHeight(max(180, geom.height() + delta.y()))
+
+        geom = snap_resize_rect(
+            geom,
+            self._resize_dir,
+            self._other_window_geometries(),
+            self._screen_geometry(),
+            threshold=16,
+        )
+        if geom.width() < 250:
+            geom.setWidth(250)
+        if not self._is_collapsed and geom.height() < 180:
+            geom.setHeight(180)
+
+        self.setGeometry(geom)
+        if not self._is_collapsed:
+            self._expanded_height = geom.height()
+
+    def eventFilter(self, watched, event) -> bool:
+        # 1. Resize & Hover cursor handling across all watched widgets
+        if event.type() == QEvent.Type.MouseMove:
+            if event.buttons() & Qt.MouseButton.LeftButton:
+                if self._resize_dir:
+                    self._perform_resize(event.globalPosition().toPoint())
+                    return True
+                elif hasattr(self, "_drag_pos") and self._drag_pos is not None:
+                    self._perform_window_drag(event.globalPosition().toPoint())
+                    return True
+            else:
+                r_dir = self._get_resize_direction(event.globalPosition().toPoint())
+                if r_dir in ("r", "l"):
+                    watched.setCursor(Qt.CursorShape.SizeHorCursor)
+                elif r_dir == "b":
+                    watched.setCursor(Qt.CursorShape.SizeVerCursor)
+                elif r_dir == "br":
+                    watched.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                elif r_dir == "bl":
+                    watched.setCursor(Qt.CursorShape.SizeBDiagCursor)
+                else:
+                    watched.unsetCursor()
+
+        elif event.type() == QEvent.Type.MouseButtonPress:
+            if event.button() == Qt.MouseButton.LeftButton:
+                r_dir = self._get_resize_direction(event.globalPosition().toPoint())
+                if r_dir:
+                    self._resize_dir = r_dir
+                    self._initial_geometry = self.geometry()
+                    self._initial_mouse_pos = event.globalPosition().toPoint()
+                    return True
+
+        elif event.type() == QEvent.Type.MouseButtonRelease:
+            if event.button() == Qt.MouseButton.LeftButton:
+                if self._resize_dir:
+                    self._resize_dir = None
+                    self._save_group_state()
+                    return True
+
+        # 2. Header drag and context menu
+        header_targets = (getattr(self, "header", None), getattr(self, "icon_lbl", None), getattr(self, "count_badge", None))
+        if watched in header_targets:
+            if event.type() == QEvent.Type.MouseButtonPress:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    r_dir = self._get_resize_direction(event.globalPosition().toPoint())
+                    if not r_dir:
+                        self._start_window_drag(event.globalPosition().toPoint())
+                        return True
+                elif event.button() == Qt.MouseButton.RightButton:
+                    self._show_context_menu(event.globalPosition().toPoint())
+                    return True
+            elif event.type() == QEvent.Type.MouseButtonRelease:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self._end_window_drag()
+                    return True
+
+        # 3. Drag-and-drop reordering
+        drop_targets = (getattr(self, "cards_container", None), getattr(self, "scroll", None))
+        if watched in drop_targets:
+            if event.type() in (QEvent.Type.DragEnter, QEvent.Type.DragMove):
+                if event.mimeData().hasFormat(MiniMemoCardWidget._MIME_TYPE):
+                    event.acceptProposedAction()
+                    return True
+            elif event.type() == QEvent.Type.Drop:
+                data = event.mimeData().data(MiniMemoCardWidget._MIME_TYPE)
+                if data:
+                    try:
+                        source_id = int(bytes(data).decode("utf-8"))
+                        memos = getattr(self, "_current_memos", [])
+                        if memos:
+                            last_id = int(memos[-1].entry_id)
+                            if source_id != last_id:
+                                self._on_memo_reordered(source_id, last_id, before=False)
+                            else:
+                                self.refresh_memos()
+                        else:
+                            parent = self._owner_window
+                            if parent and hasattr(parent, "repository"):
+                                source_entry = parent.repository.get_entry(source_id)
+                                if source_entry:
+                                    source_entry.memo_group = self.group_id
+                                    parent.repository.upsert_entry(source_entry)
+                                    parent.repository.save()
+                                    self.refresh_memos()
+                        event.acceptProposedAction()
+                        return True
+                    except Exception:
+                        pass
+
+        return super().eventFilter(watched, event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.RightButton:
+            self._show_context_menu(event.globalPosition().toPoint())
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton:
+            r_dir = self._get_resize_direction(event.globalPosition().toPoint())
+            if r_dir:
+                self._resize_dir = r_dir
+                self._initial_geometry = self.geometry()
+                self._initial_mouse_pos = event.globalPosition().toPoint()
+                event.accept()
+                return
+
+            if event.position().toPoint().y() <= 36:
+                self._start_window_drag(event.globalPosition().toPoint())
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            if self._resize_dir:
+                self._perform_resize(event.globalPosition().toPoint())
+                event.accept()
+                return
+            elif hasattr(self, "_drag_pos") and self._drag_pos is not None:
+                self._perform_window_drag(event.globalPosition().toPoint())
+                event.accept()
+                return
+        else:
+            r_dir = self._get_resize_direction(event.globalPosition().toPoint())
+            if r_dir in ("r", "l"):
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
+            elif r_dir == "b":
+                self.setCursor(Qt.CursorShape.SizeVerCursor)
+            elif r_dir == "br":
+                self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+            elif r_dir == "bl":
+                self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+            else:
+                self.unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        was_resizing = self._resize_dir is not None
+        self._resize_dir = None
+        self._end_window_drag()
+        if was_resizing:
+            self._save_group_state()
+        super().mouseReleaseEvent(event)
+
+    def closeEvent(self, event) -> None:
+        self._save_group_state()
+        parent = self._owner_window
+        if parent and getattr(parent, "_is_app_quitting", False):
+            super().closeEvent(event)
+            return
+        if parent and hasattr(parent, "_active_group_dialogs") and self.group_id in parent._active_group_dialogs:
+            parent._active_group_dialogs.pop(self.group_id, None)
+            if hasattr(parent, "_sync_open_group_ids"):
+                parent._sync_open_group_ids(persist=True)
+        super().closeEvent(event)
+
+    def _show_context_menu(self, global_pos: QPoint) -> None:
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #d0d5dd;
+                padding: 4px 0px;
+                border-radius: 6px;
+            }
+            QMenu::item {
+                padding: 6px 20px 6px 16px;
+                font-size: 12px;
+                color: #222222;
+            }
+            QMenu::item:selected {
+                background-color: #f1f5f9;
+                color: #0f172a;
+            }
+        """)
+        add_act = menu.addAction("➕ 새 메모 추가")
+        add_act.triggered.connect(self._on_add_memo_clicked)
+        menu.addSeparator()
+
+        open_act = menu.addAction("👁️ 모든 메모 열기")
+        open_act.triggered.connect(self._open_all_memos)
+        close_act = menu.addAction("📁 모든 메모 닫기")
+        close_act.triggered.connect(self._close_all_memos)
+        menu.addSeparator()
+
+        mode_text = "📋 한줄 목록으로 보기" if self.view_mode == "card" else "🗂️ 카드형으로 보기"
+        mode_act = menu.addAction(mode_text)
+        mode_act.triggered.connect(self._toggle_view_mode)
+        menu.addSeparator()
+
+        color_menu = menu.addMenu("🎨 그룹 색상 변경")
+        color_menu.setStyleSheet(menu.styleSheet())
+        for k, th in MEMO_THEMES.items():
+            act = color_menu.addAction(th['name'])
+            act.triggered.connect(lambda _=False, key=k: (self._apply_theme(key), self._save_group_state()))
+
+        pin_act = menu.addAction("📌 항상 위에 고정")
+        pin_act.setCheckable(True)
+        pin_act.setChecked(self._is_floating)
+        pin_act.triggered.connect(self._toggle_pin)
+
+        menu.addSeparator()
+        del_act = menu.addAction("🗑️ 그룹 삭제")
+        del_act.triggered.connect(self._on_delete_group)
+
+        menu.exec(global_pos)
+
+    def _on_delete_group(self) -> None:
+        parent = self._owner_window
+        if not parent or not hasattr(parent, "repository"):
+            return
+        reply = QMessageBox.question(
+            self,
+            "그룹 삭제",
+            f"'{self.group_title}' 그룹을 삭제할까요?\n\n(그룹에 속한 메모들은 삭제되지 않고 그룹 지정만 해제됩니다.)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            parent.repository.delete_memo_group(self.group_id, delete_memos=False)
+            self.close()
+            if hasattr(parent, "refresh"):
+                parent.refresh()
+            if hasattr(parent, "_refresh_all_group_dialogs"):
+                parent._refresh_all_group_dialogs()
+
+
 class EntryViewDialog(QDialog):
     def __init__(
         self,
@@ -2886,10 +4798,12 @@ class EntryViewDialog(QDialog):
             h_layout.addWidget(title_label)
             h_layout.addStretch(1)
 
-            close_btn = QPushButton("✕")
+            close_btn = QPushButton()
+            close_btn.setIcon(QIcon(str(asset_path("memo_close.svg"))))
+            close_btn.setIconSize(QSize(11, 11))
             close_btn.setFixedSize(20, 20)
             close_btn.setCursor(Qt.PointingHandCursor)
-            close_btn.setStyleSheet("background: transparent; border: none; font-weight: bold; color: #5a5120; font-size: 13px;")
+            close_btn.setStyleSheet("background: transparent; border: none;")
             close_btn.clicked.connect(self.reject)
             h_layout.addWidget(close_btn)
 
@@ -3276,6 +5190,14 @@ class SettingsDialog(QDialog):
         initial_tab: str = "general",
         show_lunar_calendar: bool = True,
         show_solar_terms: bool = True,
+        lunar_display_frequency: str = "all",
+        memo_default_color: str = "yellow",
+        memo_show_attachment_bar: bool = True,
+        memo_default_floating: bool = False,
+        memo_default_opacity: int = 100,
+        memo_default_size: str = "380,360",
+        memo_default_font_size: int = 11,
+        memo_title_only: bool = False,
     ) -> None:
         super().__init__(parent)
         self._db_path = db_path
@@ -3433,8 +5355,9 @@ class SettingsDialog(QDialog):
         items = [
             ("⚙️ 기본", 0),
             ("🎨 스킨", 1),
-            ("⌨️ 단축키", 2),
-            ("💾 데이터", 3),
+            ("📝 메모", 2),
+            ("⌨️ 단축키", 3),
+            ("💾 데이터", 4),
         ]
         for label, idx in items:
             item = QListWidgetItem(label)
@@ -3467,12 +5390,52 @@ class SettingsDialog(QDialog):
         self.hide_completed_on_calendar_check = QCheckBox("달력에서 완료 일정 숨기기")
         self.hide_completed_on_calendar_check.setChecked(hide_completed_on_calendar)
         behavior_layout.addWidget(self.hide_completed_on_calendar_check)
+        lunar_row = QHBoxLayout()
+        lunar_row.setContentsMargins(0, 0, 0, 0)
+        lunar_row.setSpacing(10)
         self.show_lunar_check = QCheckBox("캘린더에 음력 날짜 표시")
         self.show_lunar_check.setChecked(show_lunar_calendar)
-        behavior_layout.addWidget(self.show_lunar_check)
+        lunar_row.addWidget(self.show_lunar_check)
+
+        lunar_freq_label = QLabel("표시 주기:")
+        lunar_freq_label.setObjectName("muted")
+        lunar_row.addWidget(lunar_freq_label)
+
+        self.lunar_freq_combo = QComboBox()
+        self.lunar_freq_combo.addItem("매일 (모든 날)", "all")
+        self.lunar_freq_combo.addItem("1주일 간격 (매주 일요일)", "weekly")
+        self.lunar_freq_combo.addItem("양력 1일만 (매달 1일)", "monthly_1st")
+        self.lunar_freq_combo.addItem("음력 1일만 (초하루)", "lunar_1st")
+        self.lunar_freq_combo.addItem("음력 1일·15일만 (초하루/보름)", "lunar_1st_15th")
+        self.lunar_freq_combo.addItem("10일 간격 (1일, 11일, 21일)", "ten_days")
+
+        freq_idx = self.lunar_freq_combo.findData(lunar_display_frequency)
+        if freq_idx >= 0:
+            self.lunar_freq_combo.setCurrentIndex(freq_idx)
+        else:
+            self.lunar_freq_combo.setCurrentIndex(0)
+        self.lunar_freq_combo.setEnabled(show_lunar_calendar)
+        lunar_freq_label.setEnabled(show_lunar_calendar)
+
+        def _on_lunar_toggled(checked: bool) -> None:
+            self.lunar_freq_combo.setEnabled(checked)
+            lunar_freq_label.setEnabled(checked)
+
+        self.show_lunar_check.toggled.connect(_on_lunar_toggled)
+        self.lunar_freq_combo.setFixedWidth(190)
+        lunar_row.addWidget(self.lunar_freq_combo)
+        lunar_row.addStretch(1)
+        behavior_layout.addLayout(lunar_row)
         self.show_solar_terms_check = QCheckBox("캘린더에 24절기 표시")
         self.show_solar_terms_check.setChecked(show_solar_terms)
         behavior_layout.addWidget(self.show_solar_terms_check)
+
+        intro_btn = QPushButton("💡 기능 안내 팝업 다시 보기")
+        intro_btn.setStyleSheet("padding: 5px 10px; font-size: 12px; margin-top: 4px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px;")
+        intro_btn.setCursor(Qt.PointingHandCursor)
+        intro_btn.clicked.connect(self._show_intro_guide)
+        behavior_layout.addWidget(intro_btn)
+
         pg_gen_layout.addWidget(behavior_card)
 
         info_card = QFrame()
@@ -3517,6 +5480,136 @@ class SettingsDialog(QDialog):
         pg_skin_layout.addStretch(1)
 
         self.pages.addWidget(page_skin)
+
+        page_memo = QWidget()
+        pg_memo_layout = QVBoxLayout(page_memo)
+        pg_memo_layout.setContentsMargins(0, 0, 0, 0)
+        pg_memo_layout.setSpacing(10)
+
+        # 1. 새 메모 기본 속성 카드
+        memo_card1 = QFrame()
+        memo_card1.setObjectName("card")
+        mc1_layout = QVBoxLayout(memo_card1)
+        mc1_layout.setContentsMargins(14, 12, 14, 12)
+        mc1_layout.setSpacing(8)
+
+        mc1_title = QLabel("새 메모 기본 속성")
+        mc1_title.setObjectName("sectionTitle")
+        mc1_layout.addWidget(mc1_title)
+
+        color_row = QHBoxLayout()
+        color_row.setContentsMargins(0, 0, 0, 0)
+        color_row.setSpacing(10)
+        color_label = QLabel("기본 색상:")
+        color_label.setObjectName("muted")
+        color_row.addWidget(color_label)
+
+        self.memo_default_color_combo = QComboBox()
+        self.memo_default_color_combo.addItem("🎲 랜덤 (무작위 생성)", "random")
+        self.memo_default_color_combo.addItem("💛 노랑 (기본)", "yellow")
+        self.memo_default_color_combo.addItem("💚 연두", "green")
+        self.memo_default_color_combo.addItem("💖 핑크", "pink")
+        self.memo_default_color_combo.addItem("💜 보라", "purple")
+        self.memo_default_color_combo.addItem("💙 하늘", "blue")
+        self.memo_default_color_combo.addItem("🤍 화이트", "white")
+        self.memo_default_color_combo.addItem("🖤 다크", "dark")
+
+        c_idx = self.memo_default_color_combo.findData(memo_default_color)
+        self.memo_default_color_combo.setCurrentIndex(c_idx if c_idx >= 0 else 1)
+        self.memo_default_color_combo.setFixedWidth(190)
+        color_row.addWidget(self.memo_default_color_combo)
+        color_row.addStretch(1)
+        mc1_layout.addLayout(color_row)
+
+        self.memo_show_attachment_bar_check = QCheckBox("하단 파일 첨부 및 이미지 바 기본 표시")
+        self.memo_show_attachment_bar_check.setChecked(memo_show_attachment_bar)
+        self.memo_show_attachment_bar_check.setToolTip("해제 시 첨부파일이 없는 새 메모에서 하단 바를 숨겨 심플하게 표시합니다 (우클릭 메뉴로 언제든 표시 가능).")
+        mc1_layout.addWidget(self.memo_show_attachment_bar_check)
+
+        self.memo_default_floating_check = QCheckBox("새 메모 생성 시 항상 위에 고정 (Topmost)")
+        self.memo_default_floating_check.setChecked(memo_default_floating)
+        self.memo_default_floating_check.setToolTip("새 메모를 만들 때 항상 다른 프로그램 창 위에 떠 있도록 핀을 기본으로 고정합니다.")
+        mc1_layout.addWidget(self.memo_default_floating_check)
+
+        opt_row = QHBoxLayout()
+        opt_row.setContentsMargins(0, 0, 0, 0)
+        opt_row.setSpacing(10)
+
+        op_label = QLabel("기본 투명도:")
+        op_label.setObjectName("muted")
+        opt_row.addWidget(op_label)
+
+        self.memo_default_opacity_combo = QComboBox()
+        self.memo_default_opacity_combo.addItem("100% (완전 불투명)", 100)
+        self.memo_default_opacity_combo.addItem("90%", 90)
+        self.memo_default_opacity_combo.addItem("80%", 80)
+        self.memo_default_opacity_combo.addItem("70%", 70)
+        self.memo_default_opacity_combo.addItem("60%", 60)
+        self.memo_default_opacity_combo.addItem("50% (반투명)", 50)
+        op_idx = self.memo_default_opacity_combo.findData(memo_default_opacity)
+        self.memo_default_opacity_combo.setCurrentIndex(op_idx if op_idx >= 0 else 0)
+        self.memo_default_opacity_combo.setFixedWidth(150)
+        opt_row.addWidget(self.memo_default_opacity_combo)
+
+        opt_row.addSpacing(16)
+
+        sz_label = QLabel("기본 크기:")
+        sz_label.setObjectName("muted")
+        opt_row.addWidget(sz_label)
+
+        self.memo_default_size_combo = QComboBox()
+        self.memo_default_size_combo.addItem("보통 (380 × 360)", "380,360")
+        self.memo_default_size_combo.addItem("작게 (300 × 280)", "300,280")
+        self.memo_default_size_combo.addItem("크게 (480 × 440)", "480,440")
+        self.memo_default_size_combo.addItem("와이드 (560 × 360)", "560,360")
+        sz_idx = self.memo_default_size_combo.findData(memo_default_size)
+        self.memo_default_size_combo.setCurrentIndex(sz_idx if sz_idx >= 0 else 0)
+        self.memo_default_size_combo.setFixedWidth(160)
+        opt_row.addWidget(self.memo_default_size_combo)
+        opt_row.addStretch(1)
+        mc1_layout.addLayout(opt_row)
+
+        pg_memo_layout.addWidget(memo_card1)
+
+        # 2. 메모 본문 및 사이드바 표시 카드
+        memo_card2 = QFrame()
+        memo_card2.setObjectName("card")
+        mc2_layout = QVBoxLayout(memo_card2)
+        mc2_layout.setContentsMargins(14, 12, 14, 12)
+        mc2_layout.setSpacing(8)
+
+        mc2_title = QLabel("메모 본문 및 사이드바 표시")
+        mc2_title.setObjectName("sectionTitle")
+        mc2_layout.addWidget(mc2_title)
+
+        font_row = QHBoxLayout()
+        font_row.setContentsMargins(0, 0, 0, 0)
+        font_row.setSpacing(10)
+        font_label = QLabel("본문 글꼴 크기:")
+        font_label.setObjectName("muted")
+        font_row.addWidget(font_label)
+
+        self.memo_default_font_size_combo = QComboBox()
+        self.memo_default_font_size_combo.addItem("작게 (9pt)", 9)
+        self.memo_default_font_size_combo.addItem("보통 (11pt)", 11)
+        self.memo_default_font_size_combo.addItem("크게 (13pt)", 13)
+        self.memo_default_font_size_combo.addItem("아주 크게 (15pt)", 15)
+        f_idx = self.memo_default_font_size_combo.findData(memo_default_font_size)
+        self.memo_default_font_size_combo.setCurrentIndex(f_idx if f_idx >= 0 else 1)
+        self.memo_default_font_size_combo.setFixedWidth(150)
+        font_row.addWidget(self.memo_default_font_size_combo)
+        font_row.addStretch(1)
+        mc2_layout.addLayout(font_row)
+
+        self.memo_title_only_check = QCheckBox("사이드바 메모 목록에서 제목만 간단히 표시 (본문 미리보기 숨김)")
+        self.memo_title_only_check.setChecked(memo_title_only)
+        self.memo_title_only_check.setToolTip("사이드바의 메모 리스트에서 본문 2줄 미리보기를 생략하고 콤팩트한 한줄 목록으로 표시합니다.")
+        mc2_layout.addWidget(self.memo_title_only_check)
+
+        pg_memo_layout.addWidget(memo_card2)
+        pg_memo_layout.addStretch(1)
+
+        self.pages.addWidget(page_memo)
 
         page_shortcuts = QWidget()
         pg_sc_layout = QVBoxLayout(page_shortcuts)
@@ -3765,12 +5858,14 @@ class SettingsDialog(QDialog):
 
         self.nav_list.currentRowChanged.connect(self.pages.setCurrentIndex)
         
-        if initial_tab == "shortcuts":
+        if initial_tab == "memo":
             self.nav_list.setCurrentRow(2)
+        elif initial_tab == "shortcuts":
+            self.nav_list.setCurrentRow(3)
+        elif initial_tab == "data":
+            self.nav_list.setCurrentRow(4)
         elif initial_tab == "skin":
             self.nav_list.setCurrentRow(1)
-        elif initial_tab == "data":
-            self.nav_list.setCurrentRow(3)
         else:
             self.nav_list.setCurrentRow(0)
 
@@ -3822,14 +5917,14 @@ class SettingsDialog(QDialog):
         cal_key_token = str(self.shortcut_key_combo.currentData())
         if not cal_modifiers and not (cal_key_token.startswith("F") and cal_key_token[1:].isdigit()):
             QMessageBox.warning(self, "입력 오류", "캘린더 단독 키는 F1~F12만 설정할 수 있습니다.")
-            self.nav_list.setCurrentRow(2)
+            self.nav_list.setCurrentRow(3)
             return
         cal_shortcut = "+".join(cal_modifiers + [cal_key_token]) if cal_modifiers else cal_key_token
         cal_available, cal_message = self._check_shortcut_availability(cal_shortcut, is_memo=False)
         if not cal_available:
             self.shortcut_status_label.setStyleSheet("color: #d15d48;")
             self.shortcut_status_label.setText(cal_message)
-            self.nav_list.setCurrentRow(2)
+            self.nav_list.setCurrentRow(3)
             QMessageBox.warning(self, "단축키 오류", f"캘린더 단축키 오류: {cal_message}")
             return
 
@@ -3843,20 +5938,20 @@ class SettingsDialog(QDialog):
         memo_key_token = str(self.memo_shortcut_key_combo.currentData())
         if not memo_modifiers and not (memo_key_token.startswith("F") and memo_key_token[1:].isdigit()):
             QMessageBox.warning(self, "입력 오류", "메모 단독 키는 F1~F12만 설정할 수 있습니다.")
-            self.nav_list.setCurrentRow(2)
+            self.nav_list.setCurrentRow(3)
             return
         memo_shortcut = "+".join(memo_modifiers + [memo_key_token]) if memo_modifiers else memo_key_token
         
         if normalize_shortcut(cal_shortcut) == normalize_shortcut(memo_shortcut):
             QMessageBox.warning(self, "단축키 중복", "캘린더 단축키와 메모 단축키는 서로 달라야 합니다.")
-            self.nav_list.setCurrentRow(2)
+            self.nav_list.setCurrentRow(3)
             return
 
         memo_available, memo_message = self._check_shortcut_availability(memo_shortcut, is_memo=True)
         if not memo_available:
             self.memo_shortcut_status_label.setStyleSheet("color: #d15d48;")
             self.memo_shortcut_status_label.setText(memo_message)
-            self.nav_list.setCurrentRow(2)
+            self.nav_list.setCurrentRow(3)
             QMessageBox.warning(self, "단축키 오류", f"메모 단축키 오류: {memo_message}")
             return
 
@@ -3872,9 +5967,21 @@ class SettingsDialog(QDialog):
             "auto_backup_interval_days": int(self.auto_backup_interval_combo.currentData() or 0),
             "auto_backup_keep_count": int(self.auto_backup_keep_combo.currentData() or 0),
             "show_lunar_calendar": self.show_lunar_check.isChecked(),
+            "lunar_display_frequency": str(self.lunar_freq_combo.currentData() or "all"),
             "show_solar_terms": self.show_solar_terms_check.isChecked(),
+            "memo_default_color": str(self.memo_default_color_combo.currentData() or "yellow"),
+            "memo_show_attachment_bar": self.memo_show_attachment_bar_check.isChecked(),
+            "memo_default_floating": self.memo_default_floating_check.isChecked(),
+            "memo_default_opacity": int(self.memo_default_opacity_combo.currentData() or 100),
+            "memo_default_size": str(self.memo_default_size_combo.currentData() or "380,360"),
+            "memo_default_font_size": int(self.memo_default_font_size_combo.currentData() or 11),
+            "memo_title_only": self.memo_title_only_check.isChecked(),
         }
         self.accept()
+
+    def _show_intro_guide(self) -> None:
+        dlg = WelcomeFeatureIntroDialog(self, is_dismissed=False)
+        dlg.exec()
 
     def _refresh_shortcut_status(self) -> None:
         modifiers: list[str] = []
@@ -4905,7 +7012,53 @@ class CivilComplaintCalculatorDialog(QDialog):
             QPushButton#primary:hover {
                 background: #196354;
             }
+            QToolButton#stepButton {
+                background: #ffffff;
+                border: 1px solid #cfd8e3;
+                border-radius: 6px;
+                padding: 0px;
+                font-size: 9px;
+                color: #344054;
+            }
+            QToolButton#stepButton:hover {
+                background: #f7fafc;
+            }
+            QToolButton#stepButton:pressed {
+                background: #eef2f6;
+            }
+            QToolButton:focus {
+                outline: none;
+            }
         """)
+
+    def _step_field(self, field: QAbstractSpinBox, button_width: int = 20, button_height: int = 14) -> QWidget:
+        wrap = QWidget()
+        layout = QHBoxLayout(wrap)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(field)
+
+        buttons = QWidget()
+        button_layout = QVBoxLayout(buttons)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(2)
+
+        up_button = QToolButton()
+        up_button.setObjectName("stepButton")
+        up_button.setText("▲")
+        up_button.setFixedSize(button_width, button_height)
+        up_button.clicked.connect(field.stepUp)
+
+        down_button = QToolButton()
+        down_button.setObjectName("stepButton")
+        down_button.setText("▼")
+        down_button.setFixedSize(button_width, button_height)
+        down_button.clicked.connect(field.stepDown)
+
+        button_layout.addWidget(up_button)
+        button_layout.addWidget(down_button)
+        layout.addWidget(buttons)
+        return wrap
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -4943,21 +7096,23 @@ class CivilComplaintCalculatorDialog(QDialog):
 
         dt_row.addWidget(QLabel("접수일:"))
         now = datetime.now()
-        self.recv_date_edit = QDateEdit(QDate(now.year, now.month, now.day))
+        self.recv_date_edit = OverwriteDateEdit(QDate(now.year, now.month, now.day))
         self.recv_date_edit.setDisplayFormat("yyyy-MM-dd")
         self.recv_date_edit.setCalendarPopup(True)
+        self.recv_date_edit.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.recv_date_edit.setFixedWidth(125)
         self.recv_date_edit.setFixedHeight(30)
         self.recv_date_edit.dateChanged.connect(self._recalculate)
         dt_row.addWidget(self.recv_date_edit)
 
         dt_row.addWidget(QLabel("접수시각:"))
-        self.recv_time_edit = QTimeEdit(QTime(now.hour, now.minute))
+        self.recv_time_edit = OverwriteTimeEdit(QTime(now.hour, now.minute))
         self.recv_time_edit.setDisplayFormat("HH:mm")
-        self.recv_time_edit.setFixedWidth(115)
+        self.recv_time_edit.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.recv_time_edit.setFixedWidth(65)
         self.recv_time_edit.setFixedHeight(30)
         self.recv_time_edit.timeChanged.connect(self._recalculate)
-        dt_row.addWidget(self.recv_time_edit)
+        dt_row.addWidget(self._step_field(self.recv_time_edit, 20, 14))
 
         now_btn = QPushButton("현재시각")
         now_btn.setToolTip("오늘 현재 일시로 재설정")
@@ -5031,10 +7186,11 @@ class CivilComplaintCalculatorDialog(QDialog):
         self.custom_spin = QSpinBox()
         self.custom_spin.setRange(1, 999)
         self.custom_spin.setValue(3)
-        self.custom_spin.setFixedWidth(95)
+        self.custom_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.custom_spin.setFixedWidth(55)
         self.custom_spin.setFixedHeight(28)
         self.custom_spin.valueChanged.connect(self._on_custom_changed)
-        direct_row.addWidget(self.custom_spin)
+        direct_row.addWidget(self._step_field(self.custom_spin, 20, 13))
 
         self.custom_unit_combo = QComboBox()
         self.custom_unit_combo.addItem("일 (영업일)", "days")
@@ -5248,6 +7404,145 @@ class CivilComplaintCalculatorDialog(QDialog):
             "description": desc_text,
         }
         self.accept()
+
+
+class WelcomeFeatureIntroDialog(QDialog):
+    def __init__(self, parent=None, is_dismissed: bool = False) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("TaskCalendar 기능 안내 & 팁")
+        self.setWindowIcon(_dialog_icon())
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.resize(520, 500)
+        self.open_settings_requested = False
+
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #f8fafc;
+                font-family: 'Segoe UI', 'Malgun Gothic';
+            }
+            QFrame#headerBox {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1e3a8a, stop:1 #3b82f6);
+                border-radius: 8px;
+                padding: 12px;
+            }
+            QLabel#headerTitle {
+                color: #ffffff;
+                font-size: 15px;
+                font-weight: 700;
+            }
+            QLabel#headerSubtitle {
+                color: #e0e7ff;
+                font-size: 12px;
+            }
+            QFrame#itemCard {
+                background-color: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+            }
+            QLabel#itemTitle {
+                color: #0f172a;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QLabel#itemDesc {
+                color: #475569;
+                font-size: 12px;
+                line-height: 1.4;
+            }
+            QPushButton#primaryBtn {
+                background-color: #2563eb;
+                color: #ffffff;
+                font-weight: 600;
+                font-size: 12px;
+                padding: 6px 18px;
+                border-radius: 6px;
+                border: none;
+            }
+            QPushButton#primaryBtn:hover {
+                background-color: #1d4ed8;
+            }
+            QPushButton#secondaryBtn {
+                background-color: #ffffff;
+                color: #334155;
+                font-weight: 600;
+                font-size: 12px;
+                padding: 6px 14px;
+                border-radius: 6px;
+                border: 1px solid #cbd5e1;
+            }
+            QPushButton#secondaryBtn:hover {
+                background-color: #f1f5f9;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 14)
+        layout.setSpacing(10)
+
+        header = QFrame()
+        header.setObjectName("headerBox")
+        h_layout = QVBoxLayout(header)
+        h_layout.setContentsMargins(12, 10, 12, 10)
+        h_layout.setSpacing(4)
+        h_title = QLabel("💡 TaskCalendar 기능 소개 & 안내")
+        h_title.setObjectName("headerTitle")
+        h_sub = QLabel("환경설정에서 업무 스타일에 맞춰 다양한 기능을 자유롭게 On/Off 할 수 있습니다.")
+        h_sub.setObjectName("headerSubtitle")
+        h_layout.addWidget(h_title)
+        h_layout.addWidget(h_sub)
+        layout.addWidget(header)
+
+        items = [
+            ("⚙️ 다양한 기능 맞춤 On/Off (환경설정)", "상단 우측 [환경설정]에서 음력·24절기 표시, 스티커 애니메이션, 완료 일정 숨기기, 자동 백업 등 필요 없는 기능은 끄고 원하는 기능만 켜서 가볍고 깔끔하게 사용할 수 있습니다."),
+            ("🧮 민원 처리기한 모의계산기", "법정공휴일/주말 및 근무시간(09:00~18:00)을 자동 제외하여 정확한 만료 일시를 산출하고, 원클릭으로 캘린더 일정에 바로 등록합니다."),
+            ("📝 스마트 플로팅 메모 & 서식 에디터", "바탕화면에 메모를 자유롭게 띄우며, 내용/배경 마우스 우클릭 [에디터 보기/닫기]를 통해 상단 서식 도구(굵게, 폰트, 크기, 색상)로 메모를 손쉽게 편집할 수 있습니다."),
+            ("⌨️ 언제 어디서나 전역 단축키 (F3)", "다른 작업 중에도 언제든지 F3 키를 누르면 캘린더가 즉시 열리거나 숨겨집니다. (단축키는 환경설정에서 변경 가능)"),
+        ]
+
+        for item_title_text, item_desc_text in items:
+            card = QFrame()
+            card.setObjectName("itemCard")
+            c_layout = QVBoxLayout(card)
+            c_layout.setContentsMargins(12, 8, 12, 8)
+            c_layout.setSpacing(3)
+            lbl_t = QLabel(item_title_text)
+            lbl_t.setObjectName("itemTitle")
+            lbl_d = QLabel(item_desc_text)
+            lbl_d.setObjectName("itemDesc")
+            lbl_d.setWordWrap(True)
+            c_layout.addWidget(lbl_t)
+            c_layout.addWidget(lbl_d)
+            layout.addWidget(card)
+
+        layout.addStretch(1)
+
+        footer = QHBoxLayout()
+        footer.setSpacing(8)
+        self.dismiss_check = QCheckBox("다시 보지 않기")
+        self.dismiss_check.setChecked(is_dismissed)
+        self.dismiss_check.setStyleSheet("color: #475569; font-size: 12px; font-weight: 500;")
+        footer.addWidget(self.dismiss_check)
+        footer.addStretch(1)
+
+        settings_btn = QPushButton("⚙️ 환경설정 열기")
+        settings_btn.setObjectName("secondaryBtn")
+        settings_btn.clicked.connect(self._on_open_settings)
+        footer.addWidget(settings_btn)
+
+        confirm_btn = QPushButton("확인")
+        confirm_btn.setObjectName("primaryBtn")
+        confirm_btn.clicked.connect(self.accept)
+        footer.addWidget(confirm_btn)
+
+        layout.addLayout(footer)
+
+    def _on_open_settings(self) -> None:
+        self.open_settings_requested = True
+        self.accept()
+
+    def is_dismissed_checked(self) -> bool:
+        return self.dismiss_check.isChecked()
 
 
 

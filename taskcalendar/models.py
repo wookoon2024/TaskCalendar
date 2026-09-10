@@ -52,6 +52,7 @@ class CalendarEntry:
     bg_color: str = ""
     alert_type: AlertType = AlertType.NONE
     alert_offset: str = "at_start"
+    memo_group: str = ""
     entry_id: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

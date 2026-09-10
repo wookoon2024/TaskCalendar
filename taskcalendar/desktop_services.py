@@ -13,6 +13,9 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Callable
 
+if not hasattr(wintypes, "HCURSOR"):
+    wintypes.HCURSOR = wintypes.HANDLE
+
 from taskcalendar.models import AlertType, CalendarEntry, EntryType
 from taskcalendar.storage import EncryptedRepository
 

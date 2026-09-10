@@ -17,6 +17,7 @@ from taskcalendar.lunar import get_lunar_date
 
 
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
+CRYPTPROTECT_LOCAL_MACHINE = 0x4
 
 
 class DATA_BLOB(ctypes.Structure):
@@ -40,13 +41,16 @@ def _blob_to_bytes(blob: DATA_BLOB) -> bytes:
 def protect_bytes(data: bytes) -> bytes:
     in_blob = _bytes_to_blob(data)
     out_blob = DATA_BLOB()
+    # CRYPTPROTECT_LOCAL_MACHINE binds encryption to the computer rather than the user login credentials,
+    # preventing decryption failure when the Windows user changes their password or account credentials.
+    flags = CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE
     if not crypt32.CryptProtectData(
         ctypes.byref(in_blob),
         "TaskCalendar".encode("utf-16-le"),
         None,
         None,
         None,
-        CRYPTPROTECT_UI_FORBIDDEN,
+        flags,
         ctypes.byref(out_blob),
     ):
         raise ctypes.WinError()
@@ -59,7 +63,8 @@ def protect_bytes(data: bytes) -> bytes:
 def unprotect_bytes(data: bytes) -> bytes:
     in_blob = _bytes_to_blob(data)
     out_blob = DATA_BLOB()
-    if not crypt32.CryptUnprotectData(
+    # 1. Standard unprotect with UI_FORBIDDEN (handles both user-mode and machine-mode blobs seamlessly)
+    if crypt32.CryptUnprotectData(
         ctypes.byref(in_blob),
         None,
         None,
@@ -68,29 +73,64 @@ def unprotect_bytes(data: bytes) -> bytes:
         CRYPTPROTECT_UI_FORBIDDEN,
         ctypes.byref(out_blob),
     ):
-        raise ctypes.WinError()
-    try:
-        return _blob_to_bytes(out_blob)
-    finally:
-        kernel32.LocalFree(out_blob.pbData)
+        try:
+            return _blob_to_bytes(out_blob)
+        finally:
+            kernel32.LocalFree(out_blob.pbData)
+
+    # 2. Fallback with UI_FORBIDDEN | LOCAL_MACHINE
+    if crypt32.CryptUnprotectData(
+        ctypes.byref(in_blob),
+        None,
+        None,
+        None,
+        None,
+        CRYPTPROTECT_UI_FORBIDDEN | CRYPTPROTECT_LOCAL_MACHINE,
+        ctypes.byref(out_blob),
+    ):
+        try:
+            return _blob_to_bytes(out_blob)
+        finally:
+            kernel32.LocalFree(out_blob.pbData)
+
+    # 3. Fallback with flags=0
+    if crypt32.CryptUnprotectData(
+        ctypes.byref(in_blob),
+        None,
+        None,
+        None,
+        None,
+        0,
+        ctypes.byref(out_blob),
+    ):
+        try:
+            return _blob_to_bytes(out_blob)
+        finally:
+            kernel32.LocalFree(out_blob.pbData)
+
+    raise ctypes.WinError()
 
 
-def _can_deserialize_sqlite_blob(connection: sqlite3.Connection, data: bytes) -> bool:
+def _can_deserialize_sqlite_blob(data: bytes) -> bool:
     try:
-        connection.deserialize(data)
-        connection.row_factory = sqlite3.Row
-        # Deserialize can succeed with invalid bytes; force a real SQLite read path.
-        connection.execute("PRAGMA schema_version").fetchone()
-        tables = {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
-        }
-        if "entries" not in tables or "settings" not in tables:
-            return False
-        return True
-    except sqlite3.Error:
+        temp_conn = sqlite3.connect(":memory:")
+        try:
+            temp_conn.deserialize(data)
+            temp_conn.row_factory = sqlite3.Row
+            # Deserialize can succeed with invalid bytes; force a real SQLite read path.
+            temp_conn.execute("PRAGMA schema_version").fetchone()
+            tables = {
+                row[0]
+                for row in temp_conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            if "entries" not in tables or "settings" not in tables:
+                return False
+            return True
+        finally:
+            temp_conn.close()
+    except (sqlite3.Error, Exception):
         return False
 
 
@@ -102,6 +142,7 @@ class EncryptedRepository:
         self.attachments_root.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(":memory:")
         self.connection.row_factory = sqlite3.Row
+        self._load_failed = False
         self._initialize()
         try:
             if self.db_path.exists():
@@ -188,6 +229,7 @@ class EncryptedRepository:
                 bg_color TEXT NOT NULL DEFAULT '',
                 alert_type TEXT NOT NULL DEFAULT 'none',
                 alert_offset TEXT NOT NULL DEFAULT 'at_start',
+                memo_group TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -241,6 +283,7 @@ class EncryptedRepository:
             "bg_color": "ALTER TABLE entries ADD COLUMN bg_color TEXT NOT NULL DEFAULT ''",
             "alert_type": "ALTER TABLE entries ADD COLUMN alert_type TEXT NOT NULL DEFAULT 'none'",
             "alert_offset": "ALTER TABLE entries ADD COLUMN alert_offset TEXT NOT NULL DEFAULT 'at_start'",
+            "memo_group": "ALTER TABLE entries ADD COLUMN memo_group TEXT NOT NULL DEFAULT ''",
         }
         for name, sql in additions.items():
             if name not in existing:
@@ -264,26 +307,108 @@ class EncryptedRepository:
                 last_error = exc
                 self._log_diagnostic("load_unprotect_failed", f"candidate={candidate}\nerror={exc}")
                 # Compatibility/recovery: older or broken files may contain plain SQLite bytes.
-                if _can_deserialize_sqlite_blob(self.connection, raw):
+                if _can_deserialize_sqlite_blob(raw):
+                    self.connection.close()
+                    self.connection = sqlite3.connect(":memory:")
+                    self.connection.row_factory = sqlite3.Row
+                    self.connection.deserialize(raw)
                     self._log_diagnostic("load_plain_sqlite_fallback_ok", f"candidate={candidate}")
+                    self._load_failed = False
                     return
                 self._log_diagnostic("load_plain_sqlite_fallback_failed", f"candidate={candidate}")
                 continue
-            if _can_deserialize_sqlite_blob(self.connection, plain):
+            if _can_deserialize_sqlite_blob(plain):
+                self.connection.close()
+                self.connection = sqlite3.connect(":memory:")
+                self.connection.row_factory = sqlite3.Row
+                self.connection.deserialize(plain)
                 self._log_diagnostic("load_encrypted_sqlite_ok", f"candidate={candidate}")
+                self._load_failed = False
                 return
             self._log_diagnostic("load_encrypted_sqlite_invalid", f"candidate={candidate}")
 
-        # None of the candidates was usable. Keep running with a fresh in-memory DB.
-        # The next save() will write a clean encrypted database file.
-        if last_error is not None:
-            self._log_diagnostic("load_no_usable_candidate", f"last_error={last_error}")
+        # If primary and .bak candidates failed and db_path had non-empty content on disk:
+        has_existing_data = self.db_path.exists() and self.db_path.stat().st_size > 0
+        if has_existing_data:
+            # 1. Search backups folder for newest valid auto backup
+            backup_dir = self.db_path.parent / "backups"
+            if backup_dir.is_dir():
+                backup_files = sorted(
+                    backup_dir.glob("taskcalendar_backup_*.db.enc"),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )
+                for b_file in backup_files:
+                    try:
+                        b_raw = b_file.read_bytes()
+                        if not b_raw:
+                            continue
+                        try:
+                            b_plain = unprotect_bytes(b_raw)
+                        except OSError:
+                            if _can_deserialize_sqlite_blob(b_raw):
+                                b_plain = b_raw
+                            else:
+                                continue
+                        if _can_deserialize_sqlite_blob(b_plain):
+                            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            unreadable_copy = self.db_path.with_name(f"{self.db_path.name}.unreadable.{stamp}")
+                            try:
+                                shutil.copy2(self.db_path, unreadable_copy)
+                            except Exception:
+                                pass
+                            self.connection.close()
+                            self.connection = sqlite3.connect(":memory:")
+                            self.connection.row_factory = sqlite3.Row
+                            self.connection.deserialize(b_plain)
+                            self._log_diagnostic(
+                                "load_recovered_from_auto_backup",
+                                f"recovered_from={b_file}\npreserved_unreadable={unreadable_copy}",
+                            )
+                            self._load_failed = False
+                            # Save immediately with machine-level encryption
+                            self.save()
+                            return
+                    except Exception as b_exc:
+                        self._log_diagnostic("load_backup_candidate_failed", f"candidate={b_file}\nerror={b_exc}")
+
+            # 2. No backup could be recovered: preserve unreadable file and PREVENT empty overwrite
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unreadable_copy = self.db_path.with_name(f"{self.db_path.name}.unreadable.{stamp}")
+            try:
+                shutil.copy2(self.db_path, unreadable_copy)
+            except Exception:
+                pass
+            self._load_failed = True
+            self._log_diagnostic(
+                "load_failed_preventing_overwrite",
+                f"preserved_unreadable={unreadable_copy}\nlast_error={last_error}",
+            )
         else:
-            self._log_diagnostic("load_no_usable_candidate", "no_candidate_error")
+            self._load_failed = False
+            if last_error is not None:
+                self._log_diagnostic("load_no_usable_candidate", f"last_error={last_error}")
+            else:
+                self._log_diagnostic("load_no_usable_candidate", "no_candidate_error")
 
     def save(self) -> None:
         self.connection.commit()
         encrypted = protect_bytes(self.connection.serialize())
+        if getattr(self, "_load_failed", False):
+            # Guard against data destruction: if an existing database failed decryption,
+            # do NOT overwrite it with empty memory state!
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            emergency_path = self.db_path.with_name(f"{self.db_path.name}.emergency_{stamp}.db.enc")
+            try:
+                emergency_path.write_bytes(encrypted)
+            except Exception:
+                pass
+            self._log_diagnostic(
+                "save_blocked_due_to_load_failure",
+                f"Refused to overwrite {self.db_path}. Saved new session to {emergency_path}",
+            )
+            return
+
         tmp_path = self.db_path.with_suffix(self.db_path.suffix + ".tmp")
         bak_path = self.db_path.with_suffix(self.db_path.suffix + ".bak")
         tmp_path.write_bytes(encrypted)
@@ -310,6 +435,18 @@ class EncryptedRepository:
     def get_setting(self, key: str, default: str = "") -> str:
         row = self.connection.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
         return row["value"] if row else default
+
+    def get_all_settings(self) -> dict[str, str]:
+        rows = self.connection.execute("SELECT key, value FROM settings").fetchall()
+        return {row["key"]: row["value"] for row in rows}
+
+    def set_all_settings(self, settings: dict[str, str]) -> None:
+        for key, value in settings.items():
+            self.connection.execute(
+                "INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, str(value)),
+            )
+        self.connection.commit()
 
     def upsert_entry(self, entry: CalendarEntry) -> CalendarEntry:
         now = datetime.now().isoformat(timespec="seconds")
@@ -346,6 +483,7 @@ class EncryptedRepository:
             entry.bg_color,
             entry.alert_type.value,
             entry.alert_offset,
+            getattr(entry, "memo_group", "") or "",
         )
         if entry.entry_id is None:
             cursor = self.connection.execute(
@@ -354,9 +492,9 @@ class EncryptedRepository:
                     entry_type, title, description, day, start_date, end_date,
                     start_time, end_time, all_day, assignee, status, attachments_json,
                     recurrence_enabled, recurrence_type, recurrence_interval,
-                    recurrence_weekdays_json, recurrence_month_day, recurrence_month_week, recurrence_month_end, completed_dates_json, icon_type, bg_color, alert_type, alert_offset,
+                    recurrence_weekdays_json, recurrence_month_day, recurrence_month_week, recurrence_month_end, completed_dates_json, icon_type, bg_color, alert_type, alert_offset, memo_group,
                     created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values + (now, now),
             )
@@ -368,7 +506,7 @@ class EncryptedRepository:
                 SET entry_type=?, title=?, description=?, day=?, start_date=?, end_date=?,
                     start_time=?, end_time=?, all_day=?, assignee=?, status=?, attachments_json=?,
                     recurrence_enabled=?, recurrence_type=?, recurrence_interval=?,
-                    recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, updated_at=?
+                    recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, updated_at=?
                 WHERE id = ?
                 """,
                 values + (now, entry.entry_id),
@@ -556,6 +694,7 @@ class EncryptedRepository:
             bg_color=row["bg_color"] or "",
             alert_type=AlertType(row["alert_type"] or "none"),
             alert_offset=row["alert_offset"] or "at_start",
+            memo_group=row["memo_group"] if "memo_group" in row.keys() and row["memo_group"] else "",
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
@@ -704,6 +843,53 @@ class EncryptedRepository:
     def get_alarm(self, alarm_id: int) -> Alarm | None:
         row = self.connection.execute("SELECT * FROM alarms WHERE id = ?", (alarm_id,)).fetchone()
         return self._row_to_alarm(row) if row else None
+
+    def list_memo_groups(self) -> list[dict]:
+        raw = self.get_setting("memo_groups_v1", "[]")
+        try:
+            groups = json.loads(raw)
+            return groups if isinstance(groups, list) else []
+        except Exception:
+            return []
+
+    def get_memo_group(self, group_id: str) -> dict | None:
+        for g in self.list_memo_groups():
+            if g.get("id") == group_id:
+                return g
+        return None
+
+    def upsert_memo_group(self, group_dict: dict) -> dict:
+        groups = self.list_memo_groups()
+        gid = group_dict.get("id")
+        if not gid:
+            import uuid
+            gid = f"grp_{uuid.uuid4().hex[:8]}"
+            group_dict["id"] = gid
+        found = False
+        for i, g in enumerate(groups):
+            if g.get("id") == gid:
+                groups[i] = {**g, **group_dict}
+                found = True
+                break
+        if not found:
+            groups.append(group_dict)
+        self.set_setting("memo_groups_v1", json.dumps(groups, ensure_ascii=False))
+        self.save()
+        return group_dict
+
+    def delete_memo_group(self, group_id: str, delete_memos: bool = False) -> None:
+        groups = [g for g in self.list_memo_groups() if g.get("id") != group_id]
+        self.set_setting("memo_groups_v1", json.dumps(groups, ensure_ascii=False))
+        if delete_memos:
+            for entry in self.list_memos():
+                if entry.memo_group == group_id and entry.entry_id:
+                    self.delete_entry(entry.entry_id)
+        else:
+            for entry in self.list_memos():
+                if entry.memo_group == group_id:
+                    entry.memo_group = ""
+                    self.upsert_entry(entry)
+        self.save()
 
 
 def calendar_days(year: int, month: int) -> list[date]:
