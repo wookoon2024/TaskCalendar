@@ -5223,12 +5223,29 @@ class CivilComplaintCalculatorDialog(QDialog):
         start_time = f"{qt.hour():02d}:{qt.minute():02d}"
 
         unit_text = "시간" if self._current_unit == "hours" else "일"
+        title = f"[민원] {self._current_amount}{unit_text} 민원 처리 마감"
+        due_str = self._calc_result.due_dt.strftime("%Y-%m-%d %H:%M")
+        std_str = "공공표준(법정기준)" if self.radio_public.isChecked() else "단순 24시간 연속"
+
+        desc_lines = [
+            title,
+            f"• 접수일시: {start_date} {start_time}",
+            f"• 처리기한: {self._current_amount}{unit_text} ({self.res_badge.text()})",
+            f"• 최종마감: {due_str}",
+            f"• 적용기준: {std_str}",
+        ]
+        if self._calc_result.excluded_days:
+            exc_str = ", ".join([f"{d.month}/{d.day}({r})" for d, r in self._calc_result.excluded_days])
+            desc_lines.append(f"• 제외일자: {exc_str}")
+        desc_text = "\n".join(desc_lines)
+
         self.schedule_data = {
-            "title": f"[민원] {self._current_amount}{unit_text} 민원 처리",
+            "title": title,
             "start_date": start_date,
             "start_time": start_time,
             "end_date": self._calc_result.due_dt.date(),
             "end_time": self._calc_result.due_dt.strftime("%H:%M"),
+            "description": desc_text,
         }
         self.accept()
 

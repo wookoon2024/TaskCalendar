@@ -4449,11 +4449,15 @@ class MainWindow(QMainWindow):
         dlg = CivilComplaintCalculatorDialog(self, holidays_fixed=self._holidays_fixed, holidays_yearly=self._holidays_yearly)
         if dlg.exec() and dlg.schedule_data:
             data = dlg.schedule_data
+            start_d = data.get("start_date")
+            if start_d:
+                self.selected_day = start_d
             new_entry = CalendarEntry(
                 entry_type=EntryType.SCHEDULE,
-                title=data.get("title", "[민원] "),
-                day=data.get("start_date"),
-                start_date=data.get("start_date"),
+                title=data.get("title", "[민원] 처리 마감"),
+                description=data.get("description", data.get("title", "[민원] 처리 마감")),
+                day=start_d or date.today(),
+                start_date=start_d,
                 end_date=data.get("end_date"),
                 start_time=data.get("start_time", "09:00"),
                 end_time=data.get("end_time", "18:00"),
@@ -4462,7 +4466,7 @@ class MainWindow(QMainWindow):
                 alert_offset="1h",
                 icon_type="",
             )
-            self._open_entry_dialog(EntryType.SCHEDULE, data.get("start_date"), new_entry)
+            self._edit_entry(EntryType.SCHEDULE, new_entry)
 
     def _open_settings(self, initial_tab: str = "general") -> None:
         current_auto_start = is_startup_enabled()
