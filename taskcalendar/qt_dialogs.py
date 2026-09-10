@@ -1330,63 +1330,76 @@ class EntryDialog(QDialog):
 
         if self.entry_type != EntryType.MEMO:
             details_card, details_layout = self._create_grid_card()
-            details_layout.setColumnMinimumWidth(0, 40)
+            details_layout.setColumnMinimumWidth(0, FORM_LABEL_WIDTH)
+            details_layout.setColumnStretch(0, 0)
+            details_layout.setColumnStretch(1, 1)
+
+            # Row 0: 스티커 & 배경색
             icon_label = self._muted("스티커")
             icon_label.setFixedWidth(FORM_LABEL_WIDTH)
             icon_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             details_layout.addWidget(icon_label, 0, 0)
-            icon_wrap = QWidget()
-            icon_wrap_layout = QHBoxLayout(icon_wrap)
-            icon_wrap_layout.setContentsMargins(0, 0, 0, 0)
-            icon_wrap_layout.setSpacing(6)
+
+            row0 = QWidget()
+            row0.setFixedHeight(30)
+            row0_layout = QHBoxLayout(row0)
+            row0_layout.setContentsMargins(0, 0, 0, 0)
+            row0_layout.setSpacing(6)
 
             self._selected_icon: str = entry.icon_type if entry else ""
 
+            sticker_wrap = QWidget()
+            sticker_wrap.setFixedHeight(30)
+            sticker_wrap_layout = QHBoxLayout(sticker_wrap)
+            sticker_wrap_layout.setContentsMargins(0, 0, 0, 0)
+            sticker_wrap_layout.setSpacing(6)
+
             self.sticker_btn = QPushButton()
             self.sticker_btn.setCursor(Qt.PointingHandCursor)
-            self.sticker_btn.setMinimumHeight(30)
-            self.sticker_btn.setMinimumWidth(80)
-            self.sticker_btn.setMaximumWidth(130)
+            self.sticker_btn.setFixedHeight(30)
             self.sticker_btn.clicked.connect(self._open_icon_picker)
-            icon_wrap_layout.addWidget(self.sticker_btn)
+            sticker_wrap_layout.addWidget(self.sticker_btn)
 
             self.sticker_clear_btn = QPushButton("✕")
             self.sticker_clear_btn.setToolTip("스티커 제거")
             self.sticker_clear_btn.setCursor(Qt.PointingHandCursor)
-            self.sticker_clear_btn.setFixedSize(24, 28)
+            self.sticker_clear_btn.setFixedSize(24, 30)
             self.sticker_clear_btn.setStyleSheet("font-weight: bold; font-size: 11px; color: #dc2626; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 4px;")
             self.sticker_clear_btn.clicked.connect(self._clear_sticker)
-            icon_wrap_layout.addWidget(self.sticker_clear_btn)
-            icon_wrap_layout.addStretch(1)
+            sticker_wrap_layout.addWidget(self.sticker_clear_btn)
+            sticker_wrap_layout.addStretch(1)
 
             self._refresh_sticker_button()
-            details_layout.addWidget(icon_wrap, 0, 1)
+            row0_layout.addWidget(sticker_wrap)
 
-            bg_row = QWidget()
-            bg_row_layout = QHBoxLayout(bg_row)
-            bg_row_layout.setContentsMargins(0, 0, 0, 0)
-            bg_row_layout.setSpacing(8)
+            sticker_wrap.setFixedWidth(145)
+
+            row0_layout.addSpacing(16)
+
             bg_color_label = self._muted("배경색")
             bg_color_label.setFixedWidth(FORM_LABEL_WIDTH)
             bg_color_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            bg_row_layout.addWidget(bg_color_label)
+            row0_layout.addWidget(bg_color_label)
+
             self.bg_color_combo = QComboBox()
             for label, value in COLOR_OPTIONS:
                 self.bg_color_combo.addItem(label, value)
             self.bg_color_combo.setCurrentIndex(max(0, self.bg_color_combo.findData(entry.bg_color if entry else "")))
-            self.bg_color_combo.setMinimumWidth(112)
-            self.bg_color_combo.setMaximumWidth(112)
-            self.bg_color_combo.setMinimumHeight(30)
-            self.bg_color_combo.setMaximumHeight(30)
-            bg_row_layout.addWidget(self.bg_color_combo)
-            details_layout.addWidget(bg_row, 0, 2, 1, 4, Qt.AlignmentFlag.AlignLeft)
+            self.bg_color_combo.setFixedWidth(112)
+            self.bg_color_combo.setFixedHeight(30)
+            row0_layout.addWidget(self.bg_color_combo)
 
+            row0_layout.addStretch(1)
+            details_layout.addWidget(row0, 0, 1)
+
+            # Row 1: 일시
             when_label = self._muted("일시")
             when_label.setFixedWidth(FORM_LABEL_WIDTH)
             when_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             details_layout.addWidget(when_label, 1, 0)
 
             when_row = QWidget()
+            when_row.setFixedHeight(30)
             when_row_layout = QHBoxLayout(when_row)
             when_row_layout.setContentsMargins(0, 0, 0, 0)
             when_row_layout.setSpacing(6)
@@ -1395,17 +1408,18 @@ class EntryDialog(QDialog):
             self.start_date.setDisplayFormat("yyyy-MM-dd")
             self.start_date.setCalendarPopup(True)
             self.start_date.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-            self.start_date.setMinimumWidth(105)
-            self.start_date.setMaximumWidth(105)
+            self.start_date.setMinimumWidth(125)
+            self.start_date.setMaximumWidth(125)
+            self.start_date.setFixedHeight(30)
             self.start_date.dateChanged.connect(self._refresh_repeat_details)
             when_row_layout.addWidget(self.start_date)
 
             self.start_time = OverwriteTimeEdit(_to_qtime(entry.start_time if entry else "", "09:00"))
             self.start_time.setDisplayFormat("HH:mm")
             self.start_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-            self.start_time.setMinimumWidth(56)
-            self.start_time.setMaximumWidth(56)
-            self.start_time.setMinimumHeight(30)
+            self.start_time.setMinimumWidth(65)
+            self.start_time.setMaximumWidth(65)
+            self.start_time.setFixedHeight(30)
             when_row_layout.addWidget(self._step_field(self.start_time, 20))
 
             when_row_layout.addWidget(self._muted("~"))
@@ -1414,16 +1428,17 @@ class EntryDialog(QDialog):
             self.end_date.setDisplayFormat("yyyy-MM-dd")
             self.end_date.setCalendarPopup(True)
             self.end_date.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-            self.end_date.setMinimumWidth(105)
-            self.end_date.setMaximumWidth(105)
+            self.end_date.setMinimumWidth(125)
+            self.end_date.setMaximumWidth(125)
+            self.end_date.setFixedHeight(30)
             when_row_layout.addWidget(self.end_date)
 
             self.end_time = OverwriteTimeEdit(_to_qtime(entry.end_time if entry else "", "18:00"))
             self.end_time.setDisplayFormat("HH:mm")
             self.end_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-            self.end_time.setMinimumWidth(56)
-            self.end_time.setMaximumWidth(56)
-            self.end_time.setMinimumHeight(30)
+            self.end_time.setMinimumWidth(65)
+            self.end_time.setMaximumWidth(65)
+            self.end_time.setFixedHeight(30)
             when_row_layout.addWidget(self._step_field(self.end_time, 20))
 
             self.all_day = QCheckBox("종일")
@@ -1432,7 +1447,7 @@ class EntryDialog(QDialog):
             when_row_layout.addWidget(self.all_day)
             when_row_layout.addStretch(1)
 
-            details_layout.addWidget(when_row, 1, 1, 1, 5)
+            details_layout.addWidget(when_row, 1, 1)
 
             period_label = self._muted("기간")
             period_label.setFixedWidth(FORM_LABEL_WIDTH)
@@ -1440,9 +1455,11 @@ class EntryDialog(QDialog):
             details_layout.addWidget(period_label, 2, 0)
 
             period_row = QWidget()
+            period_row.setFixedHeight(30)
             period_row_layout = QHBoxLayout(period_row)
             period_row_layout.setContentsMargins(0, 0, 0, 0)
             period_row_layout.setSpacing(4)
+            period_row_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
             btn_defs = [
                 ("1일", "1d", 34),
@@ -1458,7 +1475,7 @@ class EntryDialog(QDialog):
             for btn_text, duration_key, btn_w in btn_defs:
                 p_btn = QPushButton(btn_text)
                 p_btn.setFixedWidth(btn_w)
-                p_btn.setFixedHeight(24)
+                p_btn.setFixedHeight(26)
                 p_btn.setCursor(Qt.PointingHandCursor)
                 p_btn.setToolTip(f"종료일을 시작일 기준 {btn_text} 뒤로 자동 설정")
                 if duration_key == "forever":
@@ -1506,10 +1523,11 @@ class EntryDialog(QDialog):
             period_row_layout.addStretch(1)
 
             self.start_lunar_badge = QLabel("")
+            self.start_lunar_badge.setFixedHeight(24)
             self.start_lunar_badge.setStyleSheet("font-size: 11px; font-weight: bold; color: #0284c7; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 4px; padding: 2px 6px;")
             period_row_layout.addWidget(self.start_lunar_badge)
 
-            details_layout.addWidget(period_row, 2, 1, 1, 6)
+            details_layout.addWidget(period_row, 2, 1)
             root.addWidget(details_card)
 
         if self.entry_type == EntryType.MEMO:
@@ -1648,7 +1666,7 @@ class EntryDialog(QDialog):
         layout = QGridLayout(frame)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(7)
+        layout.setVerticalSpacing(8)
         return frame, layout
 
     def _separator(self) -> QFrame:
@@ -1867,7 +1885,9 @@ class EntryDialog(QDialog):
         if not icon_val:
             self.sticker_btn.setIcon(QIcon())
             self.sticker_btn.setText("🎨 스티커 선택...")
-            self.sticker_btn.setStyleSheet("text-align: left; padding: 4px 8px; font-size: 11px;")
+            self.sticker_btn.setStyleSheet("text-align: center; padding: 4px 8px; font-size: 11px;")
+            self.sticker_btn.setFixedWidth(115)
+            self.sticker_btn.setToolTip("스티커 선택")
             self.sticker_clear_btn.hide()
             return
         self.sticker_clear_btn.show()
@@ -1875,13 +1895,16 @@ class EntryDialog(QDialog):
         if pix and not pix.isNull():
             self.sticker_btn.setIcon(QIcon(pix))
             self.sticker_btn.setIconSize(QSize(20, 20))
-            name = icon_val.split(":")[-1].split("_")[0]
-            self.sticker_btn.setText(f" {name}")
-            self.sticker_btn.setStyleSheet("text-align: left; padding: 2px 6px; font-size: 11px;")
+            self.sticker_btn.setText("")
+            self.sticker_btn.setStyleSheet("text-align: center; padding: 2px 4px;")
+            self.sticker_btn.setFixedWidth(42)
+            self.sticker_btn.setToolTip(f"스티커 변경 ({icon_val})")
         else:
             self.sticker_btn.setIcon(QIcon())
-            self.sticker_btn.setText(f"{icon_val} (변경)")
-            self.sticker_btn.setStyleSheet("text-align: left; padding: 4px 8px; font-size: 12px; font-weight: bold;")
+            self.sticker_btn.setText(f"{icon_val}")
+            self.sticker_btn.setStyleSheet("text-align: center; padding: 2px 4px; font-size: 15px;")
+            self.sticker_btn.setFixedWidth(42)
+            self.sticker_btn.setToolTip(f"스티커 변경 ({icon_val})")
 
     def _sync_recurrence_interval_from_weekly(self, value: int) -> None:
         if self._syncing_interval:
@@ -4231,10 +4254,10 @@ class AlarmEditDialog(QDialog):
         
         self.start_date_edit = QDateEdit()
         self.start_date_edit.setCalendarPopup(True)
-        self.start_date_edit.setFixedWidth(115)
+        self.start_date_edit.setFixedWidth(125)
         self.end_date_edit = QDateEdit()
         self.end_date_edit.setCalendarPopup(True)
-        self.end_date_edit.setFixedWidth(115)
+        self.end_date_edit.setFixedWidth(125)
         
         # Set default dates
         if alarm and alarm.start_date:
@@ -4829,5 +4852,374 @@ class BackupRestoreFormatDialog(QDialog):
         else:
             self.selected_format = "xlsx"
         self.accept()
+
+
+class CivilComplaintCalculatorDialog(QDialog):
+    def __init__(self, parent=None, holidays_fixed: dict[str, str] | None = None, holidays_yearly: dict[str, str] | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("민원 처리기한 모의계산기")
+        self.setFixedWidth(560)
+        from taskcalendar.complaint_calculator import ComplaintCalculator, ComplaintCalcResult
+        self.calculator = ComplaintCalculator(holidays_fixed, holidays_yearly)
+        self.schedule_data: dict | None = None
+        self._preset_buttons: list[tuple[QPushButton, str, int]] = []
+        self._current_unit = "days"
+        self._current_amount = 3
+        self._calc_result: ComplaintCalcResult | None = None
+        self._updating_custom = False
+        self._apply_dialog_styles()
+        self._build_ui()
+        self._select_preset("days", 3)
+
+    def _apply_dialog_styles(self) -> None:
+        self.setStyleSheet("""
+            QDialog {
+                background: #f4f7fb;
+                font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+            }
+            QFrame#card {
+                background: #ffffff;
+                border: 1px solid #dbe3ec;
+                border-radius: 10px;
+            }
+            QLineEdit, QDateEdit, QTimeEdit, QSpinBox, QComboBox {
+                background: #ffffff;
+                border: 1px solid #cfd8e3;
+                border-radius: 6px;
+                padding: 3px 6px;
+                color: #1f2328;
+                font-size: 12px;
+            }
+            QPushButton {
+                background: #ffffff;
+                border: 1px solid #cfd8e3;
+                border-radius: 6px;
+                color: #334155;
+            }
+            QPushButton#primary {
+                background: #1f7a67;
+                color: #ffffff;
+                border: 1px solid #1f7a67;
+                font-weight: 700;
+            }
+            QPushButton#primary:hover {
+                background: #196354;
+            }
+        """)
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(10)
+
+        # 1. Header Card
+        header_card = QFrame()
+        header_card.setObjectName("card")
+        header_layout = QVBoxLayout(header_card)
+        header_layout.setContentsMargins(14, 12, 14, 12)
+        header_layout.setSpacing(3)
+
+        title_lbl = QLabel("🧮 민원 처리기한 모의계산기")
+        title_lbl.setStyleSheet("font-size: 15px; font-weight: bold; color: #1e293b;")
+        sub_lbl = QLabel("법정 공휴일 및 근무시간(09:00~18:00)을 반영한 마감기한 자동 산정")
+        sub_lbl.setStyleSheet("font-size: 11px; color: #64748b;")
+        header_layout.addWidget(title_lbl)
+        header_layout.addWidget(sub_lbl)
+        root.addWidget(header_card)
+
+        # 2. Received Date/Time Card
+        dt_card = QFrame()
+        dt_card.setObjectName("card")
+        dt_layout = QVBoxLayout(dt_card)
+        dt_layout.setContentsMargins(14, 12, 14, 12)
+        dt_layout.setSpacing(8)
+
+        dt_title = QLabel("1. 접수 일시 지정")
+        dt_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #334155;")
+        dt_layout.addWidget(dt_title)
+
+        dt_row = QHBoxLayout()
+        dt_row.setSpacing(8)
+
+        dt_row.addWidget(QLabel("접수일:"))
+        now = datetime.now()
+        self.recv_date_edit = QDateEdit(QDate(now.year, now.month, now.day))
+        self.recv_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.recv_date_edit.setCalendarPopup(True)
+        self.recv_date_edit.setFixedWidth(125)
+        self.recv_date_edit.setFixedHeight(30)
+        self.recv_date_edit.dateChanged.connect(self._recalculate)
+        dt_row.addWidget(self.recv_date_edit)
+
+        dt_row.addWidget(QLabel("접수시각:"))
+        self.recv_time_edit = QTimeEdit(QTime(now.hour, now.minute))
+        self.recv_time_edit.setDisplayFormat("HH:mm")
+        self.recv_time_edit.setFixedWidth(90)
+        self.recv_time_edit.setFixedHeight(30)
+        self.recv_time_edit.timeChanged.connect(self._recalculate)
+        dt_row.addWidget(self.recv_time_edit)
+
+        now_btn = QPushButton("현재시각")
+        now_btn.setToolTip("오늘 현재 일시로 재설정")
+        now_btn.setFixedHeight(30)
+        now_btn.setCursor(Qt.PointingHandCursor)
+        now_btn.setStyleSheet("padding: 2px 10px; font-size: 11px; font-weight: bold; color: #0284c7; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px;")
+        now_btn.clicked.connect(self._set_current_dt)
+        dt_row.addWidget(now_btn)
+
+        dt_row.addStretch(1)
+        dt_layout.addLayout(dt_row)
+        root.addWidget(dt_card)
+
+        # 3. Calculation Method Card
+        method_card = QFrame()
+        method_card.setObjectName("card")
+        method_layout = QVBoxLayout(method_card)
+        method_layout.setContentsMargins(14, 12, 14, 12)
+        method_layout.setSpacing(6)
+
+        method_title = QLabel("2. 계산 기준 선택")
+        method_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #334155;")
+        method_layout.addWidget(method_title)
+
+        self.radio_public = QRadioButton("공공 표준 (법정 기준: 토·일·공휴일 제외, 09:00~18:00 근무시간 기준)")
+        self.radio_public.setChecked(True)
+        self.radio_public.toggled.connect(self._recalculate)
+        method_layout.addWidget(self.radio_public)
+
+        self.radio_simple = QRadioButton("단순 24시간 연속 계산 (휴일/근무시간 무관)")
+        self.radio_simple.toggled.connect(self._recalculate)
+        method_layout.addWidget(self.radio_simple)
+        root.addWidget(method_card)
+
+        # 4. Duration Card
+        dur_card = QFrame()
+        dur_card.setObjectName("card")
+        dur_layout = QVBoxLayout(dur_card)
+        dur_layout.setContentsMargins(14, 12, 14, 12)
+        dur_layout.setSpacing(8)
+
+        dur_title = QLabel("3. 처리 기한 선택")
+        dur_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #334155;")
+        dur_layout.addWidget(dur_title)
+
+        presets = [
+            ("3시간(즉시)", "hours", 3),
+            ("1일", "days", 1),
+            ("2일", "days", 2),
+            ("3일", "days", 3),
+            ("5일", "days", 5),
+            ("7일", "days", 7),
+            ("10일", "days", 10),
+            ("14일", "days", 14),
+            ("30일", "days", 30),
+        ]
+        preset_row = QHBoxLayout()
+        preset_row.setSpacing(4)
+        for label, unit, val in presets:
+            btn = QPushButton(label)
+            btn.setFixedHeight(28)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda _chk=False, u=unit, v=val: self._select_preset(u, v))
+            preset_row.addWidget(btn)
+            self._preset_buttons.append((btn, unit, val))
+        dur_layout.addLayout(preset_row)
+
+        direct_row = QHBoxLayout()
+        direct_row.setSpacing(6)
+        direct_row.addWidget(QLabel("직접 입력:"))
+        self.custom_spin = QSpinBox()
+        self.custom_spin.setRange(1, 999)
+        self.custom_spin.setValue(3)
+        self.custom_spin.setFixedWidth(75)
+        self.custom_spin.setFixedHeight(28)
+        self.custom_spin.valueChanged.connect(self._on_custom_changed)
+        direct_row.addWidget(self.custom_spin)
+
+        self.custom_unit_combo = QComboBox()
+        self.custom_unit_combo.addItem("일 (영업일)", "days")
+        self.custom_unit_combo.addItem("시간 (근무시간)", "hours")
+        self.custom_unit_combo.setFixedWidth(120)
+        self.custom_unit_combo.setFixedHeight(28)
+        self.custom_unit_combo.currentIndexChanged.connect(self._on_custom_changed)
+        direct_row.addWidget(self.custom_unit_combo)
+        direct_row.addStretch(1)
+        dur_layout.addLayout(direct_row)
+
+        root.addWidget(dur_card)
+
+        # 5. Result Card
+        self.result_card = QFrame()
+        self.result_card.setStyleSheet("""
+            QFrame {
+                background: #f0fdf4;
+                border: 1.5px solid #22c55e;
+                border-radius: 10px;
+            }
+        """)
+        res_layout = QVBoxLayout(self.result_card)
+        res_layout.setContentsMargins(14, 12, 14, 12)
+        res_layout.setSpacing(6)
+
+        res_head = QHBoxLayout()
+        res_tag = QLabel("🎯 최종 법정 처리 마감일시")
+        res_tag.setStyleSheet("font-size: 12px; font-weight: bold; color: #166534; background: transparent; border: none;")
+        res_head.addWidget(res_tag)
+        res_head.addStretch(1)
+
+        self.res_badge = QLabel("")
+        self.res_badge.setStyleSheet("font-size: 11px; font-weight: bold; color: #0369a1; background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 4px; padding: 2px 6px;")
+        res_head.addWidget(self.res_badge)
+        res_layout.addLayout(res_head)
+
+        self.res_due_label = QLabel("")
+        self.res_due_label.setStyleSheet("font-size: 20px; font-weight: 800; color: #14532d; background: transparent; border: none; padding: 4px 0;")
+        res_layout.addWidget(self.res_due_label)
+
+        self.res_detail_label = QLabel("")
+        self.res_detail_label.setStyleSheet("font-size: 12px; color: #374151; background: transparent; border: none;")
+        self.res_detail_label.setWordWrap(True)
+        res_layout.addWidget(self.res_detail_label)
+
+        self.res_excluded_label = QLabel("")
+        self.res_excluded_label.setStyleSheet("font-size: 11px; color: #b91c1c; font-weight: 600; background: transparent; border: none;")
+        self.res_excluded_label.setWordWrap(True)
+        res_layout.addWidget(self.res_excluded_label)
+
+        root.addWidget(self.result_card)
+
+        # 6. Bottom Buttons
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        close_btn = QPushButton("닫기")
+        close_btn.setFixedHeight(34)
+        close_btn.setMinimumWidth(80)
+        close_btn.clicked.connect(self.reject)
+        btn_row.addWidget(close_btn)
+
+        btn_row.addStretch(1)
+
+        self.register_btn = QPushButton("📅 이 기한으로 일정 등록")
+        self.register_btn.setFixedHeight(34)
+        self.register_btn.setMinimumWidth(160)
+        self.register_btn.setObjectName("primary")
+        self.register_btn.setCursor(Qt.PointingHandCursor)
+        self.register_btn.clicked.connect(self._on_register_schedule)
+        btn_row.addWidget(self.register_btn)
+
+        root.addLayout(btn_row)
+
+    def _set_current_dt(self) -> None:
+        now = datetime.now()
+        self.recv_date_edit.setDate(QDate(now.year, now.month, now.day))
+        self.recv_time_edit.setTime(QTime(now.hour, now.minute))
+        self._recalculate()
+
+    def _select_preset(self, unit: str, val: int) -> None:
+        self._current_unit = unit
+        self._current_amount = val
+
+        self._updating_custom = True
+        self.custom_spin.setValue(val)
+        idx = self.custom_unit_combo.findData(unit)
+        if idx >= 0:
+            self.custom_unit_combo.setCurrentIndex(idx)
+        self._updating_custom = False
+
+        self._update_preset_styles()
+        self._recalculate()
+
+    def _on_custom_changed(self) -> None:
+        if self._updating_custom:
+            return
+        self._current_amount = self.custom_spin.value()
+        self._current_unit = str(self.custom_unit_combo.currentData())
+        self._update_preset_styles()
+        self._recalculate()
+
+    def _update_preset_styles(self) -> None:
+        for btn, unit, val in self._preset_buttons:
+            if unit == self._current_unit and val == self._current_amount:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        font-size: 11px;
+                        font-weight: bold;
+                        color: #ffffff;
+                        background: #1f7a67;
+                        border: 1px solid #1f7a67;
+                        border-radius: 4px;
+                        padding: 2px 4px;
+                    }
+                """)
+            else:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        font-size: 11px;
+                        font-weight: 500;
+                        color: #334155;
+                        background: #f8fafc;
+                        border: 1px solid #cbd5e1;
+                        border-radius: 4px;
+                        padding: 2px 4px;
+                    }
+                    QPushButton:hover {
+                        background: #e0f2fe;
+                        border-color: #0284c7;
+                        color: #0284c7;
+                    }
+                """)
+
+    def _recalculate(self) -> None:
+        qd = self.recv_date_edit.date()
+        qt = self.recv_time_edit.time()
+        recv_dt = datetime(qd.year(), qd.month(), qd.day(), qt.hour(), qt.minute())
+
+        is_public = self.radio_public.isChecked()
+        res = self.calculator.calculate(
+            received_dt=recv_dt,
+            amount=self._current_amount,
+            unit=self._current_unit,
+            is_public_standard=is_public,
+        )
+        self._calc_result = res
+
+        weekdays_kr = ("월", "화", "수", "목", "금", "토", "일")
+        wk = weekdays_kr[res.due_dt.weekday()]
+        due_str = f"★ {res.due_dt.year}년 {res.due_dt.month}월 {res.due_dt.day}일 ({wk}) {res.due_dt.strftime('%H:%M')}"
+        self.res_due_label.setText(due_str)
+
+        unit_str = "시간" if res.unit == "hours" else "영업일"
+        self.res_badge.setText(f"소요: {res.amount}{unit_str} (달력상 {res.total_calendar_days}일 경과)")
+
+        if is_public:
+            self.res_detail_label.setText(f"기준: 『민원 처리에 관한 법률』 준용 ({res.description})")
+        else:
+            self.res_detail_label.setText(f"기준: {res.description}")
+
+        if res.excluded_days:
+            exc_str = ", ".join([f"{d.month}/{d.day}({r})" for d, r in res.excluded_days])
+            self.res_excluded_label.setText(f"🚫 제외된 일자({len(res.excluded_days)}일): {exc_str}")
+        else:
+            self.res_excluded_label.setText("✔ 제외된 일자 없음 (정상 영업일 산정)")
+
+    def _on_register_schedule(self) -> None:
+        if self._calc_result is None:
+            return
+        qd = self.recv_date_edit.date()
+        qt = self.recv_time_edit.time()
+        start_date = date(qd.year(), qd.month(), qd.day())
+        start_time = f"{qt.hour():02d}:{qt.minute():02d}"
+
+        unit_text = "시간" if self._current_unit == "hours" else "일"
+        self.schedule_data = {
+            "title": f"[민원] {self._current_amount}{unit_text} 민원 처리",
+            "start_date": start_date,
+            "start_time": start_time,
+            "end_date": self._calc_result.due_dt.date(),
+            "end_time": self._calc_result.due_dt.strftime("%H:%M"),
+        }
+        self.accept()
+
 
 

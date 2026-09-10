@@ -61,7 +61,15 @@ from taskcalendar import APP_VERSION
 from taskcalendar.backup_io import backup_to_zip, restore_from_zip
 from taskcalendar.models import AlertType, CalendarEntry, EntryType, Alarm, calculate_next_alarm_trigger
 from taskcalendar.paths import asset_path, data_path
-from taskcalendar.qt_dialogs import EntryDialog, EntryViewDialog, SettingsDialog, AlarmManagerDialog, BackupRestoreFormatDialog, get_sticker_pixmap
+from taskcalendar.qt_dialogs import (
+    EntryDialog,
+    EntryViewDialog,
+    SettingsDialog,
+    AlarmManagerDialog,
+    BackupRestoreFormatDialog,
+    get_sticker_pixmap,
+    CivilComplaintCalculatorDialog,
+)
 from taskcalendar.storage import EncryptedRepository
 from taskcalendar.themes import THEMES
 from taskcalendar.lunar import get_lunar_date, get_solar_term
@@ -1078,6 +1086,11 @@ class MainWindow(QMainWindow):
         self.memo_button = self._top_button("메모")
         self.memo_button.clicked.connect(lambda: self._set_sidebar_mode("memo"))
         right.addWidget(self.memo_button)
+
+        self.complaint_button = self._top_button("민원계산기")
+        self.complaint_button.setToolTip("민원 처리기한 모의계산기 (법정 공휴일/근무시간 자동 산정)")
+        self.complaint_button.clicked.connect(self._open_complaint_calculator)
+        right.addWidget(self.complaint_button)
 
         self.alarm_button = self._top_button("알림")
         self.alarm_button.clicked.connect(self._open_alarm_settings)
@@ -4431,6 +4444,25 @@ class MainWindow(QMainWindow):
         self.selected_day = today
         self.sidebar_mode = "day"
         self.refresh()
+
+    def _open_complaint_calculator(self) -> None:
+        dlg = CivilComplaintCalculatorDialog(self, holidays_fixed=self._holidays_fixed, holidays_yearly=self._holidays_yearly)
+        if dlg.exec() and dlg.schedule_data:
+            data = dlg.schedule_data
+            new_entry = CalendarEntry(
+                entry_type=EntryType.SCHEDULE,
+                title=data.get("title", "[민원] "),
+                day=data.get("start_date"),
+                start_date=data.get("start_date"),
+                end_date=data.get("end_date"),
+                start_time=data.get("start_time", "09:00"),
+                end_time=data.get("end_time", "18:00"),
+                all_day=False,
+                alert_type=AlertType.POPUP,
+                alert_offset="1h",
+                icon_type="🏛️",
+            )
+            self._open_entry_dialog(EntryType.SCHEDULE, data.get("start_date"), new_entry)
 
     def _open_settings(self, initial_tab: str = "general") -> None:
         current_auto_start = is_startup_enabled()
