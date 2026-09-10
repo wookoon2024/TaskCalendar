@@ -1937,7 +1937,7 @@ class EntryDialog(QDialog):
         if hasattr(self, "start_lunar_badge"):
             if lunar_info:
                 leap_str = " (윤달)" if lunar_info.is_leap else ""
-                self.start_lunar_badge.setText(f"🌙 선택일: 음력 {lunar_info.month}월 {lunar_info.day}일{leap_str}")
+                self.start_lunar_badge.setText(f"음력 {lunar_info.month}월 {lunar_info.day}일{leap_str}")
                 self.start_lunar_badge.show()
             else:
                 self.start_lunar_badge.hide()
@@ -1947,18 +1947,13 @@ class EntryDialog(QDialog):
         self.month_day_wrap.setVisible(recurrence == RecurrenceType.MONTHLY.value)
         self.month_week_wrap.setVisible(recurrence == RecurrenceType.MONTHLY_NTH.value)
         self.weekday_wrap.setVisible(recurrence == RecurrenceType.WEEKLY.value)
-        self.recurrence_summary.setVisible(recurrence != RecurrenceType.WEEKLY.value)
+        self.recurrence_summary.setVisible(recurrence != RecurrenceType.WEEKLY.value and recurrence != RecurrenceType.LUNAR_YEARLY.value)
         if recurrence == RecurrenceType.YEARLY.value:
             self.recurrence_summary.setText(f"매년 {self.start_date.date().toString('MM월 dd일')}")
             self.recurrence_summary.setStyleSheet("")
         elif recurrence == RecurrenceType.LUNAR_YEARLY.value:
-            if lunar_info:
-                leap_str = " (윤달)" if lunar_info.is_leap else ""
-                self.recurrence_summary.setText(f"매년 음력 {lunar_info.month}월 {lunar_info.day}일{leap_str} 반복")
-                self.recurrence_summary.setStyleSheet("font-size: 12px; font-weight: bold; color: #0284c7; background: #e0f2fe; padding: 2px 8px; border-radius: 4px;")
-            else:
-                self.recurrence_summary.setText("매년 음력 반복")
-                self.recurrence_summary.setStyleSheet("")
+            self.recurrence_summary.setText("")
+            self.recurrence_summary.setStyleSheet("")
         elif recurrence == RecurrenceType.MONTHLY.value:
             self.recurrence_summary.setStyleSheet("")
             if self.recurrence_month_end_check.isChecked():
