@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>【붙임 1】 AI 활용 업무혁신 아이디어(혁신과제) 제안서 - TaskCalendar</title>
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 15mm 15mm 15mm 15mm;
+    }
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    body {
+      font-family: "Malgun Gothic", "맑은 고딕", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #111827;
+      background-color: #f3f4f6;
+      margin: 0;
+      padding: 30px 15px;
+      line-height: 1.55;
+      font-size: 13.5px;
+    }
+    .page-container {
+      max-width: 960px;
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 40px 45px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      border-radius: 8px;
+    }
+    .top-tag {
+      font-size: 13px;
+      font-weight: 700;
+      color: #1e40af;
+      margin-bottom: 8px;
+      letter-spacing: -0.3px;
+    }
+    .doc-title {
+      font-size: 24px;
+      font-weight: 800;
+      text-align: center;
+      color: #0f172a;
+      margin: 0 0 25px 0;
+      letter-spacing: -0.5px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid #1e3a8a;
+    }
+    .proposal-table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1.5px solid #475569;
+      margin-bottom: 20px;
+    }
+    .proposal-table th, 
+    .proposal-table td {
+      border: 1px solid #94a3b8;
+      padding: 10px 14px;
+      vertical-align: middle;
+    }
+    .col-header {
+      width: 135px;
+      background-color: #f1f5f9;
+      font-weight: 700;
+      text-align: center;
+      color: #1e293b;
+      letter-spacing: -0.3px;
+    }
+    .col-content {
+      background-color: #ffffff;
+    }
+    .section-banner {
+      background-color: #e2e8f0;
+      font-weight: 800;
+      text-align: center;
+      font-size: 14.5px;
+      color: #0f172a;
+      padding: 9px !important;
+      letter-spacing: 2px;
+    }
+    .project-name-main {
+      font-size: 16px;
+      font-weight: 800;
+      color: #1e3a8a;
+      margin-bottom: 3px;
+      letter-spacing: -0.4px;
+    }
+    .project-name-sub {
+      font-size: 13px;
+      color: #475569;
+      font-weight: 600;
+    }
+    .section-title {
+      font-weight: 700;
+      color: #0f172a;
+      margin-top: 6px;
+      margin-bottom: 3px;
+      font-size: 13.5px;
+    }
+    .section-title:first-child {
+      margin-top: 0;
+    }
+    .sub-feature-title {
+      font-weight: 700;
+      color: #1e3a8a;
+      margin-top: 14px;
+      margin-bottom: 4px;
+      font-size: 13px;
+      background-color: #f8fafc;
+      padding: 3px 8px;
+      border-left: 3px solid #2563eb;
+    }
+    .bullet-p1 {
+      margin: 2px 0 2px 14px;
+      text-indent: -14px;
+      color: #1f2937;
+    }
+    .bullet-p2 {
+      margin: 2px 0 2px 28px;
+      text-indent: -14px;
+      color: #374151;
+    }
+    .img-card-box {
+      margin: 8px 0 12px 14px;
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 8px;
+      text-align: center;
+    }
+    .img-card-box img {
+      max-width: 100%;
+      height: auto;
+      border: 1px solid #94a3b8;
+      border-radius: 4px;
+      display: block;
+      margin: 0 auto;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    }
+    .img-caption {
+      font-size: 11.5px;
+      font-weight: 700;
+      color: #334155;
+      margin-top: 6px;
+    }
+    .img-grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin: 8px 0 12px 14px;
+    }
+    .img-grid-item {
+      background: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 8px;
+      text-align: center;
+    }
+    .img-grid-item img {
+      max-width: 100%;
+      height: auto;
+      border: 1px solid #94a3b8;
+      border-radius: 4px;
+      display: block;
+      margin: 0 auto;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    }
+    .flow-diagram-box {
+      background-color: #f8fafc;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      padding: 12px 14px;
+      margin: 10px 0;
+    }
+    .flow-diagram-title {
+      font-weight: 700;
+      font-size: 12.5px;
+      color: #334155;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .step-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    .step-card {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 5px;
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+    .step-card-title {
+      font-weight: 700;
+      color: #1e40af;
+      margin-bottom: 4px;
+    }
+    .step-card-desc {
+      color: #475569;
+      line-height: 1.4;
+    }
+    .btn-print {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #1e40af;
+      color: #ffffff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+      margin-bottom: 15px;
+      transition: background 0.2s;
+    }
+    .btn-print:hover {
+      background: #1e3a8a;
+    }
+    @media print {
+      body {
+        background-color: #ffffff;
+        padding: 0;
+      }
+      .page-container {
+        box-shadow: none;
+        padding: 0;
+        max-width: 100%;
+      }
+      .btn-print {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="page-container">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div class="top-tag">【붙임 1】</div>
+      <button class="btn-print" onclick="window.print()">🖨️ 인쇄 / PDF 저장</button>
+    </div>
+
+    <h1 class="doc-title">AI 활용 업무혁신 아이디어(혁신과제) 제안서</h1>
+
+    <table class="proposal-table">
+      <!-- 1. 과제명 -->
+      <tr>
+        <td class="col-header">과 제 명</td>
+        <td class="col-content" colspan="3">
+          <div class="project-name-main">행정망 환경 맞춤형 로컬 업무 캘린더 『TaskCalendar』 구축</div>
+          <div class="project-name-sub">- 민원 마감 및 행사 일정 사전 알림과 스마트 메모를 통한 실무 생산성 향상 -</div>
+        </td>
+      </tr>
+
+      <!-- 2. 제안 배경 및 필요성 -->
+      <tr>
+        <td class="col-header">제안 배경 및<br>필요성</td>
+        <td class="col-content" colspan="3">
+          <div class="section-title">□ 민간 상용 캘린더의 클라우드 서비스 전환에 따른 행정망 도입 한계</div>
+          <div class="bullet-p1">○ <strong>(네트워크 통신 강제화)</strong> 기존 민간 상용 캘린더·메모 소프트웨어 대다수가 최근 온라인 계정 로그인, 클라우드 서버 동기화, 상시 외부 네트워크 통신을 필수로 요구하여 내부 행정망 PC 설치 및 운용 불가</div>
+          <div class="bullet-p1">○ <strong>(독립형 로컬 도구 부재)</strong> 외부 통신 없이 행정망 PC 자체에서 안전하게 독립 구동되는 공공 실무 맞춤형 캘린더 소프트웨어 부재</div>
+
+          <div class="section-title">□ 민원 처리 마감 및 주요 행사·회의 일정 관리 애로</div>
+          <div class="bullet-p1">○ <strong>(법정 기한 준수 부담)</strong> 병역판정검사 이의신청, 민원 사무 등 법정 처리기한이 지정된 업무의 적기 처리를 위한 직관적 데스크톱 알림 수단 부족</div>
+          <div class="bullet-p1">○ <strong>(각종 행사·회의 준비 누락)</strong> 입영 행사, 병역진로설계 설명회, 정례 회의 등 부서별 주요 행사의 식순·준비사항을 챙기는 과정에서 종이 메모 분실 및 일정 중복 발생</div>
+
+          <div class="section-title">□ 민원·행사 관련 업무 서류 탐색 매몰비용 발생</div>
+          <div class="bullet-p1">○ 행사 계획서(HWP), 참석자 명단, 민원인 제출 서류를 찾기 위해 파일 탐색기 폴더를 매번 재검색하는 반복적 행정력 낭비 상존</div>
+        </td>
+      </tr>
+
+      <!-- 3. 인적사항 및 부서 -->
+      <tr>
+        <td class="col-header" style="width: 15%;">연구분야</td>
+        <td class="col-content" style="width: 35%; text-align: center; font-weight: 600;">고객지원 / 정보기획 / 행정운영 (전 부서 공통)</td>
+        <td class="col-header" style="width: 15%;">소속기관</td>
+        <td class="col-content" style="width: 35%; text-align: center; font-weight: 600;">병무청 본청 / OO지방병무청</td>
+      </tr>
+      <tr>
+        <td class="col-header">대표직원(1인)</td>
+        <td class="col-content" style="text-align: center;">소속 : OO지방병무청 / 직급 : 주무관 / 성명 : O O O</td>
+        <td class="col-header">참여인원</td>
+        <td class="col-content" style="text-align: center;">소속 : OO지방병무청 / 직급 : 주무관 / 성명 : O O O 외 O명</td>
+      </tr>
+
+      <!-- 4. 중간 구분 헤더 -->
+      <tr>
+        <td class="section-banner" colspan="4">과 제 개 요 &nbsp; 및 &nbsp; 추 진 내 용</td>
+      </tr>
+
+      <!-- 5. 워크메이트 활용 (가점 5점) -->
+      <tr>
+        <td class="col-header">워크메이트 활용<br><span style="color:#b91c1c; font-size:12px;">(가점-5점)</span></td>
+        <td class="col-content" colspan="3">
+          <div class="section-title">□ 병무청 내부 [지식·규정 RAG 질의응답]을 통한 실무 기한 확인 및 캘린더 연계</div>
+          
+          <div class="bullet-p1">○ <strong>복잡한 민원 법정 처리기한 및 보완 시한 RAG 즉시 확인</strong></div>
+          <div class="bullet-p2">- 직원이 개별 민원 사무별 법정 처리기한(이의신청, 재검사, 병역처분변경 등) 및 서류 보완 규정을 워크메이트에 자연어로 질의</div>
+          <div class="bullet-p2" style="color: #4b5563; font-style: italic;">ㆍ(질의 예시) "병역처분변경원 접수 시 법정 처리기한 및 서류 보완 통지 시한 규정 알려줘"</div>
+          <div class="bullet-p2">- 워크메이트가 내부 훈령·편람 지식에서 검색·답변한 정확한 처리기한을 확인</div>
+
+          <div class="bullet-p1">○ <strong>주요 행사·통지 업무 필수 사전 절차 및 시한 확인</strong></div>
+          <div class="bullet-p2">- 입영 행사, 설명회, 복무기관 실태조사 등 법령·지침상 정해진 사전 통지 시한 및 준비 절차를 워크메이트 RAG로 검색</div>
+          <div class="bullet-p2" style="color: #4b5563; font-style: italic;">ㆍ(질의 예시) "사회복무요원 복무기관 실태조사 사전 통보 기한 규정 알려줘"</div>
+
+          <div class="bullet-p1">○ <strong>TaskCalendar 즉시 연계 및 기한 누락 원천 방지</strong></div>
+          <div class="bullet-p2">- 워크메이트 답변으로 확인된 마감 시점을 <code>TaskCalendar</code>에 등록하고, 마감 1일 전·3일 전 다단계 사전 알람을 가동하여 기한 초과 및 행정 착오 원천 방지</div>
+
+          <div class="flow-diagram-box">
+            <div class="flow-diagram-title">💡 직원 중심 실무 연계 프로세스 (규정 질의 ➔ 기한 확인 ➔ 알람 등록)</div>
+            <div class="step-grid">
+              <div class="step-card">
+                <div class="step-card-title">① 워크메이트 RAG 질의</div>
+                <div class="step-card-desc">직원이 민원 법정기한 및 행사 사전 통지 규정을 자연어로 질의</div>
+              </div>
+              <div class="step-card">
+                <div class="step-card-title">② 정확한 처리 시한 확인</div>
+                <div class="step-card-desc">워크메이트가 내부 훈령·편람 지식을 검색하여 정확한 기한 답변</div>
+              </div>
+              <div class="step-card">
+                <div class="step-card-title">③ TaskCalendar 알람 등록</div>
+                <div class="step-card-desc">확인된 기한을 캘린더에 마감일로 등록하고 사전 알람 가동</div>
+              </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+
+      <!-- 6. 활용 모델 -->
+      <tr>
+        <td class="col-header">활용 모델</td>
+        <td class="col-content" colspan="3">
+          <div class="section-title">□ 제미나이(Gemini), 구글 플로우(Google Flow), AI 워크메이트 복합 활용</div>
+          <div class="bullet-p1">○ <strong>제미나이 (Google Gemini)</strong>: 민원 지침 및 행사 계획 문서 내 핵심 마감일, 필수 체크리스트 요약 텍스트 정제</div>
+          <div class="bullet-p1">○ <strong>구글 플로우 (Google Flow)</strong>: 캘린더 UI 테마 에셋 제작 및 일정 등록 워크플로우 도식화</div>
+          <div class="bullet-p1">○ <strong>AI 워크메이트 (RAG 질의응답)</strong>: 병무행정 법령·훈령·편람 지식베이스 질의응답을 통한 법정 처리기한 및 행사 절차 확인</div>
+        </td>
+      </tr>
+
+      <!-- 7. 구현 방법 및 프로그램 특징 -->
+      <tr>
+        <td class="col-header">구현 방법<br>및<br>프로그램 특징</td>
+        <td class="col-content" colspan="3">
+          <div class="section-title">□ 바이브 코딩(Vibe Coding)을 통한 Python 기반 행정망 전용 소프트웨어 구현</div>
+          
+          <!-- 1. 메인 캘린더 -->
+          <div class="sub-feature-title">1. 메인 캘린더 (Main Calendar) 엔진 및 직관적 인터랙션</div>
+          <div class="bullet-p2">- <strong>날짜 셀 빈 공간 더블클릭</strong>: 원하는 날짜 빈 영역 더블클릭 시 [일정 등록] 팝업 0초 즉각 호출</div>
+          <div class="bullet-p2">- <strong>마우스 휠 월 전환</strong>: 캘린더 영역에서 마우스 휠 스크롤 시 전월/익월 부드러운 즉시 전환</div>
+          <div class="bullet-p2">- <strong>사이드바 통합 관제</strong>: 오늘 일정, 선택일 일정, 메모 목록을 단일 화면 우측에서 일괄 조회·정렬</div>
+          <div class="bullet-p2">- <strong>공공 공휴일 자동 반영</strong>: 정부 법정 공휴일 및 대체공휴일 데이터 내장으로 행정 휴무일 자동 계산</div>
+          
+          <div class="img-card-box">
+            <img src="docs/01_main_calendar_clean.png" alt="메인 캘린더 화면" style="max-height: 290px;">
+            <div class="img-caption">&lt; 그림 1. TaskCalendar 메인 캘린더 및 우측 사이드바 통합 관제 화면 &gt;</div>
+          </div>
+
+          <!-- 2. 정밀 검색 및 엑셀저장 -->
+          <div class="sub-feature-title">2. 실시간 통합 검색 (Search Engine) 및 엑셀 저장 (Export) 지원</div>
+          <div class="bullet-p2">- <strong>제목 및 본문 통합 부분일치 검색</strong>: 검색창에 키워드 입력 시 <code>NOCASE</code>(대소문자 무구분)로 제목과 상세 설명 본문을 동시 탐색</div>
+          <div class="bullet-p2">- <strong>사이드바 실시간 검색 결과 전환</strong>: 검색어 입력 즉시 우측 사이드바가 [검색결과 N건] 모드로 전환되어 일치하는 일정 리스트 표출</div>
+          <div class="bullet-p2">- <strong>원클릭 캘린더 날짜 점프</strong>: 검색 결과 목록에서 특정 항목 클릭 시 해당 날짜로 캘린더 화면이 즉각 이동하며 수정 팝업 호출</div>
+          <div class="bullet-p2">- <strong>검색 결과 원클릭 [엑셀저장] 지원</strong>: 검색된 민원·행사 목록을 엑셀(<code>.xlsx</code>) 파일로 1초 만에 일괄 추출하여 보고서 작성 및 행정 증빙자료로 즉시 활용</div>
+
+          <div class="img-card-box">
+            <img src="docs/06_search_view_clean.png" alt="검색 기능 및 엑셀저장 화면" style="max-height: 290px;">
+            <div class="img-caption">&lt; 그림 2. 통합 검색 기능 ('민원' 키워드 검색 결과 3건 표출 및 [엑셀저장] 지원 화면) &gt;</div>
+          </div>
+
+          <!-- 3. 세부 반복 설정 엔진 -->
+          <div class="sub-feature-title">3. 공공 업무 특화 다차원 반복 일정(Advanced Recurrence) 설정 엔진</div>
+          <div class="bullet-p2">- <strong>매일 (Daily)</strong>: N일 간격(1일마다, 3일마다 등) 주기적 반복 지원</div>
+          <div class="bullet-p2">- <strong>매주 (Weekly) 및 요일 다중 선택</strong>: N주마다 특정 요일(월/수/금 등 복수 요일) 지정 반복 (예: 매주 월요일 주간간부회의, 화·목 정기 순찰)</div>
+          <div class="bullet-p2">- <strong>매월 특정일 (Monthly by Day)</strong>: 매월 N일(예: 매월 10일 지출결의, 25일 정기보고) 반복</div>
+          <div class="bullet-p2">- <strong>매월 말일 자동 계산 (Month-End)</strong>: 28일, 30일, 31일 등 월마다 달라지는 말일을 시스템이 자동 판별하여 매월 마지막 날짜에 정확히 반영 (월말 정기 결재 등)</div>
+          <div class="bullet-p2">- <strong>매월 N번째 특정 요일 (Monthly by N-th Weekday)</strong>: 매월 N번째 특정 요일(예: 매월 둘째 주 화요일 정기 실태조사, 넷째 주 금요일 정례회의) 지정 반복</div>
+          <div class="bullet-p2">- <strong>매년 (Yearly)</strong>: 연례 정기 행사, 기념일, 연간 법정 감사 등 1년 주기 반복</div>
+          <div class="bullet-p2">- <strong>반복 일정 완료 이력 독립 관리</strong>: 반복 일정 중 오늘 일정을 '완료' 체크하더라도 다음 주기 반복 일정은 그대로 유지되는 독립 이력 체계 구현</div>
+
+          <div class="img-card-box">
+            <img src="docs/03_recurrence_dialog_clean.png" alt="반복 설정 일정 등록 화면" style="max-height: 310px;">
+            <div class="img-caption">&lt; 그림 3. [일정 등록] 다차원 반복 설정 UI (매월 둘째 주 화요일 등 정밀 반복 주기 지정) &gt;</div>
+          </div>
+
+          <!-- 4. 스마트 플로팅 메모 -->
+          <div class="sub-feature-title">4. 스마트 플로팅 메모 (Smart Floating Memo) 혁신</div>
+          <div class="bullet-p2">- <strong>바탕화면 100% 무결 상태 복원</strong>: 재부팅 후에도 메모의 위치, 창 크기, 핀 고정(📌) 상태 완벽 유지</div>
+          <div class="bullet-p2">- <strong>원클릭 슬림 접기/펼치기 (`-`/`+` 동적 토글)</strong>: 메모 상단 `-` 버튼 클릭 시 제목 표시줄(34px)로 슬림하게 접혀 바탕화면 작업 공간 확보, `+` 클릭 시 원상태 복원</div>
+          <div class="bullet-p2">- <strong>캡처 이미지 메모 본문 즉시 삽입</strong>: 캡처 도구(<code>Win+Shift+S</code>)로 복사한 사내 비상연락망, 당직 매뉴얼, 행사 배치도를 단축키(<code>Ctrl+V</code>)로 메모 본문에 즉시 삽입</div>
+          <div class="bullet-p2">- <strong>업무 첨부파일 양방향 탐색기 연계</strong>: 파일을 메모로 드래그 앤 드롭 자동 첨부, <strong>[파일 열기]</strong>(연결 프로그램 실행) 및 <strong>[파일 폴더 열기]</strong>(해당 폴더 탐색기 호출 후 파일 자동 하이라이트) 지원</div>
+          <div class="bullet-p2">- <strong>미연계 잔여 파일 자동 정리</strong>: 메모 삭제 시 로컬 디스크에 남는 미연계 첨부파일을 감지하여 동반 삭제, 저장공간 낭비 및 정보 유출 방지</div>
+          <div class="bullet-p2">- <strong>항상 위 핀 고정(📌) 및 투명도 조절</strong>: 최상단 화면 고정 및 투명도 슬라이더 지원으로 배경 문서와 대조 작업 가능</div>
+          <div class="bullet-p2">- <strong>지연 시간 없는 즉각 닫기 최적화</strong>: 닫기(<code>X</code>) 클릭 시 지연 없이 즉시 닫히며 백그라운드 자동 저장</div>
+
+          <div class="img-card-box">
+            <img src="docs/02_floating_memo.png" alt="스마트 플로팅 메모 화면" style="max-height: 290px;">
+            <div class="img-caption">&lt; 그림 4. 스마트 플로팅 메모 (사내 비상연락망 이미지 삽입, 파일 첨부 및 폴더 열기 연계) &gt;</div>
+          </div>
+
+          <!-- 5. 다단계 사전 알람 및 전역 단축키, 보안 -->
+          <div class="sub-feature-title">5. 골든타임 사전 알람, 전역 단축키 및 공공 보안 체계</div>
+          <div class="bullet-p2">- <strong>다단계 사전 팝업 알람</strong>: 시작 5분·10분·15분·30분·1시간 전 사전 팝업 알람 및 5분 뒤 다시 알림(Snooze) 지원으로 기한 누락 원천 방지</div>
+          <div class="bullet-p2">- <strong>전역 단축키(Global Hotkey)</strong>: 민원 전화 통화 중 <code>Ctrl+Shift+M</code>으로 1초 빠른 메모 호출, 문서 작업 중 <code>Ctrl+Shift+C</code>로 캘린더 즉각 호출</div>
+          <div class="bullet-p2">- <strong>Windows DPAPI 하드웨어 암호화</strong>: SQLite DB를 OS 계정 고유 키로 암호화 저장(<code>encrypt_work_db.py</code>), PC 분실·복제 시 데이터 열람 원천 차단</div>
+          <div class="bullet-p2">- <strong>외부 통신 제로(Zero-Network) & 무설치 바이너리</strong>: 외부 클라우드 통신 100% 배제 및 단일 무설치 파일(<code>Calendar.exe</code>, RAM 50MB) 가동</div>
+        </td>
+      </tr>
+
+      <!-- 8. 데이터활용 -->
+      <tr>
+        <td class="col-header">데이터활용</td>
+        <td class="col-content" colspan="3">
+          <div class="section-title">□ 공공데이터포털 특일 정보 Open API 연계 및 활용</div>
+          <div class="bullet-p1">○ <strong>공공데이터포털(data.go.kr) 『특일 정보제공 서비스 Open API』 연계</strong></div>
+          <div class="bullet-p2">- 한국천문연구원 및 행정안전부 제공 법정 공휴일, 대체공휴일, 국경일 공식 데이터 연동</div>
+          <div class="bullet-p1">○ <strong>행정 민원 법정 처리기한 및 근무일(영업일) 자동 계산 기준 제공</strong></div>
+          <div class="bullet-p2">- 공공데이터 기반 휴무일을 시스템에 자동 반영하여, 민원 사무 법정 처리기한 산정 시 공휴일 제외 및 적기 처리 시점의 정확한 산출 지원</div>
+
+          <div class="section-title" style="margin-top: 10px;">□ 행정망 정보보안 및 개인정보 보호 조치 사항</div>
+          <div class="bullet-p1">○ <strong>외부 네트워크 통신 차단에 따른 보안성 확보 (Zero-Network)</strong></div>
+          <div class="bullet-p2">- 외부 인터넷망 연동 및 비인가 클라우드 통신을 100% 배제한 오프라인 완결형 로컬 아키텍처 구축, 내부 행정망 보안 규정 완벽 충족</div>
+          <div class="bullet-p1">○ <strong>Windows DPAPI(Data Protection API) 기반 로컬 DB 하드웨어 암호화</strong></div>
+          <div class="bullet-p2">- 사용자 PC 로컬에 저장되는 일정·메모 데이터베이스(SQLite) 전체를 Windows 로그인 계정 고유 마스터 키로 암호화 저장(<code>encrypt_work_db.py</code>)</div>
+          <div class="bullet-p2">- 타인이 PC 하드디스크를 무단 복제하거나 분실하더라도 비인가 열람 및 유출 원천 차단</div>
+          <div class="bullet-p1">○ <strong>개인정보 보호법 준수 및 고유식별정보 비저장 원칙</strong></div>
+          <div class="bullet-p2">- 주민등록번호, 계좌번호 등 민감한 개인식별정보 저장을 원천 배제하고, 일정명·시간·장소 등 순수 업무 메타데이터 중심으로만 관리</div>
+          <div class="bullet-p1">○ <strong>메모 파기 시 첨부파일 안전 동반 삭제</strong></div>
+          <div class="bullet-p2">- 메모 삭제 시 로컬 디스크에 임시 저장된 관련 첨부 서류(HWP, PDF 등)를 감지하여 동반 파기함으로써 중요 행정 자료 방치 위험 차단</div>
+        </td>
+      </tr>
+
+      <!-- 9. 세부 개선 내용 (AS-IS vs TO-BE) -->
+      <tr>
+        <td class="col-header" rowspan="2">세부 개선 내용</td>
+        <td colspan="3" style="background:#fef2f2; font-weight:700; color:#991b1b; padding:7px 12px;">현 행 (AS-IS)</td>
+      </tr>
+      <tr>
+        <td colspan="3" class="col-content" style="border-top:none;">
+          <div class="bullet-p1">□ <strong>민간 상용 소프트웨어 사용 불가에 따른 일정 관리 공백</strong>: 최신 민간 소프트웨어의 클라우드·로그인 강제화로 행정망 설치 불가, 종이 달력이나 수기 메모 의존</div>
+          <div class="bullet-p1">□ <strong>민원 마감 및 행사 일정 관리 한계</strong>: 담당자 기억에 의존하여 행사 사전 준비 누락 및 민원 법정 처리기한 임박에 따른 급박한 대처 발생</div>
+          <div class="bullet-p1">□ <strong>행사 서류 및 연락처 탐색 지연</strong>: 행사 계획서, 식순, 민원인 메모를 찾기 위해 파일 탐색기와 결재함을 반복 검색하는 비효율 발생</div>
+        </td>
+      </tr>
+      <tr>
+        <td class="col-header" style="background:#eff6ff;">개선 방향</td>
+        <td colspan="3" style="background:#f0fdf4; font-weight:700; color:#166534; padding:7px 12px;">개 선 (TO-BE)</td>
+      </tr>
+      <tr>
+        <td class="col-header" style="background:#eff6ff; border-top:none;">(TO-BE)</td>
+        <td colspan="3" class="col-content" style="border-top:none;">
+          <div class="bullet-p1">□ <strong>행정망 전용 독립형 캘린더 도입</strong>: 클라우드 연동 없는 순수 로컬 구동으로 행정망 보안 규정 완벽 준수 및 단일 무설치 가동</div>
+          <div class="bullet-p1">□ <strong>사전 알람 기반 민원·행사 일정 관리 철저</strong>: 행사 시작 및 민원 마감 5분~1시간 전 팝업 사전 알림으로 준비 누락 및 기한 초과 원천 차단</div>
+          <div class="bullet-p1">□ <strong>스마트 플로팅 메모로 행사·민원 현장 대응력 강화</strong>: 행사 식순 캡처 이미지 즉시 삽입, 관련 계획서 [폴더 바로 열기], 통화 중 1초 단축키 메모 지원</div>
+        </td>
+      </tr>
+
+      <!-- 10. 기대 효과 -->
+      <tr>
+        <td class="col-header">기대 효과</td>
+        <td class="col-content" colspan="3">
+          <div class="section-title">□ 정량적 기대효과 (행정 효율화 및 시간 절감)</div>
+          <div class="bullet-p1">○ <strong>행사 준비 및 민원 접수 시간 단축</strong>: 행사 계획서 및 연락처 탐색 시간 단축 (건당 3~5분 소요 ➔ <strong>10초 이내 즉각 확인</strong>)</div>
+          <div class="bullet-p1">○ <strong>민원 처리기한 준수율 제고 및 행사 준비 누락 제로화</strong>: 다단계 사전 알람을 통해 기한 임박 민원 적기 처리 및 주요 행사 사전 체크리스트 누락 0건 달성</div>
+          <div class="bullet-p1">○ <strong>단축키 기반 신속한 민원 메모 작성</strong>: 전화 통화 중 <code>Ctrl+Shift+M</code> 호출로 민원 요지 즉시 기록 (기록 지연 시간 0초 달성)</div>
+
+          <div class="section-title" style="margin-top: 10px;">□ 정성적 기대효과 (업무 만족도 및 행정 신뢰도 제고)</div>
+          <div class="bullet-p1">○ <strong>민원 응대 전문성 및 신속성 향상</strong>: 통화 중 관련 민원 서류 및 선례 즉시 확인으로 정확하고 신속한 대민 답변 제공</div>
+          <div class="bullet-p1">○ <strong>행사 진행의 안정성 및 부서 간 협업 증진</strong>: 식순표 및 참석자 명단 상시 거치를 통해 매끄러운 행사 진행 지원 및 일정 중복 예방</div>
+          <div class="bullet-p1">○ <strong>직원 직무 피로도 경감</strong>: 기억에 의존하던 마감일 압박에서 벗어나 사전 알람 중심의 여유 있는 계획적 행정 구현</div>
+        </td>
+      </tr>
+    </table>
+  </div>
+
+</body>
+</html>

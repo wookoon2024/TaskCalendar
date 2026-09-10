@@ -37,3 +37,10 @@ def data_path(*parts: str) -> Path:
 
 def logs_path(*parts: str) -> Path:
     return runtime_root() / "logs" / Path(*parts)
+
+
+def custom_stickers_path(*parts: str) -> Path:
+    p = runtime_root() / "data" / "custom_stickers" / Path(*parts)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+

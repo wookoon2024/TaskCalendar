@@ -49,3 +49,6 @@ salvage_db.py
 
 # Browser Extension
 browser_extension/
+
+# Scratch & temp
+scratch/

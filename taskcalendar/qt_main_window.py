@@ -61,9 +61,10 @@ from taskcalendar import APP_VERSION
 from taskcalendar.backup_io import backup_to_zip, restore_from_zip
 from taskcalendar.models import AlertType, CalendarEntry, EntryType, Alarm, calculate_next_alarm_trigger
 from taskcalendar.paths import asset_path, data_path
-from taskcalendar.qt_dialogs import EntryDialog, EntryViewDialog, SettingsDialog, AlarmManagerDialog, BackupRestoreFormatDialog
+from taskcalendar.qt_dialogs import EntryDialog, EntryViewDialog, SettingsDialog, AlarmManagerDialog, BackupRestoreFormatDialog, get_sticker_pixmap
 from taskcalendar.storage import EncryptedRepository
 from taskcalendar.themes import THEMES
+from taskcalendar.lunar import get_lunar_date, get_solar_term
 
 logger = logging.getLogger(__name__)
 ALERT_BOX_WIDTH = 300
@@ -342,6 +343,10 @@ class DayCell(QFrame):
         self.number_label = QLabel("")
         self.number_label.setStyleSheet("font-size: 11pt; background: transparent;")
         header.addWidget(self.number_label)
+        self.lunar_label = QLabel("")
+        self.lunar_label.setStyleSheet("font-size: 8pt; background: transparent; border: none;")
+        self.lunar_label.hide()
+        header.addWidget(self.lunar_label)
         header.addStretch(1)
         self.badge_label = QLabel("")
         self.badge_label.hide()
@@ -443,7 +448,15 @@ class DraggableCalendarEntryChip(QFrame):
 
         chip_layout = QHBoxLayout(self)
         chip_layout.setContentsMargins(3, 0, 3, 0)
-        chip_layout.setSpacing(0)
+        chip_layout.setSpacing(1)
+        if entry.icon_type:
+            pix = get_sticker_pixmap(entry.icon_type)
+            if pix and not pix.isNull():
+                icon_lbl = QLabel()
+                icon_lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                icon_lbl.setPixmap(pix.scaled(15, 15, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                icon_lbl.setStyleSheet("background: transparent; border: none; margin-right: 2px;")
+                chip_layout.addWidget(icon_lbl)
         if time_text:
             time_label = QLabel(time_text)
             time_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -885,6 +898,8 @@ class MainWindow(QMainWindow):
         self._sticker_anim_timer: QTimer | None = None
         self._sticker_animation_enabled = self.repository.get_setting("sticker_animation_enabled", "1") == "1"
         self.hide_completed_on_calendar = self.repository.get_setting("hide_completed_on_calendar", "1") == "1"
+        self.show_lunar_calendar = self.repository.get_setting("show_lunar_calendar", "1") == "1"
+        self.show_solar_terms = self.repository.get_setting("show_solar_terms", "1") == "1"
         self._action_icons: dict[str, QIcon] = self._load_action_icons()
         self._holidays_fixed, self._holidays_yearly = self._load_holidays()
         self.memo_title_only = self.repository.get_setting("memo_title_only", "0") == "1"
@@ -999,7 +1014,23 @@ class MainWindow(QMainWindow):
 
         left = QHBoxLayout()
         left.setSpacing(6)
-        self.prev_button = self._top_button("<", 32)
+        self.prev_button = self._top_button("◀", 34)
+        self.prev_button.setToolTip("이전 달")
+        self.prev_button.setStyleSheet("""
+            QPushButton {
+                font-size: 12px;
+                font-weight: bold;
+                color: #1e293b;
+                background: #f8fafc;
+                border: 1px solid #94a3b8;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background: #e2e8f0;
+                border-color: #0284c7;
+                color: #0284c7;
+            }
+        """)
         self.prev_button.clicked.connect(lambda: self._change_month(-1))
         left.addWidget(self.prev_button)
 
@@ -1014,7 +1045,23 @@ class MainWindow(QMainWindow):
         today_button = self._top_button("오늘")
         today_button.clicked.connect(self._go_today)
         left.addWidget(today_button)
-        self.next_button = self._top_button(">", 32)
+        self.next_button = self._top_button("▶", 34)
+        self.next_button.setToolTip("다음 달")
+        self.next_button.setStyleSheet("""
+            QPushButton {
+                font-size: 12px;
+                font-weight: bold;
+                color: #1e293b;
+                background: #f8fafc;
+                border: 1px solid #94a3b8;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background: #e2e8f0;
+                border-color: #0284c7;
+                color: #0284c7;
+            }
+        """)
         self.next_button.clicked.connect(lambda: self._change_month(1))
         left.addWidget(self.next_button)
         topbar_layout.addStretch(1)
@@ -3428,6 +3475,34 @@ class MainWindow(QMainWindow):
                 color = self.palette.get("badge_selected_fg", self.palette["text"]) if is_selected else (self.palette["text"] if in_month else self.palette["muted"])
                 cell.number_label.setStyleSheet(f"font-size: 11pt; color: {color}; background: transparent; border: none;")
 
+            solar_term = get_solar_term(current_day) if getattr(self, "show_solar_terms", True) else ""
+            lunar_info = get_lunar_date(current_day) if getattr(self, "show_lunar_calendar", True) else None
+
+            label_parts = []
+            tooltip_parts = []
+
+            if solar_term:
+                label_parts.append(solar_term)
+                tooltip_parts.append(f"24절기: {solar_term}")
+
+            if lunar_info:
+                leap_prefix = "윤" if lunar_info.is_leap else ""
+                label_parts.append(f"{leap_prefix}{lunar_info.month}.{lunar_info.day}")
+                tooltip_parts.append(f"음력 {leap_prefix}{lunar_info.month}월 {lunar_info.day}일")
+
+            if label_parts:
+                cell.lunar_label.setText(" ".join(label_parts))
+                if solar_term:
+                    term_color = self.palette.get("success", "#10b981")
+                    cell.lunar_label.setStyleSheet(f"font-size: 8pt; font-weight: bold; color: {term_color}; background: transparent; border: none;")
+                else:
+                    lunar_color = self.palette.get("badge_selected_fg", self.palette["muted"]) if is_selected else self.palette["muted"]
+                    cell.lunar_label.setStyleSheet(f"font-size: 8pt; color: {lunar_color}; background: transparent; border: none;")
+                cell.lunar_label.setToolTip(" / ".join(tooltip_parts))
+                cell.lunar_label.show()
+            else:
+                cell.lunar_label.hide()
+
             badge_text = "오늘" if is_today else "선택" if is_selected else ""
             if badge_text:
                 cell.badge_label.setText(badge_text)
@@ -3785,17 +3860,21 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _entry_icon(entry: CalendarEntry) -> str:
-        if entry.icon_type == "anniversary":
-            return "🎂"
-        if entry.icon_type == "important":
-            return "⭐"
-        if entry.icon_type == "coffee":
-            return "☕"
-        if entry.icon_type == "meal":
-            return "🍚"
-        if entry.icon_type == "meeting":
-            return "👥"
-        return ""
+        if not entry.icon_type:
+            return ""
+        if entry.icon_type.startswith(("custom:", "built_in:")) or entry.icon_type.endswith(".png"):
+            return ""
+        legacy = {
+            "anniversary": "🎂",
+            "important": "⭐",
+            "coffee": "☕",
+            "meal": "🍚",
+            "meeting": "👥",
+            "floating": "",
+        }
+        if entry.icon_type in legacy:
+            return legacy[entry.icon_type]
+        return entry.icon_type
 
     @staticmethod
     def _is_entry_completed_on_day(entry: CalendarEntry, target_day: date) -> bool:
@@ -4369,6 +4448,8 @@ class MainWindow(QMainWindow):
             self.repository.db_path,
             current_memo_shortcut=self.repository.get_setting("memo_toggle_shortcut", "F4"),
             initial_tab=initial_tab,
+            show_lunar_calendar=self.show_lunar_calendar,
+            show_solar_terms=self.show_solar_terms,
         )
         if dialog.exec() and dialog.result is not None:
             action = str(dialog.result.get("action", "apply"))
@@ -4405,6 +4486,10 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("sticker_animation_enabled", "1" if self._sticker_animation_enabled else "0")
             self.hide_completed_on_calendar = bool(dialog.result.get("hide_completed_on_calendar", True))
             self.repository.set_setting("hide_completed_on_calendar", "1" if self.hide_completed_on_calendar else "0")
+            self.show_lunar_calendar = bool(dialog.result.get("show_lunar_calendar", True))
+            self.repository.set_setting("show_lunar_calendar", "1" if self.show_lunar_calendar else "0")
+            self.show_solar_terms = bool(dialog.result.get("show_solar_terms", True))
+            self.repository.set_setting("show_solar_terms", "1" if self.show_solar_terms else "0")
             
             auto_bk_enabled = bool(dialog.result.get("auto_backup_enabled", True))
             self.repository.set_setting("auto_backup_enabled", "1" if auto_bk_enabled else "0")

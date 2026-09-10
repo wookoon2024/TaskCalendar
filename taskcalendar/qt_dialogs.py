@@ -3,13 +3,15 @@ from __future__ import annotations
 from datetime import date, datetime
 import ctypes
 import logging
+import shutil
 from pathlib import Path
 from typing import Callable
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
 from PySide6.QtCore import QDate, QTime, Qt, QTimer, QRect, QPoint, QSize, QUrl, QEvent
-from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QTextCursor, QPainter, QPen, QColor, QDesktopServices, QCursor
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QTextCursor, QPainter, QPen, QColor, QDesktopServices, QCursor, QPixmap
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -35,6 +37,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
+    QTabWidget,
     QTimeEdit,
     QToolButton,
     QVBoxLayout,
@@ -48,6 +51,7 @@ from taskcalendar.models import (
     COLOR_OPTIONS,
     ICON_OPTIONS,
     RECURRENCE_OPTIONS,
+    STICKER_CATEGORIES,
     WEEKDAY_LABELS,
     AlertType,
     CalendarEntry,
@@ -59,7 +63,8 @@ from taskcalendar.models import (
 )
 from taskcalendar import APP_VERSION
 from taskcalendar.desktop_services import _parse_hotkey, normalize_shortcut
-from taskcalendar.paths import asset_path
+from taskcalendar.paths import asset_path, custom_stickers_path
+from taskcalendar.lunar import get_lunar_date
 
 MEMO_THEMES = {
     "yellow": {
@@ -129,6 +134,25 @@ FORM_LABEL_WIDTH = 40
 def _dialog_icon() -> QIcon:
     icon_path = asset_path("dialog_icon.svg")
     return QIcon(str(icon_path))
+
+
+def get_sticker_pixmap(icon_type: str) -> QPixmap | None:
+    if not icon_type:
+        return None
+    file_path: Path | None = None
+    if icon_type.startswith("custom:"):
+        fname = icon_type[7:]
+        file_path = custom_stickers_path(fname)
+    elif icon_type.startswith("built_in:"):
+        fname = icon_type[9:]
+        file_path = asset_path("stickers", fname)
+    elif icon_type.endswith(".png"):
+        file_path = custom_stickers_path(icon_type)
+        if not file_path.exists():
+            file_path = asset_path("stickers", icon_type)
+    if file_path and file_path.exists():
+        return QPixmap(str(file_path))
+    return None
 
 
 def _to_qdate(value: date | None) -> QDate:
@@ -588,6 +612,291 @@ class EditableTitleLineEdit(QLineEdit):
         super().mouseMoveEvent(event)
 
 
+class IconPickerPopup(QDialog):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("스티커 선택")
+        self.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setFixedSize(460, 370)
+        self.setStyleSheet("""
+            QDialog {
+                background: #ffffff;
+                border: 1px solid #94a3b8;
+                border-radius: 8px;
+            }
+            QTabWidget::pane {
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                background: #ffffff;
+                margin-top: -1px;
+            }
+            QTabBar::tab {
+                padding: 6px 10px;
+                font-size: 11px;
+                font-weight: bold;
+                color: #64748b;
+                border: 1px solid #e2e8f0;
+                border-bottom: none;
+                background: #f8fafc;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                color: #0f172a;
+                background: #ffffff;
+                border-bottom: 2px solid #0284c7;
+            }
+            QTabBar::scroller {
+                width: 28px;
+            }
+            QTabBar QToolButton {
+                background: #f1f5f9;
+                border: 1px solid #94a3b8;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 12px;
+                color: #1e293b;
+                margin: 1px;
+            }
+            QTabBar QToolButton:hover {
+                background: #bae6fd;
+                border-color: #0284c7;
+            }
+            QToolButton.sticker-btn {
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                background: #f8fafc;
+                font-size: 18px;
+                padding: 3px;
+                min-width: 38px;
+                min-height: 38px;
+            }
+            QToolButton.sticker-btn:hover {
+                background: #e0f2fe;
+                border-color: #38bdf8;
+            }
+        """)
+        self.selected_icon: str | None = None
+        self.selected_label: str = ""
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        header_layout = QHBoxLayout()
+        header_title = QLabel("🎨 스티커 & 아이콘")
+        header_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #1e293b;")
+        header_layout.addWidget(header_title)
+        header_layout.addStretch(1)
+        none_btn = QPushButton("스티커 제거")
+        none_btn.setStyleSheet("font-size: 11px; padding: 3px 8px; background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; border-radius: 4px; font-weight: bold;")
+        none_btn.setCursor(Qt.PointingHandCursor)
+        none_btn.clicked.connect(self._select_none)
+        header_layout.addWidget(none_btn)
+        layout.addLayout(header_layout)
+
+        self.tabs = QTabWidget()
+        self.tabs.setUsesScrollButtons(True)
+
+        # 1. 내 스티커 (PNG) Tab
+        self.tabs.addTab(self._build_custom_stickers_tab(), "내 스티커 (PNG)")
+
+        # 2. 기본 스티커 (PNG) Tab
+        self.tabs.addTab(self._build_builtin_stickers_tab(), "기본 스티커")
+
+        # 3~6. Emoji Category Tabs
+        for cat_name, items in STICKER_CATEGORIES.items():
+            self.tabs.addTab(self._build_emoji_tab(items), cat_name)
+
+        layout.addWidget(self.tabs)
+
+    def _build_custom_stickers_tab(self) -> QWidget:
+        container = QWidget()
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(6, 6, 6, 6)
+        vbox.setSpacing(6)
+
+        top_row = QHBoxLayout()
+        add_btn = QPushButton("➕ PNG 스티커 등록...")
+        add_btn.setCursor(Qt.PointingHandCursor)
+        add_btn.setStyleSheet("font-size: 11px; font-weight: bold; padding: 4px 10px; background: #0284c7; color: #ffffff; border: none; border-radius: 4px;")
+        add_btn.clicked.connect(self._add_custom_png)
+        top_row.addWidget(add_btn)
+
+        tip_lbl = QLabel("※ 등록된 스티커 우클릭 시 삭제")
+        tip_lbl.setStyleSheet("font-size: 10px; color: #64748b;")
+        top_row.addWidget(tip_lbl)
+        top_row.addStretch(1)
+        vbox.addLayout(top_row)
+
+        self.custom_scroll = QScrollArea()
+        self.custom_scroll.setWidgetResizable(True)
+        self.custom_scroll.setStyleSheet("border: none; background: transparent;")
+        self.custom_grid_widget = QWidget()
+        self.custom_grid = QGridLayout(self.custom_grid_widget)
+        self.custom_grid.setContentsMargins(4, 4, 4, 4)
+        self.custom_grid.setSpacing(6)
+        self.custom_scroll.setWidget(self.custom_grid_widget)
+        vbox.addWidget(self.custom_scroll)
+
+        self._refresh_custom_stickers_grid()
+        return container
+
+    def _add_custom_png(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "PNG 스티커 선택",
+            "",
+            "PNG 이미지 (*.png);;모든 이미지 (*.png *.jpg *.jpeg *.webp)"
+        )
+        if not file_path:
+            return
+        src = Path(file_path)
+        dest_dir = custom_stickers_path()
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        clean_stem = "".join(c for c in src.stem if c.isalnum() or c in ("_", "-"))[:20] or "sticker"
+        dest_file = dest_dir / f"{clean_stem}_{uuid4().hex[:6]}{src.suffix.lower()}"
+        try:
+            shutil.copy2(src, dest_file)
+        except Exception as e:
+            QMessageBox.warning(self, "오류", f"스티커 복사 실패: {e}")
+            return
+        self._refresh_custom_stickers_grid()
+
+    def _refresh_custom_stickers_grid(self) -> None:
+        while self.custom_grid.count():
+            item = self.custom_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        dest_dir = custom_stickers_path()
+        png_files = sorted(dest_dir.glob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not png_files:
+            empty_lbl = QLabel("등록된 스티커가 없습니다.\n상단의 '➕ PNG 스티커 등록...' 버튼으로 추가해 보세요.")
+            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_lbl.setStyleSheet("color: #94a3b8; font-size: 11px; padding: 25px;")
+            self.custom_grid.addWidget(empty_lbl, 0, 0, 1, 6)
+            return
+
+        row, col = 0, 0
+        for p in png_files:
+            btn = QToolButton()
+            btn.setProperty("class", "sticker-btn")
+            btn.setIcon(QIcon(str(p)))
+            btn.setIconSize(QSize(32, 32))
+            btn.setToolTip(f"{p.name}\n(좌클릭: 선택 / 우클릭: 삭제)")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda _chk=False, fname=p.name: self._choose(f"custom:{fname}", fname))
+            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            btn.customContextMenuRequested.connect(lambda pt, file_p=p: self._show_custom_context_menu(pt, file_p))
+            self.custom_grid.addWidget(btn, row, col)
+            col += 1
+            if col >= 6:
+                col = 0
+                row += 1
+
+    def _show_custom_context_menu(self, point: QPoint, file_p: Path) -> None:
+        menu = QMenu(self)
+        del_act = menu.addAction("🗑️ 스티커 삭제")
+        action = menu.exec(QCursor.pos())
+        if action == del_act:
+            if QMessageBox.question(self, "스티커 삭제", f"'{file_p.name}' 스티커를 삭제하시겠습니까?") == QMessageBox.Yes:
+                try:
+                    file_p.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                self._refresh_custom_stickers_grid()
+
+    def _build_builtin_stickers_tab(self) -> QWidget:
+        container = QWidget()
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(6, 6, 6, 6)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("border: none; background: transparent;")
+        grid_widget = QWidget()
+        grid = QGridLayout(grid_widget)
+        grid.setContentsMargins(4, 4, 4, 4)
+        grid.setSpacing(6)
+
+        sticker_dir = asset_path("stickers")
+        builtin_names = [
+            ("star.png", "별"),
+            ("heart_pink.png", "하트"),
+            ("clover.png", "클로버"),
+            ("coffee_time.png", "커피"),
+            ("food.png", "식사"),
+            ("rice_bowl.png", "밥"),
+            ("meeting.png", "회의"),
+            ("leave_day.png", "휴가"),
+            ("medicine_pill.png", "약"),
+            ("money.png", "급여"),
+            ("car.png", "출장/차"),
+            ("cat.png", "고양이"),
+            ("bunny.png", "토끼"),
+            ("ribbon.png", "리본"),
+        ]
+        row, col = 0, 0
+        for fname, label in builtin_names:
+            p = sticker_dir / fname
+            if p.exists():
+                btn = QToolButton()
+                btn.setProperty("class", "sticker-btn")
+                btn.setIcon(QIcon(str(p)))
+                btn.setIconSize(QSize(32, 32))
+                btn.setToolTip(label)
+                btn.setCursor(Qt.PointingHandCursor)
+                btn.clicked.connect(lambda _chk=False, f=fname, l=label: self._choose(f"built_in:{f}", l))
+                grid.addWidget(btn, row, col)
+                col += 1
+                if col >= 6:
+                    col = 0
+                    row += 1
+        scroll.setWidget(grid_widget)
+        vbox.addWidget(scroll)
+        return container
+
+    def _build_emoji_tab(self, items: list[tuple[str, str]]) -> QWidget:
+        container = QWidget()
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(6, 6, 6, 6)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("border: none; background: transparent;")
+        grid_widget = QWidget()
+        grid = QGridLayout(grid_widget)
+        grid.setContentsMargins(4, 4, 4, 4)
+        grid.setSpacing(6)
+        row, col = 0, 0
+        for emoji, label in items:
+            btn = QToolButton()
+            btn.setProperty("class", "sticker-btn")
+            btn.setText(emoji)
+            btn.setToolTip(label)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda _chk=False, e=emoji, l=label: self._choose(e, l))
+            grid.addWidget(btn, row, col)
+            col += 1
+            if col >= 6:
+                col = 0
+                row += 1
+        scroll.setWidget(grid_widget)
+        vbox.addWidget(scroll)
+        return container
+
+    def _choose(self, icon_code: str, label: str) -> None:
+        self.selected_icon = icon_code
+        self.selected_label = label
+        self.accept()
+
+    def _select_none(self) -> None:
+        self.selected_icon = ""
+        self.selected_label = ""
+        self.accept()
+
+
 class EntryDialog(QDialog):
     def __init__(self, parent, entry_type: EntryType, selected_day: date | None, entry: CalendarEntry | None = None, restore_mode: bool = False) -> None:
         self._owner_window = parent
@@ -1004,22 +1313,34 @@ class EntryDialog(QDialog):
         if self.entry_type != EntryType.MEMO:
             details_card, details_layout = self._create_grid_card()
             details_layout.setColumnMinimumWidth(0, 40)
-            icon_label = self._muted("아이콘")
+            icon_label = self._muted("스티커")
             icon_label.setFixedWidth(FORM_LABEL_WIDTH)
             icon_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             details_layout.addWidget(icon_label, 0, 0)
-            self.icon_combo = QComboBox()
-            for label, value in ICON_OPTIONS:
-                preview = ICON_PREVIEW_EMOJI.get(str(value), "")
-                display = f"{preview} {label}".strip() if preview else label
-                self.icon_combo.addItem(display, value)
-            self.icon_combo.setCurrentIndex(max(0, self.icon_combo.findData(entry.icon_type if entry else "")))
-            self.icon_combo.setMinimumWidth(112)
-            self.icon_combo.setMaximumWidth(112)
-            self.icon_combo.setMinimumHeight(30)
-            self.icon_combo.setMaximumHeight(30)
-            self.icon_combo.view().setMinimumWidth(112)
-            details_layout.addWidget(self.icon_combo, 0, 1)
+            icon_box = QHBoxLayout()
+            icon_box.setContentsMargins(0, 0, 0, 0)
+            icon_box.setSpacing(6)
+
+            self._selected_icon: str = entry.icon_type if entry else ""
+
+            self.sticker_btn = QPushButton()
+            self.sticker_btn.setCursor(Qt.PointingHandCursor)
+            self.sticker_btn.setMinimumHeight(30)
+            self.sticker_btn.setMinimumWidth(110)
+            self.sticker_btn.setMaximumWidth(150)
+            self.sticker_btn.clicked.connect(self._open_icon_picker)
+            icon_box.addWidget(self.sticker_btn)
+
+            self.sticker_clear_btn = QPushButton("✕")
+            self.sticker_clear_btn.setToolTip("스티커 제거")
+            self.sticker_clear_btn.setCursor(Qt.PointingHandCursor)
+            self.sticker_clear_btn.setFixedSize(26, 30)
+            self.sticker_clear_btn.setStyleSheet("font-weight: bold; color: #dc2626; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 4px;")
+            self.sticker_clear_btn.clicked.connect(self._clear_sticker)
+            icon_box.addWidget(self.sticker_clear_btn)
+
+            self._refresh_sticker_button()
+            details_layout.addLayout(icon_box, 0, 1)
 
             bg_row = QWidget()
             bg_row_layout = QHBoxLayout(bg_row)
@@ -1413,6 +1734,39 @@ class EntryDialog(QDialog):
         self._syncing_interval = False
         self._refresh_repeat_details()
 
+    def _open_icon_picker(self) -> None:
+        popup = IconPickerPopup(self)
+        btn_pos = self.sticker_btn.mapToGlobal(QPoint(0, self.sticker_btn.height() + 2))
+        popup.move(btn_pos)
+        if popup.exec() and popup.selected_icon is not None:
+            self._selected_icon = popup.selected_icon
+            self._refresh_sticker_button()
+
+    def _clear_sticker(self) -> None:
+        self._selected_icon = ""
+        self._refresh_sticker_button()
+
+    def _refresh_sticker_button(self) -> None:
+        icon_val = getattr(self, "_selected_icon", "")
+        if not icon_val:
+            self.sticker_btn.setIcon(QIcon())
+            self.sticker_btn.setText("🎨 스티커 선택...")
+            self.sticker_btn.setStyleSheet("text-align: left; padding: 4px 8px; font-size: 11px;")
+            self.sticker_clear_btn.hide()
+            return
+        self.sticker_clear_btn.show()
+        pix = get_sticker_pixmap(icon_val)
+        if pix and not pix.isNull():
+            self.sticker_btn.setIcon(QIcon(pix))
+            self.sticker_btn.setIconSize(QSize(20, 20))
+            name = icon_val.split(":")[-1].split("_")[0]
+            self.sticker_btn.setText(f" {name}")
+            self.sticker_btn.setStyleSheet("text-align: left; padding: 2px 6px; font-size: 11px;")
+        else:
+            self.sticker_btn.setIcon(QIcon())
+            self.sticker_btn.setText(f"{icon_val} (변경)")
+            self.sticker_btn.setStyleSheet("text-align: left; padding: 4px 8px; font-size: 12px; font-weight: bold;")
+
     def _sync_recurrence_interval_from_weekly(self, value: int) -> None:
         if self._syncing_interval:
             return
@@ -1430,6 +1784,15 @@ class EntryDialog(QDialog):
         self.recurrence_summary.setVisible(recurrence != RecurrenceType.WEEKLY.value)
         if recurrence == RecurrenceType.YEARLY.value:
             self.recurrence_summary.setText(f"매년 {self.start_date.date().toString('MM월 dd일')}")
+        elif recurrence == RecurrenceType.LUNAR_YEARLY.value:
+            q_d = self.start_date.date()
+            cur_d = date(q_d.year(), q_d.month(), q_d.day())
+            lunar_info = get_lunar_date(cur_d)
+            if lunar_info:
+                leap_str = " (윤달)" if lunar_info.is_leap else ""
+                self.recurrence_summary.setText(f"매년 음력 {lunar_info.month}월 {lunar_info.day}일{leap_str}")
+            else:
+                self.recurrence_summary.setText("매년 음력 반복")
         elif recurrence == RecurrenceType.MONTHLY.value:
             if self.recurrence_month_end_check.isChecked():
                 self.recurrence_summary.setText("매월 말일")
@@ -1507,6 +1870,16 @@ class EntryDialog(QDialog):
         if recurrence_enabled and recurrence_type == RecurrenceType.MONTHLY_NTH:
             weekdays = [int(self.recurrence_month_weekday_combo.currentData())]
 
+        if recurrence_enabled and recurrence_type == RecurrenceType.LUNAR_YEARLY:
+            lunar_info = get_lunar_date(start_date)
+            rec_month = lunar_info.month if lunar_info else start_date.month
+            rec_day = lunar_info.day if lunar_info else start_date.day
+            rec_leap = lunar_info.is_leap if lunar_info else False
+        else:
+            rec_month = self.recurrence_month_day.value()
+            rec_day = int(self.recurrence_month_week_combo.currentData())
+            rec_leap = self.recurrence_month_end_check.isChecked()
+
         plain_content = self.description_input.toPlainText().strip()
         default_title = plain_content.splitlines()[0].strip()[:40] if plain_content else "일정"
         html_content = self.description_input.toHtml()
@@ -1526,10 +1899,10 @@ class EntryDialog(QDialog):
             recurrence_type=recurrence_type,
             recurrence_interval=self.recurrence_interval.value(),
             recurrence_weekdays=weekdays,
-            recurrence_month_day=self.recurrence_month_day.value(),
-            recurrence_month_week=int(self.recurrence_month_week_combo.currentData()),
-            recurrence_month_end=self.recurrence_month_end_check.isChecked(),
-            icon_type=str(self.icon_combo.currentData()),
+            recurrence_month_day=rec_month,
+            recurrence_month_week=rec_day,
+            recurrence_month_end=rec_leap,
+            icon_type=str(getattr(self, "_selected_icon", "")),
             bg_color=str(self.bg_color_combo.currentData()),
             alert_type=AlertType.POPUP if self.alert_popup.isChecked() else AlertType.NONE,
             alert_offset=str(self.alert_offset_combo.currentData()),
@@ -2713,6 +3086,8 @@ class SettingsDialog(QDialog):
         db_path: Path,
         current_memo_shortcut: str = "F4",
         initial_tab: str = "general",
+        show_lunar_calendar: bool = True,
+        show_solar_terms: bool = True,
     ) -> None:
         super().__init__(parent)
         self._db_path = db_path
@@ -2904,6 +3279,12 @@ class SettingsDialog(QDialog):
         self.hide_completed_on_calendar_check = QCheckBox("달력에서 완료 일정 숨기기")
         self.hide_completed_on_calendar_check.setChecked(hide_completed_on_calendar)
         behavior_layout.addWidget(self.hide_completed_on_calendar_check)
+        self.show_lunar_check = QCheckBox("캘린더에 음력 날짜 표시")
+        self.show_lunar_check.setChecked(show_lunar_calendar)
+        behavior_layout.addWidget(self.show_lunar_check)
+        self.show_solar_terms_check = QCheckBox("캘린더에 24절기 표시")
+        self.show_solar_terms_check.setChecked(show_solar_terms)
+        behavior_layout.addWidget(self.show_solar_terms_check)
         pg_gen_layout.addWidget(behavior_card)
 
         info_card = QFrame()
@@ -3302,6 +3683,8 @@ class SettingsDialog(QDialog):
             "auto_backup_enabled": self.auto_backup_check.isChecked(),
             "auto_backup_interval_days": int(self.auto_backup_interval_combo.currentData() or 0),
             "auto_backup_keep_count": int(self.auto_backup_keep_combo.currentData() or 0),
+            "show_lunar_calendar": self.show_lunar_check.isChecked(),
+            "show_solar_terms": self.show_solar_terms_check.isChecked(),
         }
         self.accept()
 

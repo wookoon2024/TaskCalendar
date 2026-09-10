@@ -13,6 +13,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from taskcalendar.models import AlertType, CalendarEntry, DaySummary, EntryType, RecurrenceType, Alarm
+from taskcalendar.lunar import get_lunar_date
 
 
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
@@ -510,6 +511,21 @@ class EncryptedRepository:
             return occurrence == week_no
         if entry.recurrence_type == RecurrenceType.YEARLY:
             return target_day.month == anchor.month and target_day.day == anchor.day and target_day.year >= anchor.year
+        if entry.recurrence_type == RecurrenceType.LUNAR_YEARLY:
+            if target_day.year < anchor.year:
+                return False
+            lunar_info = get_lunar_date(target_day)
+            if lunar_info is None:
+                return False
+            anchor_lunar = get_lunar_date(anchor)
+            req_lunar_month = entry.recurrence_month_day if (entry.recurrence_month_day and entry.recurrence_month_day > 0) else (anchor_lunar.month if anchor_lunar else anchor.month)
+            req_lunar_day = entry.recurrence_month_week if (entry.recurrence_month_week and entry.recurrence_month_week > 0) else (anchor_lunar.day if anchor_lunar else anchor.day)
+            req_is_leap = bool(entry.recurrence_month_end)
+            if lunar_info.month != req_lunar_month or lunar_info.day != req_lunar_day:
+                return False
+            if req_is_leap:
+                return lunar_info.is_leap
+            return not lunar_info.is_leap
         return False
 
     @staticmethod
