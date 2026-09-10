@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import ctypes
 import logging
 import shutil
@@ -1335,30 +1335,32 @@ class EntryDialog(QDialog):
             icon_label.setFixedWidth(FORM_LABEL_WIDTH)
             icon_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             details_layout.addWidget(icon_label, 0, 0)
-            icon_box = QHBoxLayout()
-            icon_box.setContentsMargins(0, 0, 0, 0)
-            icon_box.setSpacing(6)
+            icon_wrap = QWidget()
+            icon_wrap_layout = QHBoxLayout(icon_wrap)
+            icon_wrap_layout.setContentsMargins(0, 0, 0, 0)
+            icon_wrap_layout.setSpacing(6)
 
             self._selected_icon: str = entry.icon_type if entry else ""
 
             self.sticker_btn = QPushButton()
             self.sticker_btn.setCursor(Qt.PointingHandCursor)
             self.sticker_btn.setMinimumHeight(30)
-            self.sticker_btn.setMinimumWidth(110)
-            self.sticker_btn.setMaximumWidth(150)
+            self.sticker_btn.setMinimumWidth(80)
+            self.sticker_btn.setMaximumWidth(130)
             self.sticker_btn.clicked.connect(self._open_icon_picker)
-            icon_box.addWidget(self.sticker_btn)
+            icon_wrap_layout.addWidget(self.sticker_btn)
 
             self.sticker_clear_btn = QPushButton("✕")
             self.sticker_clear_btn.setToolTip("스티커 제거")
             self.sticker_clear_btn.setCursor(Qt.PointingHandCursor)
-            self.sticker_clear_btn.setFixedSize(26, 30)
-            self.sticker_clear_btn.setStyleSheet("font-weight: bold; color: #dc2626; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 4px;")
+            self.sticker_clear_btn.setFixedSize(24, 28)
+            self.sticker_clear_btn.setStyleSheet("font-weight: bold; font-size: 11px; color: #dc2626; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 4px;")
             self.sticker_clear_btn.clicked.connect(self._clear_sticker)
-            icon_box.addWidget(self.sticker_clear_btn)
+            icon_wrap_layout.addWidget(self.sticker_clear_btn)
+            icon_wrap_layout.addStretch(1)
 
             self._refresh_sticker_button()
-            details_layout.addLayout(icon_box, 0, 1)
+            details_layout.addWidget(icon_wrap, 0, 1)
 
             bg_row = QWidget()
             bg_row_layout = QHBoxLayout(bg_row)
@@ -1377,54 +1379,137 @@ class EntryDialog(QDialog):
             self.bg_color_combo.setMinimumHeight(30)
             self.bg_color_combo.setMaximumHeight(30)
             bg_row_layout.addWidget(self.bg_color_combo)
-            details_layout.addWidget(bg_row, 0, 3, 1, 3, Qt.AlignmentFlag.AlignLeft)
+            details_layout.addWidget(bg_row, 0, 2, 1, 4, Qt.AlignmentFlag.AlignLeft)
 
             when_label = self._muted("일시")
             when_label.setFixedWidth(FORM_LABEL_WIDTH)
             when_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             details_layout.addWidget(when_label, 1, 0)
+
+            when_row = QWidget()
+            when_row_layout = QHBoxLayout(when_row)
+            when_row_layout.setContentsMargins(0, 0, 0, 0)
+            when_row_layout.setSpacing(6)
+
             self.start_date = OverwriteDateEdit(_to_qdate(base_day))
             self.start_date.setDisplayFormat("yyyy-MM-dd")
             self.start_date.setCalendarPopup(True)
             self.start_date.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-            self.start_date.setMinimumWidth(112)
-            self.start_date.setMaximumWidth(112)
+            self.start_date.setMinimumWidth(105)
+            self.start_date.setMaximumWidth(105)
             self.start_date.dateChanged.connect(self._refresh_repeat_details)
-            details_layout.addWidget(self.start_date, 1, 1)
+            when_row_layout.addWidget(self.start_date)
+
             self.start_time = OverwriteTimeEdit(_to_qtime(entry.start_time if entry else "", "09:00"))
             self.start_time.setDisplayFormat("HH:mm")
             self.start_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-            self.start_time.setMinimumWidth(58)
-            self.start_time.setMaximumWidth(58)
+            self.start_time.setMinimumWidth(56)
+            self.start_time.setMaximumWidth(56)
             self.start_time.setMinimumHeight(30)
-            start_time_field = self._step_field(self.start_time, 20)
+            when_row_layout.addWidget(self._step_field(self.start_time, 20))
 
-            end_row = QWidget()
-            end_row_layout = QHBoxLayout(end_row)
-            end_row_layout.setContentsMargins(0, 0, 0, 0)
-            end_row_layout.setSpacing(6)
-            end_row_layout.addWidget(start_time_field)
-            end_row_layout.addWidget(self._muted("~"))
+            when_row_layout.addWidget(self._muted("~"))
+
             self.end_date = OverwriteDateEdit(_to_qdate(entry.end_date if entry else base_day))
             self.end_date.setDisplayFormat("yyyy-MM-dd")
             self.end_date.setCalendarPopup(True)
             self.end_date.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-            self.end_date.setMinimumWidth(112)
-            self.end_date.setMaximumWidth(112)
-            end_row_layout.addWidget(self.end_date)
+            self.end_date.setMinimumWidth(105)
+            self.end_date.setMaximumWidth(105)
+            when_row_layout.addWidget(self.end_date)
+
             self.end_time = OverwriteTimeEdit(_to_qtime(entry.end_time if entry else "", "18:00"))
             self.end_time.setDisplayFormat("HH:mm")
             self.end_time.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-            self.end_time.setMinimumWidth(58)
-            self.end_time.setMaximumWidth(58)
+            self.end_time.setMinimumWidth(56)
+            self.end_time.setMaximumWidth(56)
             self.end_time.setMinimumHeight(30)
-            end_row_layout.addWidget(self._step_field(self.end_time, 20))
+            when_row_layout.addWidget(self._step_field(self.end_time, 20))
+
             self.all_day = QCheckBox("종일")
             self.all_day.setChecked(entry.all_day if entry else True)
             self.all_day.toggled.connect(self._toggle_all_day)
-            end_row_layout.addWidget(self.all_day)
-            end_row_layout.addStretch(1)
-            details_layout.addWidget(end_row, 1, 2, 1, 5)
+            when_row_layout.addWidget(self.all_day)
+            when_row_layout.addStretch(1)
+
+            details_layout.addWidget(when_row, 1, 1, 1, 5)
+
+            period_label = self._muted("기간")
+            period_label.setFixedWidth(FORM_LABEL_WIDTH)
+            period_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            details_layout.addWidget(period_label, 2, 0)
+
+            period_row = QWidget()
+            period_row_layout = QHBoxLayout(period_row)
+            period_row_layout.setContentsMargins(0, 0, 0, 0)
+            period_row_layout.setSpacing(4)
+
+            btn_defs = [
+                ("1일", "1d", 34),
+                ("1주일", "1w", 44),
+                ("1달", "1m", 34),
+                ("3개월", "3m", 44),
+                ("6개월", "6m", 44),
+                ("1년", "1y", 34),
+                ("10년", "10y", 44),
+                ("영구", "forever", 40),
+            ]
+            self.period_buttons: list[QPushButton] = []
+            for btn_text, duration_key, btn_w in btn_defs:
+                p_btn = QPushButton(btn_text)
+                p_btn.setFixedWidth(btn_w)
+                p_btn.setFixedHeight(24)
+                p_btn.setCursor(Qt.PointingHandCursor)
+                p_btn.setToolTip(f"종료일을 시작일 기준 {btn_text} 뒤로 자동 설정")
+                if duration_key == "forever":
+                    p_btn.setStyleSheet("""
+                        QPushButton {
+                            min-width: 40px;
+                            max-width: 40px;
+                            font-size: 11px;
+                            font-weight: bold;
+                            padding: 2px 2px;
+                            background: #fdf4ff;
+                            color: #7e22ce;
+                            border: 1px solid #d8b4fe;
+                            border-radius: 4px;
+                        }
+                        QPushButton:hover {
+                            background: #f3e8ff;
+                            border-color: #a855f7;
+                            color: #6b21a8;
+                        }
+                    """)
+                else:
+                    p_btn.setStyleSheet(f"""
+                        QPushButton {{
+                            min-width: {btn_w}px;
+                            max-width: {btn_w}px;
+                            font-size: 11px;
+                            font-weight: 500;
+                            padding: 2px 2px;
+                            background: #f8fafc;
+                            color: #334155;
+                            border: 1px solid #cbd5e1;
+                            border-radius: 4px;
+                        }}
+                        QPushButton:hover {{
+                            background: #e0f2fe;
+                            border-color: #0284c7;
+                            color: #0284c7;
+                        }}
+                    """)
+                p_btn.clicked.connect(lambda _chk=False, dk=duration_key: self._set_period_duration(dk))
+                self.period_buttons.append(p_btn)
+                period_row_layout.addWidget(p_btn)
+
+            period_row_layout.addStretch(1)
+
+            self.start_lunar_badge = QLabel("")
+            self.start_lunar_badge.setStyleSheet("font-size: 11px; font-weight: bold; color: #0284c7; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 4px; padding: 2px 6px;")
+            period_row_layout.addWidget(self.start_lunar_badge)
+
+            details_layout.addWidget(period_row, 2, 1, 1, 6)
             root.addWidget(details_card)
 
         if self.entry_type == EntryType.MEMO:
@@ -1657,12 +1742,18 @@ class EntryDialog(QDialog):
             }}
             """
             + """
-            QPushButton, QDialogButtonBox QPushButton {
+            QDialogButtonBox QPushButton {
                 background: #ffffff;
                 border: 1px solid #cfd8e3;
                 border-radius: 8px;
                 padding: 7px 16px;
                 min-width: 88px;
+            }
+            QPushButton {
+                background: #ffffff;
+                border: 1px solid #cfd8e3;
+                border-radius: 6px;
+                padding: 4px 8px;
             }
             QPushButton:focus, QDialogButtonBox QPushButton:focus, QToolButton:focus {
                 outline: none;
@@ -1800,7 +1891,57 @@ class EntryDialog(QDialog):
         self._syncing_interval = False
         self._refresh_repeat_details()
 
+    def _set_period_duration(self, duration_key: str) -> None:
+        import calendar
+        start_q = self.start_date.date()
+        start = date(start_q.year(), start_q.month(), start_q.day())
+
+        if duration_key == "1d":
+            end = start
+        elif duration_key == "1w":
+            end = start + timedelta(days=7)
+        elif duration_key == "1m":
+            year = start.year + (start.month + 1 - 1) // 12
+            month = (start.month + 1 - 1) % 12 + 1
+            max_d = calendar.monthrange(year, month)[1]
+            end = date(year, month, min(start.day, max_d))
+        elif duration_key == "3m":
+            year = start.year + (start.month + 3 - 1) // 12
+            month = (start.month + 3 - 1) % 12 + 1
+            max_d = calendar.monthrange(year, month)[1]
+            end = date(year, month, min(start.day, max_d))
+        elif duration_key == "6m":
+            year = start.year + (start.month + 6 - 1) // 12
+            month = (start.month + 6 - 1) % 12 + 1
+            max_d = calendar.monthrange(year, month)[1]
+            end = date(year, month, min(start.day, max_d))
+        elif duration_key == "1y":
+            year = start.year + 1
+            max_d = calendar.monthrange(year, start.month)[1]
+            end = date(year, start.month, min(start.day, max_d))
+        elif duration_key == "10y":
+            year = start.year + 10
+            max_d = calendar.monthrange(year, start.month)[1]
+            end = date(year, start.month, min(start.day, max_d))
+        elif duration_key == "forever":
+            end = date(2099, 12, 31)
+        else:
+            return
+
+        self.end_date.setDate(QDate(end.year, end.month, end.day))
+
     def _refresh_repeat_details(self) -> None:
+        q_d = self.start_date.date()
+        cur_d = date(q_d.year(), q_d.month(), q_d.day())
+        lunar_info = get_lunar_date(cur_d)
+        if hasattr(self, "start_lunar_badge"):
+            if lunar_info:
+                leap_str = " (윤달)" if lunar_info.is_leap else ""
+                self.start_lunar_badge.setText(f"🌙 선택일: 음력 {lunar_info.month}월 {lunar_info.day}일{leap_str}")
+                self.start_lunar_badge.show()
+            else:
+                self.start_lunar_badge.hide()
+
         recurrence = self.recurrence_combo.currentData()
         self.interval_wrap.setVisible(recurrence == RecurrenceType.DAILY.value)
         self.month_day_wrap.setVisible(recurrence == RecurrenceType.MONTHLY.value)
@@ -1809,28 +1950,32 @@ class EntryDialog(QDialog):
         self.recurrence_summary.setVisible(recurrence != RecurrenceType.WEEKLY.value)
         if recurrence == RecurrenceType.YEARLY.value:
             self.recurrence_summary.setText(f"매년 {self.start_date.date().toString('MM월 dd일')}")
+            self.recurrence_summary.setStyleSheet("")
         elif recurrence == RecurrenceType.LUNAR_YEARLY.value:
-            q_d = self.start_date.date()
-            cur_d = date(q_d.year(), q_d.month(), q_d.day())
-            lunar_info = get_lunar_date(cur_d)
             if lunar_info:
                 leap_str = " (윤달)" if lunar_info.is_leap else ""
-                self.recurrence_summary.setText(f"매년 음력 {lunar_info.month}월 {lunar_info.day}일{leap_str}")
+                self.recurrence_summary.setText(f"매년 음력 {lunar_info.month}월 {lunar_info.day}일{leap_str} 반복")
+                self.recurrence_summary.setStyleSheet("font-size: 12px; font-weight: bold; color: #0284c7; background: #e0f2fe; padding: 2px 8px; border-radius: 4px;")
             else:
                 self.recurrence_summary.setText("매년 음력 반복")
+                self.recurrence_summary.setStyleSheet("")
         elif recurrence == RecurrenceType.MONTHLY.value:
+            self.recurrence_summary.setStyleSheet("")
             if self.recurrence_month_end_check.isChecked():
                 self.recurrence_summary.setText("매월 말일")
             else:
                 self.recurrence_summary.setText(f"매월 {self.recurrence_month_day.value()}일")
         elif recurrence == RecurrenceType.MONTHLY_NTH.value:
+            self.recurrence_summary.setStyleSheet("")
             week_label = str(self.recurrence_month_week_combo.currentText())
             weekday_label = str(self.recurrence_month_weekday_combo.currentText())
             self.recurrence_summary.setText(f"매월 {week_label} {weekday_label}요일")
         elif recurrence == RecurrenceType.WEEKLY.value:
+            self.recurrence_summary.setStyleSheet("")
             selected = [label for label, checkbox in zip(WEEKDAY_LABELS, self.weekday_checks) if checkbox.isChecked()]
             self.recurrence_summary.setText(" ".join(selected) if selected else "요일 선택")
         else:
+            self.recurrence_summary.setStyleSheet("")
             interval = max(1, self.recurrence_interval.value())
             self.recurrence_summary.setText("매일 반복" if interval == 1 else f"{interval}일 간격")
 

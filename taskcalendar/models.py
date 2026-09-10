@@ -73,7 +73,7 @@ RECURRENCE_OPTIONS = [
     ("매월", RecurrenceType.MONTHLY),
     ("매월 n번째 요일", RecurrenceType.MONTHLY_NTH),
     ("매년 (양력)", RecurrenceType.YEARLY),
-    ("매년 (음력 생일/제사)", RecurrenceType.LUNAR_YEARLY),
+    ("매년 (음력)", RecurrenceType.LUNAR_YEARLY),
 ]
 ALERT_OPTIONS = [
     ("시작시간", "at_start"),
