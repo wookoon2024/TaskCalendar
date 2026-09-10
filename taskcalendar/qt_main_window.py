@@ -4460,7 +4460,7 @@ class MainWindow(QMainWindow):
                 all_day=False,
                 alert_type=AlertType.POPUP,
                 alert_offset="1h",
-                icon_type="🏛️",
+                icon_type="",
             )
             self._open_entry_dialog(EntryType.SCHEDULE, data.get("start_date"), new_entry)
 

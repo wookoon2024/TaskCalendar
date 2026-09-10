@@ -4919,7 +4919,7 @@ class CivilComplaintCalculatorDialog(QDialog):
         header_layout.setContentsMargins(14, 12, 14, 12)
         header_layout.setSpacing(3)
 
-        title_lbl = QLabel("🧮 민원 처리기한 모의계산기")
+        title_lbl = QLabel("민원 처리기한 모의계산기")
         title_lbl.setStyleSheet("font-size: 15px; font-weight: bold; color: #1e293b;")
         sub_lbl = QLabel("법정 공휴일 및 근무시간(09:00~18:00)을 반영한 마감기한 자동 산정")
         sub_lbl.setStyleSheet("font-size: 11px; color: #64748b;")
@@ -4954,7 +4954,7 @@ class CivilComplaintCalculatorDialog(QDialog):
         dt_row.addWidget(QLabel("접수시각:"))
         self.recv_time_edit = QTimeEdit(QTime(now.hour, now.minute))
         self.recv_time_edit.setDisplayFormat("HH:mm")
-        self.recv_time_edit.setFixedWidth(90)
+        self.recv_time_edit.setFixedWidth(115)
         self.recv_time_edit.setFixedHeight(30)
         self.recv_time_edit.timeChanged.connect(self._recalculate)
         dt_row.addWidget(self.recv_time_edit)
@@ -5031,7 +5031,7 @@ class CivilComplaintCalculatorDialog(QDialog):
         self.custom_spin = QSpinBox()
         self.custom_spin.setRange(1, 999)
         self.custom_spin.setValue(3)
-        self.custom_spin.setFixedWidth(75)
+        self.custom_spin.setFixedWidth(95)
         self.custom_spin.setFixedHeight(28)
         self.custom_spin.valueChanged.connect(self._on_custom_changed)
         direct_row.addWidget(self.custom_spin)
@@ -5062,7 +5062,7 @@ class CivilComplaintCalculatorDialog(QDialog):
         res_layout.setSpacing(6)
 
         res_head = QHBoxLayout()
-        res_tag = QLabel("🎯 최종 법정 처리 마감일시")
+        res_tag = QLabel("최종 법정 처리 마감일시")
         res_tag.setStyleSheet("font-size: 12px; font-weight: bold; color: #166534; background: transparent; border: none;")
         res_head.addWidget(res_tag)
         res_head.addStretch(1)
@@ -5088,6 +5088,17 @@ class CivilComplaintCalculatorDialog(QDialog):
 
         root.addWidget(self.result_card)
 
+        # Notice/Disclaimer Card
+        notice_card = QFrame()
+        notice_card.setStyleSheet("background: #fffbeb; border: 1px solid #fef3c7; border-radius: 6px;")
+        notice_layout = QHBoxLayout(notice_card)
+        notice_layout.setContentsMargins(10, 7, 10, 7)
+        notice_lbl = QLabel("※ 본 계산 결과는 법령 및 공휴일 데이터에 따른 모의계산 참고용이며, 실제 민원 사무 처리 및 최종 마감기한 확인에 대한 책임은 사용자 본인에게 있습니다.")
+        notice_lbl.setStyleSheet("font-size: 11px; color: #92400e; background: transparent; border: none;")
+        notice_lbl.setWordWrap(True)
+        notice_layout.addWidget(notice_lbl)
+        root.addWidget(notice_card)
+
         # 6. Bottom Buttons
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
@@ -5100,7 +5111,7 @@ class CivilComplaintCalculatorDialog(QDialog):
 
         btn_row.addStretch(1)
 
-        self.register_btn = QPushButton("📅 이 기한으로 일정 등록")
+        self.register_btn = QPushButton("이 기한으로 일정 등록")
         self.register_btn.setFixedHeight(34)
         self.register_btn.setMinimumWidth(160)
         self.register_btn.setObjectName("primary")
@@ -5186,7 +5197,7 @@ class CivilComplaintCalculatorDialog(QDialog):
 
         weekdays_kr = ("월", "화", "수", "목", "금", "토", "일")
         wk = weekdays_kr[res.due_dt.weekday()]
-        due_str = f"★ {res.due_dt.year}년 {res.due_dt.month}월 {res.due_dt.day}일 ({wk}) {res.due_dt.strftime('%H:%M')}"
+        due_str = f"{res.due_dt.year}년 {res.due_dt.month}월 {res.due_dt.day}일 ({wk}) {res.due_dt.strftime('%H:%M')}"
         self.res_due_label.setText(due_str)
 
         unit_str = "시간" if res.unit == "hours" else "영업일"
@@ -5199,9 +5210,9 @@ class CivilComplaintCalculatorDialog(QDialog):
 
         if res.excluded_days:
             exc_str = ", ".join([f"{d.month}/{d.day}({r})" for d, r in res.excluded_days])
-            self.res_excluded_label.setText(f"🚫 제외된 일자({len(res.excluded_days)}일): {exc_str}")
+            self.res_excluded_label.setText(f"[제외된 일자 ({len(res.excluded_days)}일)] {exc_str}")
         else:
-            self.res_excluded_label.setText("✔ 제외된 일자 없음 (정상 영업일 산정)")
+            self.res_excluded_label.setText("[제외된 일자 없음] 정상 영업일 산정")
 
     def _on_register_schedule(self) -> None:
         if self._calc_result is None:
