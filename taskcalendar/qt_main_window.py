@@ -1081,19 +1081,15 @@ class MainWindow(QMainWindow):
 
         right = QHBoxLayout()
         right.setSpacing(6)
-        self.schedule_button = TodayScheduleButton(self)
-        self.schedule_button.setObjectName("topbarButton")
-        self.schedule_button.clicked.connect(self._go_today)
-        right.addWidget(self.schedule_button)
-
         self.memo_button = self._top_button("메모")
         self.memo_button.clicked.connect(lambda: self._set_sidebar_mode("memo"))
         right.addWidget(self.memo_button)
 
-        self.complaint_button = self._top_button("민원계산기")
-        self.complaint_button.setToolTip("민원 처리기한 모의계산기 (법정 공휴일/근무시간 자동 산정)")
-        self.complaint_button.clicked.connect(self._open_complaint_calculator)
-        right.addWidget(self.complaint_button)
+        # 민원계산기 버튼 (추후 보완 후 재오픈 예정)
+        # self.complaint_button = self._top_button("민원계산기")
+        # self.complaint_button.setToolTip("민원 처리기한 모의계산기 (법정 공휴일/근무시간 자동 산정)")
+        # self.complaint_button.clicked.connect(self._open_complaint_calculator)
+        # right.addWidget(self.complaint_button)
 
         self.alarm_button = self._top_button("알람")
         self.alarm_button.setToolTip("알람 목록 및 소리/팝업 설정")
@@ -1105,13 +1101,6 @@ class MainWindow(QMainWindow):
         right.addWidget(settings_button)
 
 
-
-        self.topbar_sidebar_btn = self._top_button("", 28)
-        self.topbar_sidebar_btn.setIcon(QIcon(str(asset_path("chevron_right.svg" if getattr(self, "_sidebar_visible", True) else "chevron_left.svg"))))
-        self.topbar_sidebar_btn.setIconSize(QSize(14, 14))
-        self.topbar_sidebar_btn.setToolTip("우측 사이드바 숨기기 (단축키: Ctrl+B)" if getattr(self, "_sidebar_visible", True) else "우측 사이드바 표시 (단축키: Ctrl+B)")
-        self.topbar_sidebar_btn.clicked.connect(self._toggle_sidebar)
-        right.addWidget(self.topbar_sidebar_btn)
 
         self.topbar_collapse_btn = self._top_button("", 28)
         self.topbar_collapse_btn.setIcon(QIcon(str(asset_path("chevron_up.svg"))))
@@ -1149,16 +1138,6 @@ class MainWindow(QMainWindow):
             }
         """
 
-        self.sidebar_expand_btn = QPushButton("  사이드바 표시")
-        self.sidebar_expand_btn.setIcon(QIcon(str(asset_path("chevron_left.svg"))))
-        self.sidebar_expand_btn.setIconSize(QSize(11, 11))
-        self.sidebar_expand_btn.setObjectName("topbarButton")
-        self.sidebar_expand_btn.setToolTip("우측 사이드바 다시 표시 (단축키: Ctrl+B)")
-        self.sidebar_expand_btn.setFixedHeight(18)
-        self.sidebar_expand_btn.setStyleSheet(tab_style)
-        self.sidebar_expand_btn.clicked.connect(self._toggle_sidebar)
-        topbar_exp_layout.addWidget(self.sidebar_expand_btn)
-
         self.topbar_expand_btn = QPushButton("  상단바 표시")
         self.topbar_expand_btn.setIcon(QIcon(str(asset_path("chevron_down.svg"))))
         self.topbar_expand_btn.setIconSize(QSize(11, 11))
@@ -1168,6 +1147,16 @@ class MainWindow(QMainWindow):
         self.topbar_expand_btn.setStyleSheet(tab_style)
         self.topbar_expand_btn.clicked.connect(self._toggle_topbar)
         topbar_exp_layout.addWidget(self.topbar_expand_btn)
+
+        self.sidebar_expand_btn = QPushButton("  사이드바 표시")
+        self.sidebar_expand_btn.setIcon(QIcon(str(asset_path("chevron_left.svg"))))
+        self.sidebar_expand_btn.setIconSize(QSize(11, 11))
+        self.sidebar_expand_btn.setObjectName("topbarButton")
+        self.sidebar_expand_btn.setToolTip("우측 사이드바 다시 표시 (단축키: Ctrl+B)")
+        self.sidebar_expand_btn.setFixedHeight(18)
+        self.sidebar_expand_btn.setStyleSheet(tab_style)
+        self.sidebar_expand_btn.clicked.connect(self._toggle_sidebar)
+        topbar_exp_layout.addWidget(self.sidebar_expand_btn)
         self.topbar_expand_container.hide()
         outer.addWidget(self.topbar_expand_container)
 
@@ -2383,7 +2372,7 @@ class MainWindow(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("스티커 설정")
-        dialog.setModal(True)
+        dialog.setWindowModality(Qt.WindowModality.WindowModal)
         dialog.resize(600, 420)
         dialog.setStyleSheet(
             """
@@ -3134,6 +3123,7 @@ class MainWindow(QMainWindow):
         
         if has_changes:
             msg = QMessageBox(self)
+            msg.setWindowModality(Qt.WindowModality.WindowModal)
             msg.setWindowTitle("변경사항 저장")
             msg.setText("스티커 변경사항이 있습니다. 저장하시겠습니까?")
             msg.setIcon(QMessageBox.Question)
@@ -3545,9 +3535,6 @@ class MainWindow(QMainWindow):
         self.year_button.setText(f"{self.current_year}년")
         self.month_button.setText(f"{self.current_month}월")
         self.calendar_title.setText(f"{self.current_year}년 {self.current_month}월")
-        summary = self.repository.day_summary_for_today()
-        today_count = summary.schedules + summary.tasks
-        self.schedule_button.set_count(today_count)
         self._enforce_equal_calendar_cells()
         self._render_calendar()
         self._render_sidebar()
@@ -4303,6 +4290,7 @@ class MainWindow(QMainWindow):
             printer.setDocName(f"taskcalendar_{self.current_year}_{self.current_month:02d}")
             printer.setPageOrientation(QPageLayout.Orientation.Landscape)
             preview = QPrintPreviewDialog(printer, self)
+            preview.setWindowModality(Qt.WindowModality.WindowModal)
             preview.setWindowTitle("인쇄 미리보기")
             preview.paintRequested.connect(self._render_calendar_for_print)
             self._configure_print_preview_dialog(preview)
@@ -5028,7 +5016,7 @@ class MainWindow(QMainWindow):
         current_auto_start = is_startup_enabled()
         self.repository.set_setting("auto_start", "1" if current_auto_start else "0")
         dialog = SettingsDialog(
-            None,
+            self,
             self.theme_name,
             self.repository.get_setting("toggle_shortcut", default_shortcut()),
             current_auto_start,
@@ -5234,8 +5222,9 @@ class MainWindow(QMainWindow):
                     dlg._save_memo_geometry()
                 else:
                     curr_geo = dlg.geometry()
-                    h_val = getattr(dlg, "_expanded_height", curr_geo.height()) if getattr(dlg, "_is_collapsed", False) else curr_geo.height()
-                    self.repository.set_setting(f"memo_geo_{dlg.entry.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{curr_geo.width()},{h_val}")
+                    w_val = getattr(dlg, "_expanded_width", curr_geo.width())
+                    h_val = getattr(dlg, "_expanded_height", curr_geo.height())
+                    self.repository.set_setting(f"memo_geo_{dlg.entry.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{w_val},{h_val}")
                     self.repository.set_setting(f"memo_collapsed_{dlg.entry.entry_id}", "1" if getattr(dlg, "_is_collapsed", False) else "0")
         logger.info(f"[_sync_open_memo_ids] open_ids={open_ids}, persist={persist}")
         self.repository.set_setting("open_memo_ids", ",".join(open_ids))
@@ -5304,7 +5293,7 @@ class MainWindow(QMainWindow):
 
         grp = self.repository.get_memo_group(group_id)
         if not grp:
-            grp = {"id": group_id, "title": "새 그룹", "color": "yellow"}
+            grp = {"id": group_id, "title": "새 그룹", "color": "yellow", "view_mode": "list"}
             self.repository.upsert_memo_group(grp)
 
         dlg = FloatingGroupDialog(self, grp)
@@ -5321,7 +5310,7 @@ class MainWindow(QMainWindow):
                 return None
             title = title.strip()
 
-        grp = {"title": title, "color": "yellow"}
+        grp = {"title": title, "color": "yellow", "view_mode": "list"}
         saved_grp = self.repository.upsert_memo_group(grp)
         gid = saved_grp.get("id", "")
 

@@ -994,7 +994,7 @@ class EntryDialog(QDialog):
             self.setAttribute(Qt.WA_StyledBackground, True)
         else:
             super().__init__(parent)
-            self.setModal(True)
+            self.setWindowModality(Qt.WindowModality.WindowModal)
         self.palette = parent.palette if (parent and hasattr(parent, "palette")) else {"text": "#333333", "line": "#e2e8f0", "muted": "#718096"}
         self.entry_type = entry_type
         self.entry = entry
@@ -1044,6 +1044,9 @@ class EntryDialog(QDialog):
 
             self.setMinimumWidth(180)
             self.setMinimumHeight(36)
+            self._expanded_width = 380
+            self._expanded_height = 360
+            self._collapsed_width = None
             
             # Load remembered geometry, collapse state, and opacity
             has_saved_geo = False
@@ -1054,14 +1057,20 @@ class EntryDialog(QDialog):
                         try:
                             pts = [int(p) for p in geo_str.split(",")]
                             if len(pts) == 4:
-                                self.setGeometry(pts[0], pts[1], max(180, pts[2]), max(150, pts[3]))
+                                self._expanded_width = max(180, pts[2])
                                 self._expanded_height = max(150, pts[3])
+                                self.setGeometry(pts[0], pts[1], self._expanded_width, self._expanded_height)
                                 has_saved_geo = True
                         except Exception:
                             pass
                     collapsed_saved = repo.get_setting(f"memo_collapsed_{entry.entry_id}", "0") == "1"
                     self._is_collapsed = (collapsed_saved if restore_mode else False)
-                    self._expanded_height = max(150, getattr(self, "_expanded_height", 360))
+                    col_w_saved = repo.get_setting(f"memo_collapsed_w_{entry.entry_id}", "")
+                    if col_w_saved:
+                        try:
+                            self._collapsed_width = max(180, int(col_w_saved))
+                        except Exception:
+                            pass
                     opacity_saved = repo.get_setting(f"memo_opacity_{entry.entry_id}", "")
                     if opacity_saved:
                         try:
@@ -1086,6 +1095,9 @@ class EntryDialog(QDialog):
                 except Exception:
                     init_w, init_h = 380, 360
 
+                self._expanded_width = init_w
+                self._expanded_height = init_h
+
                 screen = self.screen() or QApplication.primaryScreen()
                 if screen:
                     avail = screen.availableGeometry()
@@ -1104,6 +1116,8 @@ class EntryDialog(QDialog):
                     self.move(nx, ny)
 
             if getattr(self, "_is_collapsed", False):
+                target_w = self._collapsed_width if self._collapsed_width is not None else self._expanded_width
+                self.resize(target_w, 36)
                 self.setFixedHeight(36)
                 
             self.setMouseTracking(True)
@@ -1188,8 +1202,9 @@ class EntryDialog(QDialog):
             # Content container
             self.content_wrap = QWidget()
             self.content_wrap.setMouseTracking(True)
+            self.content_wrap.installEventFilter(self)
             content_layout = QVBoxLayout(self.content_wrap)
-            content_layout.setContentsMargins(6, 4, 6, 6)
+            content_layout.setContentsMargins(8, 4, 8, 6)
             content_layout.setSpacing(4)
 
             self._setup_memo_editor_toolbar(content_layout)
@@ -1264,6 +1279,8 @@ class EntryDialog(QDialog):
             # Apply initial collapse state if remembered
             if getattr(self, "_is_collapsed", False):
                 self.content_wrap.hide()
+                target_w = self._collapsed_width if self._collapsed_width is not None else self._expanded_width
+                self.resize(target_w, 36)
                 self.setFixedHeight(36)
                 if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
                     self._collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg"))))
@@ -2322,20 +2339,120 @@ class EntryDialog(QDialog):
             self.attachments_label.setStyleSheet(label_style)
         self.update()
 
+    def _get_memo_resize_direction(self, global_pos: QPoint) -> str | None:
+        local_pos = self.mapFromGlobal(global_pos)
+        w = self.width()
+        h = self.height()
+        border = 8
+
+        if not (0 <= local_pos.x() <= w and 0 <= local_pos.y() <= h):
+            return None
+
+        is_collapsed = getattr(self, "_is_collapsed", False)
+        if is_collapsed:
+            if local_pos.x() >= w - border:
+                return "r"
+            elif local_pos.x() <= border:
+                return "l"
+            return None
+
+        # Corners
+        if local_pos.x() >= w - border and local_pos.y() >= h - border:
+            return "br"
+        if local_pos.x() <= border and local_pos.y() >= h - border:
+            return "bl"
+
+        # Edges
+        if local_pos.x() >= w - border:
+            return "r"
+        if local_pos.x() <= border:
+            return "l"
+        if local_pos.y() >= h - border:
+            return "b"
+
+        return None
+
+    def _perform_memo_resize(self, global_pos: QPoint) -> None:
+        if not getattr(self, "_resize_dir", None):
+            return
+        delta = global_pos - self._initial_mouse_pos
+        geom = QRect(self._initial_geometry)
+        is_collapsed = getattr(self, "_is_collapsed", False)
+
+        if self._resize_dir == "r":
+            new_w = max(180, geom.width() + delta.x())
+            geom.setWidth(new_w)
+            if is_collapsed:
+                geom.setHeight(36)
+        elif self._resize_dir == "l":
+            new_w = max(180, geom.width() - delta.x())
+            new_x = (geom.x() + geom.width()) - new_w
+            geom.setX(new_x)
+            geom.setWidth(new_w)
+            if is_collapsed:
+                geom.setHeight(36)
+        elif self._resize_dir == "b" and not is_collapsed:
+            geom.setHeight(max(150, geom.height() + delta.y()))
+        elif self._resize_dir == "br" and not is_collapsed:
+            new_w = max(180, geom.width() + delta.x())
+            geom.setWidth(new_w)
+            geom.setHeight(max(150, geom.height() + delta.y()))
+        elif self._resize_dir == "bl" and not is_collapsed:
+            new_w = max(180, geom.width() - delta.x())
+            new_x = (geom.x() + geom.width()) - new_w
+            geom.setX(new_x)
+            geom.setWidth(new_w)
+            geom.setHeight(max(150, geom.height() + delta.y()))
+
+        other_geos = self._other_window_geometries()
+        screen = self.screen()
+        screen_geo = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        snapped_geom = snap_resize_rect(geom, self._resize_dir, other_geos, screen_geo, threshold=16)
+
+        if snapped_geom.width() < 180:
+            snapped_geom.setWidth(180)
+        if is_collapsed:
+            snapped_geom.setHeight(36)
+        elif snapped_geom.height() < 150:
+            snapped_geom.setHeight(150)
+
+        self.setGeometry(snapped_geom)
+        if not is_collapsed:
+            self._expanded_width = snapped_geom.width()
+            self._expanded_height = snapped_geom.height()
+        else:
+            self._collapsed_width = snapped_geom.width()
+
     def eventFilter(self, watched, event) -> bool:
-        if self.entry_type == EntryType.MEMO and watched is getattr(self, "header", None):
+        if self.entry_type == EntryType.MEMO and watched in (getattr(self, "header", None), getattr(self, "content_wrap", None)):
             if event.type() == QEvent.Type.MouseMove:
-                pos = event.position().toPoint()
-                border = 8
-                if pos.x() >= self.header.width() - border:
-                    self.header.setCursor(Qt.CursorShape.SizeHorCursor)
+                if event.buttons() & Qt.MouseButton.LeftButton:
+                    if getattr(self, "_resize_dir", None):
+                        self._perform_memo_resize(event.globalPosition().toPoint())
+                        return True
+                    elif hasattr(self, "_drag_position"):
+                        self._perform_window_drag(event.globalPosition().toPoint())
+                        return True
                 else:
-                    self.header.setCursor(Qt.CursorShape.ArrowCursor)
+                    r_dir = self._get_memo_resize_direction(event.globalPosition().toPoint())
+                    if r_dir in ("r", "l"):
+                        watched.setCursor(Qt.CursorShape.SizeHorCursor)
+                    elif r_dir == "b":
+                        watched.setCursor(Qt.CursorShape.SizeVerCursor)
+                    elif r_dir == "br":
+                        watched.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                    elif r_dir == "bl":
+                        watched.setCursor(Qt.CursorShape.SizeBDiagCursor)
+                    else:
+                        watched.unsetCursor()
+            elif event.type() == QEvent.Type.MouseButtonDblClick and event.button() == Qt.MouseButton.LeftButton:
+                r_dir = self._get_memo_resize_direction(event.globalPosition().toPoint())
+                if self._handle_collapsed_edge_dblclick(r_dir):
+                    return True
             elif event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-                pos = event.position().toPoint()
-                border = 8
-                if pos.x() >= self.header.width() - border:
-                    self._resize_dir = "r"
+                r_dir = self._get_memo_resize_direction(event.globalPosition().toPoint())
+                if r_dir:
+                    self._resize_dir = r_dir
                     self._initial_geometry = self.geometry()
                     self._initial_mouse_pos = event.globalPosition().toPoint()
                     return True
@@ -2345,6 +2462,25 @@ class EntryDialog(QDialog):
                     self._save_memo_geometry()
                     return True
         return super().eventFilter(watched, event)
+
+    def _handle_collapsed_edge_dblclick(self, r_dir: str | None) -> bool:
+        if not getattr(self, "_is_collapsed", False) or r_dir not in ("r", "l"):
+            return False
+        target_w = max(180, getattr(self, "_expanded_width", 380) or 380)
+        curr_w = self.width()
+        if abs(curr_w - target_w) <= 10 and getattr(self, "_prev_compact_width", None):
+            new_w = self._prev_compact_width
+        else:
+            self._prev_compact_width = curr_w
+            new_w = target_w
+
+        if r_dir == "l":
+            delta_w = new_w - curr_w
+            self.move(self.x() - delta_w, self.y())
+        self._collapsed_width = new_w
+        self.resize(new_w, self.height())
+        self._save_memo_geometry()
+        return True
 
     def _show_memo_context_menu(self, global_pos: QPoint) -> None:
         menu = QMenu(self)
@@ -2969,19 +3105,32 @@ class EntryDialog(QDialog):
     def _toggle_collapse(self) -> None:
         self._is_collapsed = not getattr(self, "_is_collapsed", False)
         if self._is_collapsed:
-            self._expanded_height = self.height()
+            curr_w = self.width()
+            col_w = getattr(self, "_collapsed_width", None)
+            if col_w is None or curr_w != col_w:
+                self._expanded_width = curr_w
+            self._expanded_height = max(150, getattr(self, "_expanded_height", self.height()))
             if hasattr(self, "content_wrap"):
                 self.content_wrap.hide()
-            self.setFixedHeight(36)
+            self.setMinimumHeight(36)
+            self.setMaximumHeight(36)
+            target_w = getattr(self, "_collapsed_width", None) or self._expanded_width
+            self.resize(target_w, 36)
             if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
                 self._collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg"))))
                 self._collapse_btn.setToolTip("메모 펼치기")
         else:
+            curr_w = self.width()
+            exp_w = getattr(self, "_expanded_width", None)
+            if exp_w is None or curr_w != exp_w:
+                self._collapsed_width = curr_w
             if hasattr(self, "content_wrap"):
                 self.content_wrap.show()
-            self.setMinimumHeight(200)
+            self.setMinimumHeight(150)
             self.setMaximumHeight(16777215)
-            self.resize(self.width(), getattr(self, "_expanded_height", 420))
+            target_w = getattr(self, "_expanded_width", 380)
+            target_h = getattr(self, "_expanded_height", 360)
+            self.resize(target_w, target_h)
             if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
                 self._collapse_btn.setIcon(QIcon(str(asset_path("memo_minimize.svg"))))
                 self._collapse_btn.setToolTip("메모 접기")
@@ -2992,9 +3141,13 @@ class EntryDialog(QDialog):
         parent = getattr(self, "_owner_window", None) or self.parent()
         if parent and hasattr(parent, "repository") and self.entry and self.entry.entry_id:
             curr_geo = self.geometry()
-            h_val = getattr(self, "_expanded_height", curr_geo.height()) if getattr(self, "_is_collapsed", False) else curr_geo.height()
-            parent.repository.set_setting(f"memo_geo_{self.entry.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{curr_geo.width()},{h_val}")
-            parent.repository.set_setting(f"memo_collapsed_{self.entry.entry_id}", "1" if getattr(self, "_is_collapsed", False) else "0")
+            is_col = getattr(self, "_is_collapsed", False)
+            w_val = getattr(self, "_expanded_width", curr_geo.width())
+            h_val = getattr(self, "_expanded_height", curr_geo.height())
+            parent.repository.set_setting(f"memo_geo_{self.entry.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{w_val},{h_val}")
+            parent.repository.set_setting(f"memo_collapsed_{self.entry.entry_id}", "1" if is_col else "0")
+            if getattr(self, "_collapsed_width", None) is not None:
+                parent.repository.set_setting(f"memo_collapsed_w_{self.entry.entry_id}", str(self._collapsed_width))
             parent.repository.save()
 
     def _end_window_drag(self) -> None:
@@ -3086,10 +3239,7 @@ class EntryDialog(QDialog):
                 
             # Persist geometry and collapse state
             if saved.entry_id is not None:
-                curr_geo = self.geometry()
-                h_val = getattr(self, "_expanded_height", curr_geo.height()) if getattr(self, "_is_collapsed", False) else curr_geo.height()
-                parent.repository.set_setting(f"memo_geo_{saved.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{curr_geo.width()},{h_val}")
-                parent.repository.set_setting(f"memo_collapsed_{saved.entry_id}", "1" if getattr(self, "_is_collapsed", False) else "0")
+                self._save_memo_geometry()
                 
             if persist_disk:
                 parent.repository.save()
@@ -3191,6 +3341,10 @@ class EntryDialog(QDialog):
 
     def mouseDoubleClickEvent(self, event) -> None:
         if self.entry_type == EntryType.MEMO and event.button() == Qt.MouseButton.LeftButton:
+            r_dir = self._get_memo_resize_direction(event.globalPosition().toPoint())
+            if self._handle_collapsed_edge_dblclick(r_dir):
+                event.accept()
+                return
             pos = event.position().toPoint()
             if pos.y() <= 34:
                 self._toggle_collapse()
@@ -3205,25 +3359,15 @@ class EntryDialog(QDialog):
                 event.accept()
                 return
             if event.button() == Qt.MouseButton.LeftButton:
-                pos = event.position().toPoint()
-                rect = self.rect()
-                border = 8
-                self._resize_dir = None
-                if pos.x() >= rect.width() - border and pos.y() >= rect.height() - border and not getattr(self, "_is_collapsed", False):
-                    self._resize_dir = "br"
-                elif pos.x() <= border and pos.y() >= rect.height() - border and not getattr(self, "_is_collapsed", False):
-                    self._resize_dir = "bl"
-                elif pos.x() >= rect.width() - border:
-                    self._resize_dir = "r"
-                elif pos.y() >= rect.height() - border and not getattr(self, "_is_collapsed", False):
-                    self._resize_dir = "b"
-                
-                if self._resize_dir:
+                r_dir = self._get_memo_resize_direction(event.globalPosition().toPoint())
+                if r_dir:
+                    self._resize_dir = r_dir
                     self._initial_geometry = self.geometry()
                     self._initial_mouse_pos = event.globalPosition().toPoint()
                     event.accept()
                     return
-                    
+
+                pos = event.position().toPoint()
                 if pos.y() <= 34:
                     self._start_window_drag(event.globalPosition().toPoint())
                     event.accept()
@@ -3232,85 +3376,37 @@ class EntryDialog(QDialog):
 
     def mouseMoveEvent(self, event) -> None:
         if self.entry_type == EntryType.MEMO:
-            pos = event.position().toPoint()
-            rect = self.rect()
-            border = 8
-            
-            if not event.buttons():
-                if getattr(self, "_is_collapsed", False):
-                    if pos.x() >= rect.width() - border:
-                        self.setCursor(Qt.CursorShape.SizeHorCursor)
-                    else:
-                        self.setCursor(Qt.CursorShape.ArrowCursor)
-                else:
-                    if pos.x() >= rect.width() - border and pos.y() >= rect.height() - border:
-                        self.setCursor(Qt.CursorShape.SizeFDiagCursor)
-                    elif pos.x() <= border and pos.y() >= rect.height() - border:
-                        self.setCursor(Qt.CursorShape.SizeBDiagCursor)
-                    elif pos.x() >= rect.width() - border:
-                        self.setCursor(Qt.CursorShape.SizeHorCursor)
-                    elif pos.y() >= rect.height() - border:
-                        self.setCursor(Qt.CursorShape.SizeVerCursor)
-                    else:
-                        self.setCursor(Qt.CursorShape.ArrowCursor)
-            
-            if event.buttons() == Qt.MouseButton.LeftButton:
-                if hasattr(self, "_resize_dir") and self._resize_dir:
-                    delta = event.globalPosition().toPoint() - self._initial_mouse_pos
-                    geom = QRect(self._initial_geometry)
-                    if self._resize_dir == "r":
-                        new_w = max(180, geom.width() + delta.x())
-                        geom.setWidth(new_w)
-                        if getattr(self, "_is_collapsed", False):
-                            geom.setHeight(36)
-                    elif self._resize_dir == "b":
-                        if not getattr(self, "_is_collapsed", False):
-                            geom.setHeight(max(150, geom.height() + delta.y()))
-                    elif self._resize_dir == "br":
-                        new_w = max(180, geom.width() + delta.x())
-                        geom.setWidth(new_w)
-                        if getattr(self, "_is_collapsed", False):
-                            geom.setHeight(36)
-                        else:
-                            geom.setHeight(max(150, geom.height() + delta.y()))
-                    elif self._resize_dir == "bl":
-                        new_w = max(180, geom.width() - delta.x())
-                        new_x = geom.right() - new_w
-                        geom.setX(new_x)
-                        geom.setWidth(new_w)
-                        if getattr(self, "_is_collapsed", False):
-                            geom.setHeight(36)
-                        else:
-                            geom.setHeight(max(150, geom.height() + delta.y()))
-                            
-                    other_geos = self._other_window_geometries()
-                    screen = self.screen()
-                    screen_geo = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
-                    snapped_geom = snap_resize_rect(geom, self._resize_dir, other_geos, screen_geo, threshold=16)
-                    
-                    if snapped_geom.width() < 180:
-                        snapped_geom.setWidth(180)
-                    if getattr(self, "_is_collapsed", False):
-                        snapped_geom.setHeight(36)
-                    elif snapped_geom.height() < 150:
-                        snapped_geom.setHeight(150)
-                        
-                    self.setGeometry(snapped_geom)
-                    if not getattr(self, "_is_collapsed", False):
-                        self._expanded_height = snapped_geom.height()
+            if event.buttons() & Qt.MouseButton.LeftButton:
+                if getattr(self, "_resize_dir", None):
+                    self._perform_memo_resize(event.globalPosition().toPoint())
                     event.accept()
                     return
                 elif hasattr(self, "_drag_position"):
                     self._perform_window_drag(event.globalPosition().toPoint())
                     event.accept()
                     return
-                    
+            else:
+                r_dir = self._get_memo_resize_direction(event.globalPosition().toPoint())
+                if r_dir in ("r", "l"):
+                    self.setCursor(Qt.CursorShape.SizeHorCursor)
+                elif r_dir == "b":
+                    self.setCursor(Qt.CursorShape.SizeVerCursor)
+                elif r_dir == "br":
+                    self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+                elif r_dir == "bl":
+                    self.setCursor(Qt.CursorShape.SizeBDiagCursor)
+                else:
+                    self.setCursor(Qt.CursorShape.ArrowCursor)
+
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         if self.entry_type == EntryType.MEMO:
+            was_resizing = getattr(self, "_resize_dir", None) is not None
             self._resize_dir = None
             self._end_window_drag()
+            if was_resizing:
+                self._save_memo_geometry()
         super().mouseReleaseEvent(event)
 
     def add_dropped_attachments(self, filepaths: list[str]) -> None:
@@ -3739,13 +3835,15 @@ class FloatingGroupDialog(QDialog):
         self.group_id = str(group_dict.get("id", ""))
         self.group_title = str(group_dict.get("title", "새 그룹"))
         self.group_color = str(group_dict.get("color", "yellow"))
-        self.view_mode = str(group_dict.get("view_mode", "card"))
+        self.view_mode = str(group_dict.get("view_mode", "list"))
         self._is_floating = bool(group_dict.get("is_floating", False))
         self._is_collapsed = bool(group_dict.get("is_collapsed", False))
         self._initial_mouse_pos = QPoint()
         self._initial_geometry = QRect()
         self._resize_dir: str | None = None
         self._expanded_height = 420
+        self._expanded_width = 360
+        self._collapsed_width = self.group_dict.get("collapsed_width", None)
         self._drag_pos: QPoint | None = None
         self._cards: list[MiniMemoCardWidget] = []
         self._current_cols: int = 0
@@ -3765,8 +3863,9 @@ class FloatingGroupDialog(QDialog):
             try:
                 pts = [int(p) for p in geo_str.split(",")]
                 if len(pts) == 4:
-                    self.setGeometry(pts[0], pts[1], max(250, pts[2]), max(180, pts[3]))
+                    self._expanded_width = max(250, pts[2])
                     self._expanded_height = max(180, pts[3])
+                    self.setGeometry(pts[0], pts[1], self._expanded_width, self._expanded_height)
                     has_geo = True
             except Exception:
                 pass
@@ -3792,6 +3891,8 @@ class FloatingGroupDialog(QDialog):
         self._apply_theme(self.group_color)
         if self._is_collapsed:
             self.content_wrap.hide()
+            target_w = self._collapsed_width if self._collapsed_width is not None else self._expanded_width
+            self.resize(target_w, 36)
             self.setFixedHeight(36)
             self._update_collapse_btn()
             self._apply_theme(self.group_color)
@@ -4364,14 +4465,27 @@ class FloatingGroupDialog(QDialog):
     def _toggle_collapse(self) -> None:
         self._is_collapsed = not self._is_collapsed
         if self._is_collapsed:
-            self._expanded_height = self.height()
+            curr_w = self.width()
+            col_w = getattr(self, "_collapsed_width", None)
+            if col_w is None or curr_w != col_w:
+                self._expanded_width = curr_w
+            self._expanded_height = max(180, getattr(self, "_expanded_height", self.height()))
             self.content_wrap.hide()
             self.setFixedHeight(36)
+            target_w = getattr(self, "_collapsed_width", None)
+            if target_w:
+                self.resize(target_w, 36)
         else:
+            curr_w = self.width()
+            exp_w = getattr(self, "_expanded_width", None)
+            if exp_w is None or curr_w != exp_w:
+                self._collapsed_width = curr_w
             self.content_wrap.show()
             self.setMinimumHeight(180)
             self.setMaximumHeight(16777215)
-            self.resize(self.width(), max(180, self._expanded_height))
+            target_w = getattr(self, "_expanded_width", 360)
+            target_h = getattr(self, "_expanded_height", 420)
+            self.resize(target_w, target_h)
         self._update_collapse_btn()
         self._apply_theme(self.group_color)
         self._save_group_state()
@@ -4412,12 +4526,16 @@ class FloatingGroupDialog(QDialog):
         parent = self._owner_window
         if parent and hasattr(parent, "repository"):
             curr_geo = self.geometry()
-            h_val = getattr(self, "_expanded_height", curr_geo.height()) if self._is_collapsed else curr_geo.height()
-            self.group_dict["geo"] = f"{curr_geo.x()},{curr_geo.y()},{curr_geo.width()},{h_val}"
+            is_col = getattr(self, "_is_collapsed", False)
+            w_val = getattr(self, "_expanded_width", curr_geo.width())
+            h_val = getattr(self, "_expanded_height", curr_geo.height())
+            self.group_dict["geo"] = f"{curr_geo.x()},{curr_geo.y()},{w_val},{h_val}"
             self.group_dict["color"] = self.group_color
             self.group_dict["is_floating"] = self._is_floating
             self.group_dict["view_mode"] = self.view_mode
             self.group_dict["is_collapsed"] = self._is_collapsed
+            if getattr(self, "_collapsed_width", None) is not None:
+                self.group_dict["collapsed_width"] = self._collapsed_width
             parent.repository.upsert_memo_group(self.group_dict)
             parent.repository.save()
 
@@ -4557,7 +4675,10 @@ class FloatingGroupDialog(QDialog):
 
         self.setGeometry(geom)
         if not self._is_collapsed:
+            self._expanded_width = geom.width()
             self._expanded_height = geom.height()
+        else:
+            self._collapsed_width = geom.width()
 
     def eventFilter(self, watched, event) -> bool:
         # 1. Resize & Hover cursor handling across all watched widgets
@@ -4582,6 +4703,11 @@ class FloatingGroupDialog(QDialog):
                 else:
                     watched.unsetCursor()
 
+        elif event.type() == QEvent.Type.MouseButtonDblClick:
+            if event.button() == Qt.MouseButton.LeftButton:
+                r_dir = self._get_resize_direction(event.globalPosition().toPoint())
+                if self._handle_collapsed_edge_dblclick(r_dir):
+                    return True
         elif event.type() == QEvent.Type.MouseButtonPress:
             if event.button() == Qt.MouseButton.LeftButton:
                 r_dir = self._get_resize_direction(event.globalPosition().toPoint())
@@ -4603,6 +4729,9 @@ class FloatingGroupDialog(QDialog):
         if watched in header_targets:
             if event.type() == QEvent.Type.MouseButtonDblClick:
                 if event.button() == Qt.MouseButton.LeftButton:
+                    r_dir = self._get_resize_direction(event.globalPosition().toPoint())
+                    if self._handle_collapsed_edge_dblclick(r_dir):
+                        return True
                     self._toggle_collapse()
                     return True
             elif event.type() == QEvent.Type.MouseButtonPress:
@@ -4706,8 +4835,31 @@ class FloatingGroupDialog(QDialog):
             self._save_group_state()
         super().mouseReleaseEvent(event)
 
+    def _handle_collapsed_edge_dblclick(self, r_dir: str | None) -> bool:
+        if not getattr(self, "_is_collapsed", False) or r_dir not in ("r", "l"):
+            return False
+        target_w = max(200, getattr(self, "_expanded_width", 360) or 360)
+        curr_w = self.width()
+        if abs(curr_w - target_w) <= 10 and getattr(self, "_prev_compact_width", None):
+            new_w = self._prev_compact_width
+        else:
+            self._prev_compact_width = curr_w
+            new_w = target_w
+
+        if r_dir == "l":
+            delta_w = new_w - curr_w
+            self.move(self.x() - delta_w, self.y())
+        self._collapsed_width = new_w
+        self.resize(new_w, self.height())
+        self._save_group_state()
+        return True
+
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            r_dir = self._get_resize_direction(event.globalPosition().toPoint())
+            if self._handle_collapsed_edge_dblclick(r_dir):
+                event.accept()
+                return
             pos = event.position().toPoint()
             hdr_h = self.header.height() if hasattr(self, "header") and self.header else 36
             if pos.y() <= hdr_h:
@@ -4814,9 +4966,10 @@ class EntryViewDialog(QDialog):
         self.entry_type = entry_type
         self.entry = entry
         self._on_download_attachment = on_download_attachment
-        self._on_edit_entry = on_edit_entry
-
-        self.setModal(True)
+        if entry_type != EntryType.MEMO:
+            self.setWindowModality(Qt.WindowModality.WindowModal)
+        else:
+            self.setModal(False)
         self.setObjectName("entryDialog")
         self.setWindowTitle("메모 보기" if entry_type == EntryType.MEMO else "일정 보기")
         self.setWindowIcon(_dialog_icon())
@@ -5187,6 +5340,8 @@ class EntryViewDialog(QDialog):
                 self._resize_dir = "bl"
             elif pos.x() >= rect.width() - border:
                 self._resize_dir = "r"
+            elif pos.x() <= border:
+                self._resize_dir = "l"
             elif pos.y() >= rect.height() - border:
                 self._resize_dir = "b"
             
@@ -5213,7 +5368,7 @@ class EntryViewDialog(QDialog):
                     self.setCursor(Qt.CursorShape.SizeFDiagCursor)
                 elif pos.x() <= border and pos.y() >= rect.height() - border:
                     self.setCursor(Qt.CursorShape.SizeBDiagCursor)
-                elif pos.x() >= rect.width() - border:
+                elif pos.x() >= rect.width() - border or pos.x() <= border:
                     self.setCursor(Qt.CursorShape.SizeHorCursor)
                 elif pos.y() >= rect.height() - border:
                     self.setCursor(Qt.CursorShape.SizeVerCursor)
@@ -5224,6 +5379,39 @@ class EntryViewDialog(QDialog):
                 if hasattr(self, "_resize_dir") and self._resize_dir:
                     delta = event.globalPosition().toPoint() - self._initial_mouse_pos
                     geom = QRect(self._initial_geometry)
+                    if self._resize_dir == "r":
+                        geom.setWidth(max(180, geom.width() + delta.x()))
+                    elif self._resize_dir == "l":
+                        new_w = max(180, geom.width() - delta.x())
+                        new_x = (geom.x() + geom.width()) - new_w
+                        geom.setX(new_x)
+                        geom.setWidth(new_w)
+                    elif self._resize_dir == "b":
+                        geom.setHeight(max(150, geom.height() + delta.y()))
+                    elif self._resize_dir == "br":
+                        geom.setWidth(max(180, geom.width() + delta.x()))
+                        geom.setHeight(max(150, geom.height() + delta.y()))
+                    elif self._resize_dir == "bl":
+                        new_w = max(180, geom.width() - delta.x())
+                        new_x = (geom.x() + geom.width()) - new_w
+                        geom.setX(new_x)
+                        geom.setWidth(new_w)
+                        geom.setHeight(max(150, geom.height() + delta.y()))
+                    self.setGeometry(geom)
+                    event.accept()
+                    return
+                elif hasattr(self, "_drag_position"):
+                    self.move(event.globalPosition().toPoint() - self._drag_position)
+                    event.accept()
+                    return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self.entry_type == EntryType.MEMO:
+            self._resize_dir = None
+            if hasattr(self, "_drag_position"):
+                delattr(self, "_drag_position")
+        super().mouseReleaseEvent(event)
 class SettingsDialog(QDialog):
     def __init__(
         self,
@@ -5258,7 +5446,7 @@ class SettingsDialog(QDialog):
         shortcut_modifiers, shortcut_key = self._shortcut_parts(current_shortcut)
         memo_modifiers, memo_key = self._shortcut_parts(current_memo_shortcut)
         
-        self.setModal(True)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
         self.setWindowTitle("환경설정")
         self.setWindowIcon(_dialog_icon())
@@ -6161,7 +6349,7 @@ class AlarmEditDialog(QDialog):
     def __init__(self, parent, alarm: Alarm | None = None) -> None:
         super().__init__(parent)
         self.alarm = alarm
-        self.setModal(True)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowTitle("알람 등록" if alarm is None else "알람 수정")
         self.setWindowIcon(_dialog_icon())
         self.resize(500, 440)
@@ -6574,7 +6762,7 @@ class AlarmManagerDialog(QDialog):
     def __init__(self, parent, repository) -> None:
         super().__init__(parent)
         self.repository = repository
-        self.setModal(True)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowTitle("알람 설정")
         self.setWindowIcon(_dialog_icon())
         self.resize(600, 500)
@@ -6864,7 +7052,7 @@ class BackupRestoreFormatDialog(QDialog):
         super().__init__(parent)
         self.mode = mode  # "export" or "import"
         self.selected_format = "zip"  # default
-        self.setModal(True)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowTitle("데이터 내보내기" if mode == "export" else "데이터 가져오기")
         self.resize(480, 260)
         self.setFixedWidth(480)
@@ -7015,6 +7203,7 @@ class BackupRestoreFormatDialog(QDialog):
 class CivilComplaintCalculatorDialog(QDialog):
     def __init__(self, parent=None, holidays_fixed: dict[str, str] | None = None, holidays_yearly: dict[str, str] | None = None) -> None:
         super().__init__(parent)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowTitle("민원 처리기한 모의계산기")
         self.setFixedWidth(560)
         from taskcalendar.complaint_calculator import ComplaintCalculator, ComplaintCalcResult
@@ -7464,7 +7653,7 @@ class WelcomeFeatureIntroDialog(QDialog):
         self.setWindowIcon(_dialog_icon())
         self.setModal(False)
         self.setWindowModality(Qt.WindowModality.NonModal)
-        self.resize(520, 500)
+        self.resize(520, 440)
         self.open_settings_requested = False
 
         self.setStyleSheet("""
@@ -7546,7 +7735,6 @@ class WelcomeFeatureIntroDialog(QDialog):
 
         items = [
             ("⚙️ 다양한 기능 맞춤 On/Off (환경설정)", "상단 우측 [환경설정]에서 음력·24절기 표시, 스티커 애니메이션, 완료 일정 숨기기, 자동 백업 등 필요 없는 기능은 끄고 원하는 기능만 켜서 가볍고 깔끔하게 사용할 수 있습니다."),
-            ("🧮 민원 처리기한 모의계산기", "법정공휴일/주말 및 근무시간(09:00~18:00)을 자동 제외하여 정확한 만료 일시를 산출하고, 원클릭으로 캘린더 일정에 바로 등록합니다."),
             ("📝 스마트 플로팅 메모 & 서식 에디터", "바탕화면에 메모를 자유롭게 띄우며, 내용/배경 마우스 우클릭 [에디터 보기/닫기]를 통해 상단 서식 도구(굵게, 폰트, 크기, 색상)로 메모를 손쉽게 편집할 수 있습니다."),
             ("⌨️ 언제 어디서나 전역 단축키 (F3)", "다른 작업 중에도 언제든지 F3 키를 누르면 캘린더가 즉시 열리거나 숨겨집니다. (단축키는 환경설정에서 변경 가능)"),
         ]
