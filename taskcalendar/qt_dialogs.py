@@ -5195,6 +5195,7 @@ class SettingsDialog(QDialog):
         memo_default_font_size: int = 11,
         memo_title_only: bool = True,
         memo_expand_anchor: str = "left",
+        show_window_controls: bool = True,
     ) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
@@ -5278,6 +5279,10 @@ class SettingsDialog(QDialog):
         self.hide_completed_on_calendar_check = QCheckBox("달력에서 완료 일정 숨기기")
         self.hide_completed_on_calendar_check.setChecked(hide_completed_on_calendar)
         behavior_layout.addWidget(self.hide_completed_on_calendar_check)
+        self.window_controls_check = QCheckBox("상단바에 창 투명도 조절 · 항상 위 고정 표시")
+        self.window_controls_check.setChecked(show_window_controls)
+        self.window_controls_check.setToolTip("체크 해제 시 상단바의 투명도 슬라이더와 항상 위 고정 버튼을 숨깁니다.")
+        behavior_layout.addWidget(self.window_controls_check)
         lunar_row = QHBoxLayout()
         lunar_row.setContentsMargins(0, 0, 0, 0)
         lunar_row.setSpacing(10)
@@ -5873,6 +5878,7 @@ class SettingsDialog(QDialog):
             "memo_default_font_size": int(self.memo_default_font_size_combo.currentData() or 11),
             "memo_title_only": self.memo_title_only_check.isChecked(),
             "memo_expand_anchor": "right" if self.memo_expand_anchor_check.isChecked() else "left",
+            "show_window_controls": self.window_controls_check.isChecked(),
         }
         self.accept()
 
