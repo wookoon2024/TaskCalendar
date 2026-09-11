@@ -158,6 +158,12 @@ class EncryptedRepository:
     def _log_diagnostic(self, stage: str, detail: str) -> None:
         try:
             log_path = self.db_path.parent / "taskcalendar_storage_diagnostic.log"
+            if log_path.exists() and log_path.stat().st_size > 2 * 1024 * 1024:
+                try:
+                    content = log_path.read_text(encoding="utf-8", errors="ignore")
+                    log_path.write_text("[LOG ROTATED]\n" + content[-262144:], encoding="utf-8")
+                except Exception:
+                    pass
             now = datetime.now().isoformat(timespec="seconds")
             db_info = "missing"
             if self.db_path.exists():
@@ -288,6 +294,12 @@ class EncryptedRepository:
         for name, sql in additions.items():
             if name not in existing:
                 self.connection.execute(sql)
+
+        # Performance indices
+        self.connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_type_dates ON entries(entry_type, start_date, end_date)")
+        self.connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_type_day ON entries(entry_type, day)")
+        self.connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_memos ON entries(entry_type, updated_at DESC)")
+        self.connection.execute("CREATE INDEX IF NOT EXISTS idx_alarms_lookup ON alarms(enabled, alarm_time)")
         self.connection.commit()
 
     def _load(self) -> None:
@@ -437,6 +449,59 @@ class EncryptedRepository:
         if self.db_path.exists():
             self._load()
             self._ensure_columns()
+
+    def vacuum(self) -> int:
+        """Run VACUUM to defragment and reclaim free pages, then save to disk. Returns size reduction in bytes."""
+        old_size = self.db_path.stat().st_size if self.db_path.exists() else 0
+        try:
+            self.connection.execute("VACUUM")
+            self.connection.commit()
+            self.save()
+            new_size = self.db_path.stat().st_size if self.db_path.exists() else 0
+            return max(0, old_size - new_size)
+        except Exception as exc:
+            self._log_diagnostic("vacuum_failed", str(exc))
+            return 0
+
+    def cleanup_orphan_attachments(self) -> tuple[int, int]:
+        """Scan attachments folder and delete unreferenced files. Returns (deleted_count, freed_bytes)."""
+        if not self.attachments_root.exists():
+            return (0, 0)
+
+        rows = self.connection.execute("SELECT attachments_json FROM entries").fetchall()
+        referenced = set()
+        for row in rows:
+            for item in json.loads(row["attachments_json"] or "[]"):
+                referenced.add(item)
+
+        deleted_count = 0
+        freed_bytes = 0
+
+        for file_path in self.attachments_root.rglob("*"):
+            if not file_path.is_file():
+                continue
+            try:
+                rel_posix = str(file_path.relative_to(self.attachments_root).as_posix())
+            except ValueError:
+                continue
+            if rel_posix not in referenced:
+                try:
+                    fsize = file_path.stat().st_size
+                    file_path.unlink()
+                    deleted_count += 1
+                    freed_bytes += fsize
+                except OSError:
+                    pass
+
+        # Clean empty directories
+        for dir_path in sorted(self.attachments_root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            if dir_path.is_dir() and not any(dir_path.iterdir()):
+                try:
+                    dir_path.rmdir()
+                except OSError:
+                    pass
+
+        return (deleted_count, freed_bytes)
 
     def _seed(self) -> None:
         # Keep initial DB empty; only default settings are seeded.

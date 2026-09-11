@@ -6,7 +6,6 @@ import os
 import queue
 import sys
 import threading
-import tkinter as tk
 import winreg
 from ctypes import wintypes
 from datetime import date, datetime, time, timedelta

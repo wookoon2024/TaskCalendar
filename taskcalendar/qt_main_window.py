@@ -4868,6 +4868,25 @@ class MainWindow(QMainWindow):
                 logger.exception("zip restore failed")
                 QMessageBox.critical(self, "데이터 가져오기 실패", f"복원 중 오류가 발생했습니다.\n{exc}")
 
+    def _optimize_database_flow(self) -> None:
+        try:
+            deleted_files, freed_bytes = self.repository.cleanup_orphan_attachments()
+            db_freed = self.repository.vacuum()
+
+            freed_kb = round(freed_bytes / 1024, 1)
+            db_freed_kb = round(db_freed / 1024, 1)
+
+            msg = (
+                "데이터베이스 및 저장공간 최적화가 완료되었습니다!\n\n"
+                f"• DB 공간 압축 회수: {db_freed_kb} KB\n"
+                f"• 미사용 고아 첨부파일 정리: {deleted_files}개 ({freed_kb} KB)\n"
+                f"• 인덱스 최적화 완료"
+            )
+            QMessageBox.information(self, "최적화 완료", msg)
+        except Exception as exc:
+            logger.exception("database optimization failed")
+            QMessageBox.warning(self, "최적화 오류", f"최적화 작업 중 오류가 발생했습니다.\n{exc}")
+
     def _restore_auto_backup_flow(self) -> None:
         backup_dir = self.repository.db_path.parent / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
@@ -5265,6 +5284,9 @@ class MainWindow(QMainWindow):
                 return
             if action == "restore_auto_backup":
                 self._restore_auto_backup_flow()
+                return
+            if action == "optimize_database":
+                self._optimize_database_flow()
                 return
             if action == "reload_holidays":
                 self._holidays_fixed, self._holidays_yearly = self._load_holidays()

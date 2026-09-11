@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from tkinter import ttk
-
 
 BODY_FONT = ("Segoe UI", 10)
 SMALL_FONT = ("Segoe UI", 9)
