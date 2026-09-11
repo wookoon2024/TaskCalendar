@@ -147,9 +147,11 @@ class DateCalculatorDialog(QDialog):
 
         root.addWidget(self.tabs, 1)
 
-        # Bottom Buttons
+        # Bottom Buttons & Disclaimer
         bottom_bar = QHBoxLayout()
-        bottom_bar.addStretch()
+        disclaimer_lbl = QLabel("※ 본 계산 결과는 참고용 모의계산으로 법적 효력이 없으며, 최종 확인 책임은 이용자 본인에게 있습니다.")
+        disclaimer_lbl.setStyleSheet(f"font-size: 11px; color: {self.palette.get('muted', '#667085')};")
+        bottom_bar.addWidget(disclaimer_lbl, 1)
 
         close_btn = QPushButton("닫기")
         close_btn.setFixedWidth(90)
@@ -699,6 +701,17 @@ class DateCalculatorDialog(QDialog):
         self.t3_holidays_lbl.setStyleSheet(f"font-size: 11px; color: {self.palette.get('danger', '#d15d48')};")
         res_layout.addWidget(self.t3_holidays_lbl)
 
+        # Disclaimer Notice
+        self.t3_disclaimer_lbl = QLabel(
+            "※ 본 계산 결과는 법정공휴일 기준 참고용 모의계산으로 법적 효력이 없습니다.\n"
+            "(임시공휴일 지정, 대체휴일 신설 등에 따라 실제와 다를 수 있으므로 최종 확인 책임은 이용자 본인에게 있습니다.)"
+        )
+        self.t3_disclaimer_lbl.setWordWrap(True)
+        self.t3_disclaimer_lbl.setStyleSheet(
+            f"font-size: 11px; color: {self.palette.get('muted', '#667085')}; line-height: 1.4; margin-top: 2px;"
+        )
+        res_layout.addWidget(self.t3_disclaimer_lbl)
+
         # Register button
         act_bar = QHBoxLayout()
         act_bar.addStretch()
@@ -825,7 +838,8 @@ class DateCalculatorDialog(QDialog):
             desc = (
                 f"• 기간: {s.strftime('%Y-%m-%d')} ~ {e.strftime('%Y-%m-%d')}\n"
                 f"• 순수 영업일수: {w_days}일 (총 {data['total_days']}일)\n"
-                f"• 제외 휴일: {self.t3_holidays_lbl.text()}"
+                f"• 제외 휴일: {self.t3_holidays_lbl.text()}\n"
+                f"• 유의사항: 법적 효력이 없는 참고용이며, 최종 확인 책임은 이용자에게 있습니다."
             )
             self.register_schedule_requested.emit({
                 "title": title,
@@ -844,7 +858,8 @@ class DateCalculatorDialog(QDialog):
                 f"• 기준일(접수): {s.strftime('%Y-%m-%d')}\n"
                 f"• 최종 마감일: {due_d.strftime('%Y-%m-%d')} ({wk})\n"
                 f"• 소요 영업일: {needed}영업일 (달력일수 {data['total_days']}일)\n"
-                f"• 제외 휴일: {self.t3_holidays_lbl.text()}"
+                f"• 제외 휴일: {self.t3_holidays_lbl.text()}\n"
+                f"• 유의사항: 법적 효력이 없는 참고용이며, 최종 확인 책임은 이용자에게 있습니다."
             )
             self.register_schedule_requested.emit({
                 "title": title,
