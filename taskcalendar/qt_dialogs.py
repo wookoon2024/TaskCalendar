@@ -1211,10 +1211,17 @@ class EntryDialog(QDialog):
 
             content_layout.addWidget(self.attachment_bar)
 
-            # Apply initial attachment bar visibility based on setting & attachments
-            show_attach_setting = (repo.get_setting("memo_show_attachment_bar", "1") != "0") if repo else True
-            if not show_attach_setting and not self.attachments:
-                self.attachment_bar.hide()
+            # Apply initial attachment bar visibility based on per-memo setting, or fallback to global setting & attachments
+            per_memo_attach = repo.get_setting(f"memo_show_attach_{self.entry.entry_id}", "") if (repo and self.entry and self.entry.entry_id) else ""
+            if per_memo_attach != "":
+                if per_memo_attach == "0":
+                    self.attachment_bar.hide()
+                else:
+                    self.attachment_bar.show()
+            else:
+                show_attach_setting = (repo.get_setting("memo_show_attachment_bar", "1") != "0") if repo else True
+                if not show_attach_setting and not self.attachments:
+                    self.attachment_bar.hide()
 
             # Apply initial default font size
             def_font_size = int(repo.get_setting("memo_default_font_size", "11") if repo else 11)
@@ -1980,6 +1987,9 @@ class EntryDialog(QDialog):
             self.attachments_label.setText(self._attachments_text())
             if hasattr(self, "attachment_bar") and not self.attachment_bar.isVisible():
                 self.attachment_bar.show()
+                parent = getattr(self, "_owner_window", None) or self.parent()
+                if parent and hasattr(parent, "repository") and self.entry and self.entry.entry_id:
+                    parent.repository.set_setting(f"memo_show_attach_{self.entry.entry_id}", "1")
             if self.entry_type == EntryType.MEMO:
                 self._auto_save_to_db()
 
@@ -2817,6 +2827,13 @@ class EntryDialog(QDialog):
             if show is None:
                 show = not self.attachment_bar.isVisible()
             self.attachment_bar.setVisible(show)
+            parent = getattr(self, "_owner_window", None) or self.parent()
+            if parent and hasattr(parent, "repository") and self.entry and self.entry.entry_id:
+                parent.repository.set_setting(f"memo_show_attach_{self.entry.entry_id}", "1" if show else "0")
+                if hasattr(self, "_debounced_save_memo_geometry"):
+                    self._debounced_save_memo_geometry(250)
+                else:
+                    parent.repository.save()
         except Exception as exc:
             logger.exception("Error in _toggle_attachment_bar: %s", exc)
 
@@ -2972,9 +2989,13 @@ class EntryDialog(QDialog):
             self.attachments_label.setText(self._attachments_text())
             parent = getattr(self, "_owner_window", None) or self.parent()
             repo = getattr(parent, "repository", None) if parent else None
-            show_attach_setting = (repo.get_setting("memo_show_attachment_bar", "1") != "0") if repo else True
-            if not show_attach_setting and not self.attachments and hasattr(self, "attachment_bar"):
+            per_memo_attach = repo.get_setting(f"memo_show_attach_{self.entry.entry_id}", "") if (repo and self.entry and self.entry.entry_id) else ""
+            if per_memo_attach == "0" and hasattr(self, "attachment_bar"):
                 self.attachment_bar.hide()
+            elif per_memo_attach == "":
+                show_attach_setting = (repo.get_setting("memo_show_attachment_bar", "1") != "0") if repo else True
+                if not show_attach_setting and not self.attachments and hasattr(self, "attachment_bar"):
+                    self.attachment_bar.hide()
             self._auto_save_to_db()
 
     def _resize_with_anchor(self, width: int, height: int) -> None:
@@ -3076,6 +3097,8 @@ class EntryDialog(QDialog):
             parent.repository.set_setting(f"memo_collapsed_{self.entry.entry_id}", "1" if is_col else "0")
             if getattr(self, "_collapsed_width", None) is not None:
                 parent.repository.set_setting(f"memo_collapsed_w_{self.entry.entry_id}", str(self._collapsed_width))
+            if hasattr(self, "attachment_bar"):
+                parent.repository.set_setting(f"memo_show_attach_{self.entry.entry_id}", "1" if self.attachment_bar.isVisible() else "0")
             if persist:
                 parent.repository.save()
 
@@ -3362,6 +3385,9 @@ class EntryDialog(QDialog):
                 self.attachments_label.setText(self._attachments_text())
             if hasattr(self, "attachment_bar") and not self.attachment_bar.isVisible():
                 self.attachment_bar.show()
+                parent = getattr(self, "_owner_window", None) or self.parent()
+                if parent and hasattr(parent, "repository") and self.entry and self.entry.entry_id:
+                    parent.repository.set_setting(f"memo_show_attach_{self.entry.entry_id}", "1")
             if self.entry_type == EntryType.MEMO:
                 self._auto_save_to_db()
 

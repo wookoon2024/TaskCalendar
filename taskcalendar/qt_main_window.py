@@ -5462,6 +5462,8 @@ class MainWindow(QMainWindow):
                     h_val = getattr(dlg, "_expanded_height", curr_geo.height())
                     self.repository.set_setting(f"memo_geo_{dlg.entry.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{w_val},{h_val}")
                     self.repository.set_setting(f"memo_collapsed_{dlg.entry.entry_id}", "1" if getattr(dlg, "_is_collapsed", False) else "0")
+                    if hasattr(dlg, "attachment_bar"):
+                        self.repository.set_setting(f"memo_show_attach_{dlg.entry.entry_id}", "1" if dlg.attachment_bar.isVisible() else "0")
         logger.info(f"[_sync_open_memo_ids] open_ids={open_ids}, persist={persist}")
         self.repository.set_setting("open_memo_ids", ",".join(open_ids))
         if persist:
