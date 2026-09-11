@@ -875,7 +875,7 @@ class EncryptedRepository:
                 return g
         return None
 
-    def upsert_memo_group(self, group_dict: dict) -> dict:
+    def upsert_memo_group(self, group_dict: dict, persist: bool = True) -> dict:
         groups = self.list_memo_groups()
         gid = group_dict.get("id")
         if not gid:
@@ -891,7 +891,8 @@ class EncryptedRepository:
         if not found:
             groups.append(group_dict)
         self.set_setting("memo_groups_v1", json.dumps(groups, ensure_ascii=False))
-        self.save()
+        if persist:
+            self.save()
         return group_dict
 
     def delete_memo_group(self, group_id: str, delete_memos: bool = False) -> None:

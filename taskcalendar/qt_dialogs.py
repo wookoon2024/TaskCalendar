@@ -2285,7 +2285,7 @@ class EntryDialog(QDialog):
             elif event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                 if getattr(self, "_resize_dir", None):
                     self._resize_dir = None
-                    self._save_memo_geometry()
+                    self._debounced_save_memo_geometry(250)
                     return True
         return super().eventFilter(watched, event)
 
@@ -2321,7 +2321,7 @@ class EntryDialog(QDialog):
             self.move(new_x, self.y())
         self._collapsed_width = new_w
         self.resize(new_w, self.height())
-        self._save_memo_geometry()
+        self._debounced_save_memo_geometry(250)
         return True
 
     def _show_memo_context_menu(self, global_pos: QPoint) -> None:
@@ -2482,14 +2482,32 @@ class EntryDialog(QDialog):
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
+            self._is_deleted = True
+            if hasattr(self, "_geo_save_timer") and self._geo_save_timer.isActive():
+                self._geo_save_timer.stop()
             parent = getattr(self, "_owner_window", None) or self.parent()
             if self.entry and self.entry.entry_id and parent and hasattr(parent, "repository"):
-                parent.repository.delete_entry(self.entry.entry_id)
+                target_id = self.entry.entry_id
+                parent.repository.delete_entry(target_id)
                 if hasattr(parent, "_load_memo_order_ids") and hasattr(parent, "_save_memo_order_ids"):
-                    ids = [m_id for m_id in parent._load_memo_order_ids() if m_id != int(self.entry.entry_id)]
+                    ids = [m_id for m_id in parent._load_memo_order_ids() if m_id != int(target_id)]
                     parent._save_memo_order_ids(ids, persist=False)
+                if hasattr(parent, "_active_memo_dialogs"):
+                    for k in [target_id, int(target_id)]:
+                        parent._active_memo_dialogs.pop(k, None)
+                if hasattr(parent, "_sync_open_memo_ids"):
+                    parent._sync_open_memo_ids(persist=False)
                 parent.repository.save()
-                parent.refresh()
+                if hasattr(parent, "refresh"):
+                    try:
+                        parent.refresh()
+                    except Exception:
+                        pass
+                if hasattr(parent, "_refresh_all_group_dialogs"):
+                    try:
+                        parent._refresh_all_group_dialogs()
+                    except Exception:
+                        pass
             self._save_timer.stop()
             self.close()
 
@@ -3025,9 +3043,22 @@ class EntryDialog(QDialog):
                 self._collapse_btn.setIcon(QIcon(str(asset_path("memo_minimize.svg"))))
                 self._collapse_btn.setToolTip("메모 접기")
             
-        self._save_memo_geometry()
+        self._debounced_save_memo_geometry(250)
 
-    def _save_memo_geometry(self) -> None:
+    def _debounced_save_memo_geometry(self, delay_ms: int = 250) -> None:
+        self._save_memo_geometry(persist=False)
+        if not hasattr(self, "_geo_save_timer"):
+            self._geo_save_timer = QTimer(self)
+            self._geo_save_timer.setSingleShot(True)
+            self._geo_save_timer.timeout.connect(self._flush_memo_geometry)
+        self._geo_save_timer.start(delay_ms)
+
+    def _flush_memo_geometry(self) -> None:
+        parent = getattr(self, "_owner_window", None) or self.parent()
+        if parent and hasattr(parent, "repository"):
+            parent.repository.save()
+
+    def _save_memo_geometry(self, persist: bool = True) -> None:
         parent = getattr(self, "_owner_window", None) or self.parent()
         if parent and hasattr(parent, "repository") and self.entry and self.entry.entry_id:
             curr_geo = self.geometry()
@@ -3045,7 +3076,8 @@ class EntryDialog(QDialog):
             parent.repository.set_setting(f"memo_collapsed_{self.entry.entry_id}", "1" if is_col else "0")
             if getattr(self, "_collapsed_width", None) is not None:
                 parent.repository.set_setting(f"memo_collapsed_w_{self.entry.entry_id}", str(self._collapsed_width))
-            parent.repository.save()
+            if persist:
+                parent.repository.save()
 
     def _end_window_drag(self) -> None:
         if hasattr(self, "_drag_position"):
@@ -3056,7 +3088,7 @@ class EntryDialog(QDialog):
             screen_right = avail.x() + avail.width()
             exp_w = getattr(self, "_expanded_width", 380)
             self._anchored_to_right = (self.x() + exp_w > screen_right) or (self.x() + self.width() >= screen_right - 16)
-        self._save_memo_geometry()
+        self._debounced_save_memo_geometry(250)
 
     def _start_window_drag(self, global_pos: QPoint) -> None:
         self._drag_position = global_pos - self.frameGeometry().topLeft()
@@ -3142,7 +3174,7 @@ class EntryDialog(QDialog):
                 
             # Persist geometry and collapse state
             if saved.entry_id is not None:
-                self._save_memo_geometry()
+                self._save_memo_geometry(persist=False)
                 
             if persist_disk:
                 parent.repository.save()
@@ -3222,10 +3254,17 @@ class EntryDialog(QDialog):
         self.close()
 
     def closeEvent(self, event) -> None:
+        if getattr(self, "_is_deleted", False):
+            super().closeEvent(event)
+            return
+        if hasattr(self, "_geo_save_timer") and self._geo_save_timer.isActive():
+            self._geo_save_timer.stop()
         if self.entry_type == EntryType.MEMO:
-            self._save_memo_geometry()
             parent = getattr(self, "_owner_window", None) or self.parent()
-            if parent and getattr(parent, "_is_app_quitting", False):
+            is_quitting = bool(parent and getattr(parent, "_is_app_quitting", False))
+            is_batch = bool(parent and getattr(parent, "_batch_updating_memos", False))
+            self._save_memo_geometry(persist=not (is_quitting or is_batch))
+            if is_quitting:
                 super().closeEvent(event)
                 return
             if not getattr(self, "_closing", False):
@@ -3309,7 +3348,7 @@ class EntryDialog(QDialog):
             self._resize_dir = None
             self._end_window_drag()
             if was_resizing:
-                self._save_memo_geometry()
+                self._debounced_save_memo_geometry(250)
         super().mouseReleaseEvent(event)
 
     def add_dropped_attachments(self, filepaths: list[str]) -> None:
@@ -4111,93 +4150,99 @@ class FloatingGroupDialog(QDialog):
             self.cards_container.setUpdatesEnabled(True)
 
     def refresh_memos(self) -> None:
-        # Clear existing grid items and detach immediately
-        while self.cards_grid.count():
-            item = self.cards_grid.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
-        self._cards = []
+        if hasattr(self, "cards_container"):
+            self.cards_container.setUpdatesEnabled(False)
+        try:
+            # Clear existing grid items and detach immediately
+            while self.cards_grid.count():
+                item = self.cards_grid.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.setParent(None)
+                    w.deleteLater()
+            self._cards = []
 
-        for r in range(self.cards_grid.rowCount()):
-            self.cards_grid.setRowStretch(r, 0)
-        for c in range(self.cards_grid.columnCount()):
-            self.cards_grid.setColumnStretch(c, 0)
+            for r in range(self.cards_grid.rowCount()):
+                self.cards_grid.setRowStretch(r, 0)
+            for c in range(self.cards_grid.columnCount()):
+                self.cards_grid.setColumnStretch(c, 0)
 
-        parent = self._owner_window
-        if not parent or not hasattr(parent, "repository"):
-            return
+            parent = self._owner_window
+            if not parent or not hasattr(parent, "repository"):
+                return
 
-        db_memos = parent._ordered_memos(parent.repository.list_memos()) if hasattr(parent, "_ordered_memos") else parent.repository.list_memos()
-        active_entries = {}
-        active_ids = set()
-        if hasattr(parent, "_active_memo_dialogs"):
-            for k, dlg in parent._active_memo_dialogs.items():
-                if dlg and getattr(dlg, "entry", None) and dlg.entry.entry_id:
-                    active_entries[dlg.entry.entry_id] = dlg.entry
-                    if dlg.isVisible():
-                        active_ids.add(dlg.entry.entry_id)
+            db_memos = parent._ordered_memos(parent.repository.list_memos()) if hasattr(parent, "_ordered_memos") else parent.repository.list_memos()
+            active_entries = {}
+            active_ids = set()
+            if hasattr(parent, "_active_memo_dialogs"):
+                for k, dlg in parent._active_memo_dialogs.items():
+                    if dlg and getattr(dlg, "entry", None) and dlg.entry.entry_id:
+                        active_entries[dlg.entry.entry_id] = dlg.entry
+                        if dlg.isVisible():
+                            active_ids.add(dlg.entry.entry_id)
 
-        memos = []
-        for m in db_memos:
-            live_entry = active_entries.get(m.entry_id, m)
-            if getattr(live_entry, "memo_group", "") == self.group_id:
-                memos.append(live_entry)
+            memos = []
+            for m in db_memos:
+                live_entry = active_entries.get(m.entry_id, m)
+                if getattr(live_entry, "memo_group", "") == self.group_id:
+                    memos.append(live_entry)
 
-        self._current_memos = memos
-        self.count_badge.setText(f"{len(memos)}개")
+            self._current_memos = memos
+            self.count_badge.setText(f"{len(memos)}개")
 
-        if not memos:
-            empty_lbl = QLabel("그룹에 속한 메모가 없습니다.\n\n상단의 [+ 메모]를 누르거나\n기존 메모 우클릭으로 이 그룹을 지정하세요.")
-            empty_lbl.setAlignment(Qt.AlignCenter)
-            empty_lbl.setStyleSheet("font-size: 12px; color: rgba(0,0,0,0.45); padding: 40px 10px; line-height: 1.5; background: transparent;")
-            self.cards_grid.addWidget(empty_lbl, 0, 0)
-            return
+            if not memos:
+                empty_lbl = QLabel("그룹에 속한 메모가 없습니다.\n\n상단의 [+ 메모]를 누르거나\n기존 메모 우클릭으로 이 그룹을 지정하세요.")
+                empty_lbl.setAlignment(Qt.AlignCenter)
+                empty_lbl.setStyleSheet("font-size: 12px; color: rgba(0,0,0,0.45); padding: 40px 10px; line-height: 1.5; background: transparent;")
+                self.cards_grid.addWidget(empty_lbl, 0, 0)
+                return
 
-        if self.view_mode == "list":
-            self.cards_grid.setAlignment(Qt.AlignTop)
-            self.cards_grid.setSpacing(6)
-            self.cards_grid.setColumnStretch(0, 1)
-            if hasattr(self, "cards_container") and hasattr(self, "scroll") and self.scroll.viewport():
-                vp_w = self.scroll.viewport().width()
-                if vp_w > 0:
-                    self.cards_container.setMaximumWidth(vp_w)
-            for i, memo in enumerate(memos):
-                is_open = memo.entry_id in active_ids
-                card = MiniMemoCardWidget(memo, is_open_on_desktop=is_open, view_mode="list", parent=self.cards_container)
-                card.clicked.connect(self._on_card_clicked)
-                card.doubleClicked.connect(self._on_card_double_clicked)
-                card.reordered.connect(self._on_memo_reordered)
-                card.requestToggleOpen.connect(self._on_card_toggle_open)
-                card.requestRemoveFromGroup.connect(self._on_card_remove_group)
-                card.requestDeleteMemo.connect(self._on_card_delete_memo)
-                self.cards_grid.addWidget(card, i, 0)
-                self._cards.append(card)
-            self.cards_grid.setRowStretch(len(memos), 1)
-        else:
-            self.cards_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-            self.cards_grid.setSpacing(8)
-            cols = max(1, (self.width() - 28) // 115)
-            self._current_cols = cols
-            for i, memo in enumerate(memos):
-                is_open = memo.entry_id in active_ids
-                card = MiniMemoCardWidget(memo, is_open_on_desktop=is_open, view_mode="card", parent=self.cards_container)
-                card.clicked.connect(self._on_card_clicked)
-                card.doubleClicked.connect(self._on_card_double_clicked)
-                card.reordered.connect(self._on_memo_reordered)
-                card.requestToggleOpen.connect(self._on_card_toggle_open)
-                card.requestRemoveFromGroup.connect(self._on_card_remove_group)
-                card.requestDeleteMemo.connect(self._on_card_delete_memo)
-                row = i // cols
-                col = i % cols
-                self.cards_grid.addWidget(card, row, col, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-                self._cards.append(card)
-            total_rows = (len(memos) + cols - 1) // cols
-            self.cards_grid.setRowStretch(total_rows, 1)
+            if self.view_mode == "list":
+                self.cards_grid.setAlignment(Qt.AlignTop)
+                self.cards_grid.setSpacing(6)
+                self.cards_grid.setColumnStretch(0, 1)
+                if hasattr(self, "cards_container") and hasattr(self, "scroll") and self.scroll.viewport():
+                    vp_w = self.scroll.viewport().width()
+                    if vp_w > 0:
+                        self.cards_container.setMaximumWidth(vp_w)
+                for i, memo in enumerate(memos):
+                    is_open = memo.entry_id in active_ids
+                    card = MiniMemoCardWidget(memo, is_open_on_desktop=is_open, view_mode="list", parent=self.cards_container)
+                    card.clicked.connect(self._on_card_clicked)
+                    card.doubleClicked.connect(self._on_card_double_clicked)
+                    card.reordered.connect(self._on_memo_reordered)
+                    card.requestToggleOpen.connect(self._on_card_toggle_open)
+                    card.requestRemoveFromGroup.connect(self._on_card_remove_group)
+                    card.requestDeleteMemo.connect(self._on_card_delete_memo)
+                    self.cards_grid.addWidget(card, i, 0)
+                    self._cards.append(card)
+                self.cards_grid.setRowStretch(len(memos), 1)
+            else:
+                self.cards_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+                self.cards_grid.setSpacing(8)
+                cols = max(1, (self.width() - 28) // 115)
+                self._current_cols = cols
+                for i, memo in enumerate(memos):
+                    is_open = memo.entry_id in active_ids
+                    card = MiniMemoCardWidget(memo, is_open_on_desktop=is_open, view_mode="card", parent=self.cards_container)
+                    card.clicked.connect(self._on_card_clicked)
+                    card.doubleClicked.connect(self._on_card_double_clicked)
+                    card.reordered.connect(self._on_memo_reordered)
+                    card.requestToggleOpen.connect(self._on_card_toggle_open)
+                    card.requestRemoveFromGroup.connect(self._on_card_remove_group)
+                    card.requestDeleteMemo.connect(self._on_card_delete_memo)
+                    row = i // cols
+                    col = i % cols
+                    self.cards_grid.addWidget(card, row, col, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+                    self._cards.append(card)
+                total_rows = (len(memos) + cols - 1) // cols
+                self.cards_grid.setRowStretch(total_rows, 1)
 
-        self._preview_hidden = None
-        self._update_preview_visibility()
+            self._preview_hidden = None
+            self._update_preview_visibility()
+        finally:
+            if hasattr(self, "cards_container"):
+                self.cards_container.setUpdatesEnabled(True)
 
     def _on_memo_reordered(self, source_id: int, target_id: int, before: bool) -> None:
         parent = self._owner_window
@@ -4252,12 +4297,34 @@ class FloatingGroupDialog(QDialog):
         parent = self._owner_window
         if parent and hasattr(parent, "repository") and entry.entry_id:
             if QMessageBox.question(self, "메모 삭제", f"'{entry.title or '메모'}'를 삭제할까요?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-                parent.repository.delete_entry(entry.entry_id)
+                target_id = entry.entry_id
+                parent.repository.delete_entry(target_id)
+                if hasattr(parent, "_load_memo_order_ids") and hasattr(parent, "_save_memo_order_ids"):
+                    ids = [m_id for m_id in parent._load_memo_order_ids() if m_id != int(target_id)]
+                    parent._save_memo_order_ids(ids, persist=False)
+                if hasattr(parent, "_active_memo_dialogs"):
+                    for k in [target_id, int(target_id)]:
+                        if k in parent._active_memo_dialogs:
+                            dlg = parent._active_memo_dialogs.pop(k)
+                            try:
+                                setattr(dlg, "_is_deleted", True)
+                                dlg.close()
+                            except Exception:
+                                pass
+                if hasattr(parent, "_sync_open_memo_ids"):
+                    parent._sync_open_memo_ids(persist=False)
                 parent.repository.save()
-                if hasattr(parent, "_active_memo_dialogs") and entry.entry_id in parent._active_memo_dialogs:
-                    dlg = parent._active_memo_dialogs.pop(entry.entry_id)
-                    dlg.close()
                 self.refresh_memos()
+                if hasattr(parent, "refresh"):
+                    try:
+                        parent.refresh()
+                    except Exception:
+                        pass
+                if hasattr(parent, "_refresh_all_group_dialogs"):
+                    try:
+                        parent._refresh_all_group_dialogs()
+                    except Exception:
+                        pass
 
     def _on_add_memo_clicked(self) -> None:
         parent = self._owner_window
@@ -4337,7 +4404,7 @@ class FloatingGroupDialog(QDialog):
         self.group_title = new_title.strip() or "새 그룹"
         self.group_dict["title"] = self.group_title
         self._update_title_input_width()
-        self._save_group_state()
+        self._debounced_save(400)
 
     def _update_view_mode_btn(self) -> None:
         if self.view_mode == "card":
@@ -4394,7 +4461,7 @@ class FloatingGroupDialog(QDialog):
             self._resize_with_anchor(target_w, target_h)
         self._update_collapse_btn()
         self._apply_theme(self.group_color)
-        self._save_group_state()
+        self._debounced_save(250)
 
     def _resize_with_anchor(self, width: int, height: int) -> None:
         screen = self.screen() or QApplication.primaryScreen()
@@ -4461,7 +4528,20 @@ class FloatingGroupDialog(QDialog):
         self._save_group_state()
         self.refresh_memos()
 
-    def _save_group_state(self) -> None:
+    def _debounced_save(self, delay_ms: int = 250) -> None:
+        self._save_group_state(persist=False)
+        if not hasattr(self, "_group_save_timer"):
+            self._group_save_timer = QTimer(self)
+            self._group_save_timer.setSingleShot(True)
+            self._group_save_timer.timeout.connect(self._flush_save_state)
+        self._group_save_timer.start(delay_ms)
+
+    def _flush_save_state(self) -> None:
+        parent = self._owner_window
+        if parent and hasattr(parent, "repository"):
+            parent.repository.save()
+
+    def _save_group_state(self, persist: bool = True) -> None:
         parent = self._owner_window
         if parent and hasattr(parent, "repository"):
             curr_geo = self.geometry()
@@ -4482,8 +4562,7 @@ class FloatingGroupDialog(QDialog):
             self.group_dict["is_collapsed"] = self._is_collapsed
             if getattr(self, "_collapsed_width", None) is not None:
                 self.group_dict["collapsed_width"] = self._collapsed_width
-            parent.repository.upsert_memo_group(self.group_dict)
-            parent.repository.save()
+            parent.repository.upsert_memo_group(self.group_dict, persist=persist)
 
     def _set_topmost_native(self, topmost: bool) -> None:
         try:
@@ -4554,7 +4633,7 @@ class FloatingGroupDialog(QDialog):
             screen_right = avail.x() + avail.width()
             exp_w = getattr(self, "_expanded_width", 360)
             self._anchored_to_right = (self.x() + exp_w > screen_right) or (self.x() + self.width() >= screen_right - 16)
-        self._save_group_state()
+        self._debounced_save(250)
 
     def _get_resize_direction(self, global_pos: QPoint) -> str | None:
         local_pos = self.mapFromGlobal(global_pos)
@@ -4673,7 +4752,7 @@ class FloatingGroupDialog(QDialog):
             if event.button() == Qt.MouseButton.LeftButton:
                 if self._resize_dir:
                     self._resize_dir = None
-                    self._save_group_state()
+                    self._debounced_save(250)
                     return True
 
         # 2. Header drag, context menu, and double-click collapse/expand
@@ -4784,7 +4863,7 @@ class FloatingGroupDialog(QDialog):
         self._resize_dir = None
         self._end_window_drag()
         if was_resizing:
-            self._save_group_state()
+            self._debounced_save(250)
         super().mouseReleaseEvent(event)
 
     def _handle_collapsed_edge_dblclick(self, r_dir: str | None) -> bool:
@@ -4819,7 +4898,7 @@ class FloatingGroupDialog(QDialog):
             self.move(new_x, self.y())
         self._collapsed_width = new_w
         self.resize(new_w, self.height())
-        self._save_group_state()
+        self._debounced_save(250)
         return True
 
     def mouseDoubleClickEvent(self, event) -> None:
@@ -4837,7 +4916,9 @@ class FloatingGroupDialog(QDialog):
         super().mouseDoubleClickEvent(event)
 
     def closeEvent(self, event) -> None:
-        self._save_group_state()
+        if hasattr(self, "_group_save_timer") and self._group_save_timer.isActive():
+            self._group_save_timer.stop()
+        self._save_group_state(persist=True)
         parent = self._owner_window
         if parent and getattr(parent, "_is_app_quitting", False):
             super().closeEvent(event)

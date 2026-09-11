@@ -5428,16 +5428,26 @@ class MainWindow(QMainWindow):
         if entry.entry_type == EntryType.MEMO:
             ids = [memo_id for memo_id in self._load_memo_order_ids() if memo_id != int(target_id)]
             self._save_memo_order_ids(ids, persist=False)
-            for k in [target_id, int(target_id)]:
-                if hasattr(self, "_active_memo_dialogs") and k in self._active_memo_dialogs:
-                    dlg = self._active_memo_dialogs.pop(k)
-                    try:
-                        dlg.close()
-                    except Exception:
-                        pass
-            self._sync_open_memo_ids()
+            setattr(self, "_batch_updating_memos", True)
+            try:
+                for k in [target_id, int(target_id)]:
+                    if hasattr(self, "_active_memo_dialogs") and k in self._active_memo_dialogs:
+                        dlg = self._active_memo_dialogs.pop(k)
+                        try:
+                            setattr(dlg, "_is_deleted", True)
+                            dlg.close()
+                        except Exception:
+                            pass
+            finally:
+                setattr(self, "_batch_updating_memos", False)
+            self._sync_open_memo_ids(persist=False)
         self.repository.save()
         self.refresh()
+        if hasattr(self, "_refresh_all_group_dialogs"):
+            try:
+                self._refresh_all_group_dialogs()
+            except Exception:
+                pass
 
     def _sync_open_memo_ids(self, persist: bool = True) -> None:
         open_ids: list[str] = []
@@ -5445,7 +5455,7 @@ class MainWindow(QMainWindow):
             if dlg is not None and dlg.entry and dlg.entry.entry_id is not None:
                 open_ids.append(str(dlg.entry.entry_id))
                 if hasattr(dlg, "_save_memo_geometry"):
-                    dlg._save_memo_geometry()
+                    dlg._save_memo_geometry(persist=False)
                 else:
                     curr_geo = dlg.geometry()
                     w_val = getattr(dlg, "_expanded_width", curr_geo.width())
