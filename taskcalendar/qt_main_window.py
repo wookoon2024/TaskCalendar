@@ -224,21 +224,27 @@ def app_stylesheet(p: dict[str, str]) -> str:
     QMainWindow {{
         background: {p['bg']};
         color: {p['text']};
-        font-family: 'Segoe UI', 'Segoe UI Emoji';
+        font-family: 'Segoe UI', 'Segoe UI Emoji', 'Malgun Gothic';
         font-size: 13px;
+    }}
+    QLabel {{
+        color: {p['text']};
     }}
     QFrame#panel, QFrame#calendarPanel, QFrame#sidebarPanel {{
         background: {p['panel']};
+        color: {p['text']};
         border: 1px solid {p['line']};
         border-radius: 10px;
     }}
     QFrame#softPanel {{
         background: {p['panel_alt']};
+        color: {p['text']};
         border: 1px solid {p['line_soft']};
         border-radius: 10px;
     }}
     QFrame#donePanel {{
         background: {p.get('done_panel_qt', '#d7dce2')};
+        color: {p['text']};
         border: 1px solid {p['line_soft']};
         border-radius: 10px;
     }}
@@ -247,8 +253,24 @@ def app_stylesheet(p: dict[str, str]) -> str:
         font-weight: 700;
         color: {p['text']};
     }}
+    QLabel#sectionTitle {{
+        font-size: 15px;
+        font-weight: 700;
+        color: {p['text']};
+    }}
     QLabel#muted {{
         color: {p['muted']};
+    }}
+    QLineEdit {{
+        background: {p['panel_alt']};
+        color: {p['text']};
+        border: 1px solid {p['line']};
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 12px;
+    }}
+    QLineEdit:focus {{
+        border: 1px solid {p['accent']};
     }}
     QPushButton#topbarButton {{
         background: {p['panel']};
@@ -257,16 +279,21 @@ def app_stylesheet(p: dict[str, str]) -> str:
         border-radius: 6px;
         padding: 5px 10px;
     }}
+    QPushButton#topbarButton:hover {{
+        background: {p['panel_alt']};
+    }}
     QPushButton#topbarButton:checked {{
         background: {p['accent_soft']};
         border: 1px solid {p['accent']};
+        color: {p['text']};
     }}
     QPushButton#primary {{
         background: {p['accent']};
-        color: #fff;
+        color: {p.get('button_text', '#ffffff')};
         border: 1px solid {p['accent']};
         border-radius: 6px;
         padding: 5px 10px;
+        font-weight: 600;
     }}
     QLabel#topbarMuted {{
         color: {p['muted']};
@@ -478,8 +505,23 @@ class DraggableCalendarEntryChip(QFrame):
         self._press_pos: QPoint | None = None
         self.setCursor(Qt.PointingHandCursor)
         chip_bg = str(bg_color or "").strip()
+        actual_entry_fg = entry_fg
+        actual_time_fg = time_fg
         if chip_bg:
             self.setStyleSheet(f"background: {chip_bg}; border: none; border-radius: 4px;")
+            try:
+                c = chip_bg.lstrip("#")
+                if len(c) == 6:
+                    r, g, b = int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+                    lum = 0.299 * r + 0.587 * g + 0.114 * b
+                    if lum > 140:
+                        actual_entry_fg = "#111827"
+                        actual_time_fg = "#1e3a8a"
+                    else:
+                        actual_entry_fg = "#f9fafb"
+                        actual_time_fg = "#93c5fd"
+            except Exception:
+                pass
         else:
             self.setStyleSheet("background: transparent; border: none;")
 
@@ -498,13 +540,13 @@ class DraggableCalendarEntryChip(QFrame):
             time_label = QLabel(time_text)
             time_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
             strike = " text-decoration: line-through;" if completed else ""
-            time_label.setStyleSheet(f"color: {time_fg}; background: transparent; border: none;{strike}")
+            time_label.setStyleSheet(f"color: {actual_time_fg}; background: transparent; border: none;{strike}")
             chip_layout.addWidget(time_label)
         chip = QLabel(title_text)
         chip.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         strike = " text-decoration: line-through;" if completed else ""
-        chip.setStyleSheet(f"color: {entry_fg}; background: transparent; border: none; padding: 0px; margin: 0px;{strike}")
+        chip.setStyleSheet(f"color: {actual_entry_fg}; background: transparent; border: none; padding: 0px; margin: 0px;{strike}")
         chip_layout.addWidget(chip, 1, Qt.AlignLeft)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
@@ -3727,11 +3769,24 @@ class MainWindow(QMainWindow):
         )
         self.sidebar_content.setStyleSheet(f"background: {self.palette['panel']};")
         self.calendar_grid_widget.setStyleSheet("background: transparent;")
+        if hasattr(self, "info_title"):
+            self.info_title.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {self.palette['text']}; background: transparent; border: none;")
+        if hasattr(self, "search_input"):
+            self.search_input.setStyleSheet(
+                f"background: {self.palette['panel_alt']}; color: {self.palette['text']};"
+                f"border: 1px solid {self.palette['line']}; border-radius: 6px; padding: 4px 8px; font-size: 12px;"
+            )
         for idx, label in enumerate(self.weekday_labels):
-            color = self.palette["danger"] if idx == 0 else self.palette["info"] if idx == 6 else self.palette["muted"]
+            if idx == 0:
+                color = self.palette["danger"]
+            elif idx == 6:
+                color = self.palette["info"]
+            else:
+                color = self.palette["text"]
             label.setStyleSheet(
                 f"background: {self.palette['panel_alt']}; color: {color};"
                 f"border: 1px solid {self.palette['line']}; padding: 4px 0 3px 0;"
+                f"font-size: 12px; font-weight: bold;"
             )
         self.year_button.setText(f"{self.current_year}년")
         self.month_button.setText(f"{self.current_month}월")
@@ -3773,14 +3828,15 @@ class MainWindow(QMainWindow):
             cell.number_label.setText(str(current_day.day))
 
             if holiday_name:
-                cell.number_label.setStyleSheet(f"font-size: 11pt; color: {self.palette['danger']}; background: transparent; border: none;")
+                cell.number_label.setStyleSheet(f"font-size: 11pt; font-weight: bold; color: {self.palette['danger']}; background: transparent; border: none;")
             elif current_day.weekday() == 6:
-                cell.number_label.setStyleSheet(f"font-size: 11pt; color: {self.palette['danger']}; background: transparent; border: none;")
+                cell.number_label.setStyleSheet(f"font-size: 11pt; font-weight: bold; color: {self.palette['danger']}; background: transparent; border: none;")
             elif current_day.weekday() == 5:
-                cell.number_label.setStyleSheet(f"font-size: 11pt; color: {self.palette['info']}; background: transparent; border: none;")
+                cell.number_label.setStyleSheet(f"font-size: 11pt; font-weight: bold; color: {self.palette['info']}; background: transparent; border: none;")
             else:
                 color = self.palette.get("badge_selected_fg", self.palette["text"]) if is_selected else (self.palette["text"] if in_month else self.palette["muted"])
-                cell.number_label.setStyleSheet(f"font-size: 11pt; color: {color}; background: transparent; border: none;")
+                weight = "bold" if in_month else "500"
+                cell.number_label.setStyleSheet(f"font-size: 11pt; font-weight: {weight}; color: {color}; background: transparent; border: none;")
 
             solar_term = get_solar_term(current_day) if getattr(self, "show_solar_terms", True) else ""
             show_lunar = getattr(self, "show_lunar_calendar", True)
@@ -3833,11 +3889,11 @@ class MainWindow(QMainWindow):
             if label_parts:
                 cell.lunar_label.setText(" ".join(label_parts))
                 if solar_term:
-                    term_color = self.palette.get("success", "#10b981")
+                    term_color = self.palette.get("accent", "#10b981") if self.theme_name == "dark" else self.palette.get("success", "#10b981")
                     cell.lunar_label.setStyleSheet(f"font-size: 8pt; font-weight: bold; color: {term_color}; background: transparent; border: none;")
                 else:
                     lunar_color = self.palette.get("badge_selected_fg", self.palette["muted"]) if is_selected else self.palette["muted"]
-                    cell.lunar_label.setStyleSheet(f"font-size: 8pt; color: {lunar_color}; background: transparent; border: none;")
+                    cell.lunar_label.setStyleSheet(f"font-size: 8pt; font-weight: 500; color: {lunar_color}; background: transparent; border: none;")
                 cell.lunar_label.setToolTip(" / ".join(tooltip_parts))
                 cell.lunar_label.show()
             else:
@@ -3853,11 +3909,11 @@ class MainWindow(QMainWindow):
 
             day_entries = grouped.get(current_day, [])
             slots_for_entries = item_capacity
-            entry_fg = self.palette.get("badge_selected_fg", "#1f2328") if is_selected else self.palette.get("entry_text", "#1f2328")
-            more_fg = self.palette.get("badge_selected_fg", "#111111") if is_selected else self.palette.get("more_text", "#111111")
+            entry_fg = self.palette.get("badge_selected_fg", self.palette.get("entry_text", self.palette["text"])) if is_selected else self.palette.get("entry_text", self.palette["text"])
+            more_fg = self.palette.get("badge_selected_fg", self.palette.get("more_text", self.palette["muted"])) if is_selected else self.palette.get("more_text", self.palette["muted"])
             if holiday_name:
                 holiday_label = QLabel(holiday_name)
-                holiday_label.setStyleSheet(f"color: {self.palette['danger']}; background: transparent; border: none;")
+                holiday_label.setStyleSheet(f"color: {self.palette['danger']}; font-size: 9pt; font-weight: bold; background: transparent; border: none;")
                 cell.items_layout.addWidget(holiday_label, 0, Qt.AlignLeft)
                 slots_for_entries = max(0, item_capacity - 1)
             # Prefer showing one more real item instead of a lone "+1건" marker.
@@ -3882,7 +3938,7 @@ class MainWindow(QMainWindow):
             if len(day_entries) > slots_for_entries:
                 more = QLabel(f"+{len(day_entries) - slots_for_entries}건")
                 more.setStyleSheet(
-                    f"background: transparent; border: none; color: {more_fg};"
+                    f"background: transparent; border: none; font-size: 9pt; font-weight: bold; color: {more_fg};"
                 )
                 cell.items_layout.addWidget(more)
 
@@ -3893,6 +3949,7 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.deleteLater()
         self._memo_card_widgets.clear()
+        self.info_title.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {self.palette['text']}; background: transparent; border: none;")
 
         if self.sidebar_mode == "search":
             self.info_add_button.hide()
@@ -4218,7 +4275,8 @@ class MainWindow(QMainWindow):
         label.setObjectName("muted")
         label.setAlignment(Qt.AlignCenter)
         label.setStyleSheet(
-            f"border: 1px dashed {self.palette['line_soft']};"
+            f"border: 1px dashed {self.palette['line_soft']}; color: {self.palette['muted']};"
+            f"font-size: 13px; font-weight: 500;"
             f"background: {self.palette['panel_alt']}; padding: 18px 10px; border-radius: 8px;"
         )
         return label

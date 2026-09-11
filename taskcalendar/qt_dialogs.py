@@ -6938,9 +6938,9 @@ class CivilComplaintCalculatorDialog(QDialog):
         header_layout.setSpacing(3)
 
         title_lbl = QLabel("민원 처리기한 모의계산기")
-        title_lbl.setStyleSheet("font-size: 15px; font-weight: bold; color: #1e293b;")
+        title_lbl.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {self.palette['text']};")
         sub_lbl = QLabel("법정 공휴일 및 근무시간(09:00~18:00)을 반영한 마감기한 자동 산정")
-        sub_lbl.setStyleSheet("font-size: 11px; color: #64748b;")
+        sub_lbl.setStyleSheet(f"font-size: 11px; color: {self.palette['muted']};")
         header_layout.addWidget(title_lbl)
         header_layout.addWidget(sub_lbl)
         root.addWidget(header_card)
@@ -6953,7 +6953,7 @@ class CivilComplaintCalculatorDialog(QDialog):
         dt_layout.setSpacing(8)
 
         dt_title = QLabel("1. 접수 일시 지정")
-        dt_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #334155;")
+        dt_title.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {self.palette['text']};")
         dt_layout.addWidget(dt_title)
 
         dt_row = QHBoxLayout()
@@ -6983,7 +6983,7 @@ class CivilComplaintCalculatorDialog(QDialog):
         now_btn.setToolTip("오늘 현재 일시로 재설정")
         now_btn.setFixedHeight(30)
         now_btn.setCursor(Qt.PointingHandCursor)
-        now_btn.setStyleSheet("padding: 2px 10px; font-size: 11px; font-weight: bold; color: #0284c7; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px;")
+        now_btn.setStyleSheet(f"padding: 2px 10px; font-size: 11px; font-weight: bold; color: {self.palette['accent']}; background: {self.palette['accent_soft']}; border: 1px solid {self.palette['accent']}; border-radius: 6px;")
         now_btn.clicked.connect(self._set_current_dt)
         dt_row.addWidget(now_btn)
 
@@ -6999,7 +6999,7 @@ class CivilComplaintCalculatorDialog(QDialog):
         method_layout.setSpacing(6)
 
         method_title = QLabel("2. 계산 기준 선택")
-        method_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #334155;")
+        method_title.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {self.palette['text']};")
         method_layout.addWidget(method_title)
 
         self.radio_public = QRadioButton("공공 표준 (법정 기준: 토·일·공휴일 제외, 09:00~18:00 근무시간 기준)")
@@ -7020,7 +7020,7 @@ class CivilComplaintCalculatorDialog(QDialog):
         dur_layout.setSpacing(8)
 
         dur_title = QLabel("3. 처리 기한 선택")
-        dur_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #334155;")
+        dur_title.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {self.palette['text']};")
         dur_layout.addWidget(dur_title)
 
         presets = [
@@ -7071,12 +7071,12 @@ class CivilComplaintCalculatorDialog(QDialog):
 
         # 5. Result Card
         self.result_card = QFrame()
-        self.result_card.setStyleSheet("""
-            QFrame {
-                background: #f0fdf4;
-                border: 1.5px solid #22c55e;
+        self.result_card.setStyleSheet(f"""
+            QFrame {{
+                background: {self.palette['accent_soft']};
+                border: 1.5px solid {self.palette['accent']};
                 border-radius: 10px;
-            }
+            }}
         """)
         res_layout = QVBoxLayout(self.result_card)
         res_layout.setContentsMargins(14, 12, 14, 12)
@@ -7084,26 +7084,26 @@ class CivilComplaintCalculatorDialog(QDialog):
 
         res_head = QHBoxLayout()
         res_tag = QLabel("최종 법정 처리 마감일시")
-        res_tag.setStyleSheet("font-size: 12px; font-weight: bold; color: #166534; background: transparent; border: none;")
+        res_tag.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {self.palette['accent']}; background: transparent; border: none;")
         res_head.addWidget(res_tag)
         res_head.addStretch(1)
 
         self.res_badge = QLabel("")
-        self.res_badge.setStyleSheet("font-size: 11px; font-weight: bold; color: #0369a1; background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 4px; padding: 2px 6px;")
+        self.res_badge.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {self.palette.get('badge_today_fg', self.palette['text'])}; background: {self.palette.get('badge_today_bg', self.palette['panel_alt'])}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 2px 6px;")
         res_head.addWidget(self.res_badge)
         res_layout.addLayout(res_head)
 
         self.res_due_label = QLabel("")
-        self.res_due_label.setStyleSheet("font-size: 20px; font-weight: 800; color: #14532d; background: transparent; border: none; padding: 4px 0;")
+        self.res_due_label.setStyleSheet(f"font-size: 20px; font-weight: 800; color: {self.palette['text']}; background: transparent; border: none; padding: 4px 0;")
         res_layout.addWidget(self.res_due_label)
 
         self.res_detail_label = QLabel("")
-        self.res_detail_label.setStyleSheet("font-size: 12px; color: #374151; background: transparent; border: none;")
+        self.res_detail_label.setStyleSheet(f"font-size: 12px; color: {self.palette['text']}; background: transparent; border: none;")
         self.res_detail_label.setWordWrap(True)
         res_layout.addWidget(self.res_detail_label)
 
         self.res_excluded_label = QLabel("")
-        self.res_excluded_label.setStyleSheet("font-size: 11px; color: #b91c1c; font-weight: 600; background: transparent; border: none;")
+        self.res_excluded_label.setStyleSheet(f"font-size: 11px; color: {self.palette['danger']}; font-weight: 600; background: transparent; border: none;")
         self.res_excluded_label.setWordWrap(True)
         res_layout.addWidget(self.res_excluded_label)
 
@@ -7111,11 +7111,11 @@ class CivilComplaintCalculatorDialog(QDialog):
 
         # Notice/Disclaimer Card
         notice_card = QFrame()
-        notice_card.setStyleSheet("background: #fffbeb; border: 1px solid #fef3c7; border-radius: 6px;")
+        notice_card.setStyleSheet(f"background: {self.palette['panel_alt']}; border: 1px solid {self.palette['line']}; border-radius: 6px;")
         notice_layout = QHBoxLayout(notice_card)
         notice_layout.setContentsMargins(10, 7, 10, 7)
         notice_lbl = QLabel("※ 본 계산 결과는 법령 및 공휴일 데이터에 따른 모의계산 참고용이며, 실제 민원 사무 처리 및 최종 마감기한 확인에 대한 책임은 사용자 본인에게 있습니다.")
-        notice_lbl.setStyleSheet("font-size: 11px; color: #92400e; background: transparent; border: none;")
+        notice_lbl.setStyleSheet(f"font-size: 11px; color: {self.palette['muted']}; background: transparent; border: none;")
         notice_lbl.setWordWrap(True)
         notice_layout.addWidget(notice_lbl)
         root.addWidget(notice_card)

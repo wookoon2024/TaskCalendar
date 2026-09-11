@@ -461,7 +461,7 @@ class DateCalculatorDialog(QDialog):
         cc_layout.addWidget(self.t2_custom_dir)
 
         self.t2_custom_res_lbl = QLabel("")
-        self.t2_custom_res_lbl.setStyleSheet("font-weight: 700; color: #1f7a67;")
+        self.t2_custom_res_lbl.setStyleSheet(f"font-weight: 700; color: {self.palette.get('accent', '#1f7a67')};")
         cc_layout.addWidget(self.t2_custom_res_lbl, 1)
 
         self.t2_custom_reg_btn = QPushButton("+ 일정 등록")
@@ -689,7 +689,7 @@ class DateCalculatorDialog(QDialog):
         res_layout.setSpacing(8)
 
         self.t3_main_result_lbl = QLabel("")
-        self.t3_main_result_lbl.setStyleSheet("font-size: 16px; font-weight: 800; color: #1f7a67;")
+        self.t3_main_result_lbl.setStyleSheet(f"font-size: 16px; font-weight: 800; color: {self.palette.get('accent', '#1f7a67')};")
         res_layout.addWidget(self.t3_main_result_lbl)
 
         self.t3_stat_lbl = QLabel("")
@@ -908,7 +908,7 @@ class DateCalculatorDialog(QDialog):
         arc_layout.setSpacing(6)
 
         self.t4_age_main_lbl = QLabel("")
-        self.t4_age_main_lbl.setStyleSheet("font-size: 16px; font-weight: 800; color: #1f7a67;")
+        self.t4_age_main_lbl.setStyleSheet(f"font-size: 16px; font-weight: 800; color: {self.palette.get('accent', '#1f7a67')};")
         arc_layout.addWidget(self.t4_age_main_lbl)
 
         self.t4_zodiac_lbl = QLabel("")
@@ -961,7 +961,7 @@ class DateCalculatorDialog(QDialog):
         trc_layout.setSpacing(6)
 
         self.t4_tenure_main_lbl = QLabel("")
-        self.t4_tenure_main_lbl.setStyleSheet("font-size: 15px; font-weight: 800; color: #1f7a67;")
+        self.t4_tenure_main_lbl.setStyleSheet(f"font-size: 15px; font-weight: 800; color: {self.palette.get('accent', '#1f7a67')};")
         trc_layout.addWidget(self.t4_tenure_main_lbl)
 
         self.t4_tenure_days_lbl = QLabel("")
