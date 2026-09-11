@@ -74,6 +74,7 @@ from taskcalendar.qt_dialogs import (
 )
 from taskcalendar.storage import EncryptedRepository
 from taskcalendar.themes import THEMES
+from taskcalendar.qt_styles import dialog_stylesheet
 from taskcalendar.lunar import get_lunar_date, get_solar_term
 
 logger = logging.getLogger(__name__)
@@ -2375,34 +2376,35 @@ class MainWindow(QMainWindow):
         dialog.setWindowModality(Qt.WindowModality.WindowModal)
         dialog.resize(600, 420)
         dialog.setStyleSheet(
-            """
-            QToolButton#favoriteToggle {
-                background: #edf1f5;
-                color: #5f6b78;
-                border: 1px solid #c8d2de;
+            dialog_stylesheet(self.palette)
+            + f"""
+            QToolButton#favoriteToggle {{
+                background: {self.palette['panel_alt']};
+                color: {self.palette['muted']};
+                border: 1px solid {self.palette['line']};
                 border-radius: 7px;
                 padding: 2px 8px;
                 font-weight: 700;
-            }
-            QToolButton#favoriteToggle:hover {
-                background: #e4eaf1;
-            }
-            QToolButton#favoriteToggle:checked {
-                background: #ffd0e2;
-                border-color: #d98fb3;
-                color: #6f2f4f;
-            }
-            QPushButton#stickerDeleteButton {
-                background: #fff1f1;
-                color: #9a2f2f;
-                border: 1px solid #e8b2b2;
+            }}
+            QToolButton#favoriteToggle:hover {{
+                background: {self.palette['accent_soft']};
+            }}
+            QToolButton#favoriteToggle:checked {{
+                background: {self.palette['accent']};
+                border-color: {self.palette['accent']};
+                color: {self.palette['button_text']};
+            }}
+            QPushButton#stickerDeleteButton {{
+                background: {self.palette['panel_alt']};
+                color: {self.palette['danger']};
+                border: 1px solid {self.palette['line']};
                 border-radius: 6px;
                 padding: 2px 8px;
                 font-weight: 700;
-            }
-            QPushButton#stickerDeleteButton:hover {
-                background: #ffe3e3;
-            }
+            }}
+            QPushButton#stickerDeleteButton:hover {{
+                border-color: {self.palette['danger']};
+            }}
             """
         )
 

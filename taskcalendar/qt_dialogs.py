@@ -68,6 +68,7 @@ from taskcalendar.models import (
 )
 from taskcalendar import APP_VERSION
 from taskcalendar.themes import THEME_LABELS
+from taskcalendar.qt_styles import dialog_stylesheet, resolve_palette
 from taskcalendar.desktop_services import _parse_hotkey, normalize_shortcut
 from taskcalendar.paths import asset_path, custom_stickers_path
 from taskcalendar.lunar import get_lunar_date
@@ -682,56 +683,12 @@ class ElidedLabel(QLabel):
 class IconPickerPopup(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self.palette = resolve_palette(parent)
         self.setWindowTitle("스티커 선택")
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedSize(480, 380)
-        self.setStyleSheet("""
-            QDialog {
-                background: #ffffff;
-                border: 1px solid #94a3b8;
-                border-radius: 8px;
-            }
-            QTabWidget::pane {
-                border: 1px solid #e2e8f0;
-                border-radius: 6px;
-                background: #ffffff;
-                margin-top: -1px;
-            }
-            QTabBar::tab {
-                padding: 5px 10px;
-                font-size: 11px;
-                font-weight: bold;
-                color: #64748b;
-                border: 1px solid #e2e8f0;
-                border-bottom: none;
-                background: #f8fafc;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-                margin-right: 2px;
-            }
-            QTabBar::tab:selected {
-                color: #0284c7;
-                background: #ffffff;
-                border-bottom: 2px solid #0284c7;
-            }
-            QTabBar::scroller {
-                width: 0px;
-            }
-            QToolButton.sticker-btn {
-                border: 1px solid #e2e8f0;
-                border-radius: 6px;
-                background: #f8fafc;
-                font-size: 18px;
-                padding: 3px;
-                min-width: 38px;
-                min-height: 38px;
-            }
-            QToolButton.sticker-btn:hover {
-                background: #e0f2fe;
-                border-color: #38bdf8;
-            }
-        """)
+        self.setStyleSheet(dialog_stylesheet(self.palette))
         self.selected_icon: str | None = None
         self.selected_label: str = ""
 
@@ -741,12 +698,12 @@ class IconPickerPopup(QDialog):
 
         header_layout = QHBoxLayout()
         header_title = QLabel("🎨 스티커 & 아이콘")
-        header_title.setStyleSheet("font-size: 13px; font-weight: bold; color: #1e293b;")
+        header_title.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {self.palette['text']};")
         header_layout.addWidget(header_title)
         header_layout.addStretch(1)
 
         none_btn = QPushButton("스티커 제거")
-        none_btn.setStyleSheet("font-size: 11px; padding: 3px 8px; background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; border-radius: 4px; font-weight: bold;")
+        none_btn.setStyleSheet(f"font-size: 11px; padding: 3px 8px; background: {self.palette['panel_alt']}; color: {self.palette['danger']}; border: 1px solid {self.palette['line']}; border-radius: 4px; font-weight: bold;")
         none_btn.setCursor(Qt.PointingHandCursor)
         none_btn.clicked.connect(self._select_none)
         header_layout.addWidget(none_btn)
@@ -757,20 +714,20 @@ class IconPickerPopup(QDialog):
         close_btn.setFixedSize(22, 22)
         close_btn.setCursor(Qt.PointingHandCursor)
         close_btn.setToolTip("닫기 (Esc)")
-        close_btn.setStyleSheet("""
-            QPushButton {
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
                 font-size: 11px;
                 font-weight: bold;
-                color: #64748b;
+                color: {self.palette['muted']};
                 background: transparent;
-                border: 1px solid #cbd5e1;
+                border: 1px solid {self.palette['line']};
                 border-radius: 4px;
-            }
-            QPushButton:hover {
-                background: #f1f5f9;
-                color: #0f172a;
-                border-color: #94a3b8;
-            }
+            }}
+            QPushButton:hover {{
+                background: {self.palette['panel_alt']};
+                color: {self.palette['text']};
+                border-color: {self.palette['muted']};
+            }}
         """)
         close_btn.clicked.connect(self.reject)
         header_layout.addWidget(close_btn)
@@ -808,12 +765,12 @@ class IconPickerPopup(QDialog):
         top_row = QHBoxLayout()
         add_btn = QPushButton("➕ PNG 스티커 등록...")
         add_btn.setCursor(Qt.PointingHandCursor)
-        add_btn.setStyleSheet("font-size: 11px; font-weight: bold; padding: 4px 10px; background: #0284c7; color: #ffffff; border: none; border-radius: 4px;")
+        add_btn.setStyleSheet(f"font-size: 11px; font-weight: bold; padding: 4px 10px; background: {self.palette['accent']}; color: {self.palette['button_text']}; border: none; border-radius: 4px;")
         add_btn.clicked.connect(self._add_custom_png)
         top_row.addWidget(add_btn)
 
         tip_lbl = QLabel("※ 등록된 스티커 우클릭 시 삭제")
-        tip_lbl.setStyleSheet("font-size: 10px; color: #64748b;")
+        tip_lbl.setStyleSheet(f"font-size: 10px; color: {self.palette['muted']};")
         top_row.addWidget(tip_lbl)
         top_row.addStretch(1)
         vbox.addLayout(top_row)
@@ -863,7 +820,7 @@ class IconPickerPopup(QDialog):
         if not png_files:
             empty_lbl = QLabel("등록된 스티커가 없습니다.\n상단의 '➕ PNG 스티커 등록...' 버튼으로 추가해 보세요.")
             empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty_lbl.setStyleSheet("color: #94a3b8; font-size: 11px; padding: 25px;")
+            empty_lbl.setStyleSheet(f"color: {self.palette['muted']}; font-size: 11px; padding: 25px;")
             self.custom_grid.addWidget(empty_lbl, 0, 0, 1, 6)
             return
 
@@ -996,7 +953,7 @@ class EntryDialog(QDialog):
         else:
             super().__init__(parent)
             self.setWindowModality(Qt.WindowModality.WindowModal)
-        self.palette = parent.palette if (parent and hasattr(parent, "palette")) else {"text": "#333333", "line": "#e2e8f0", "muted": "#718096"}
+        self.palette = resolve_palette(parent)
         self.entry_type = entry_type
         self.entry = entry
         self.result: CalendarEntry | None = None
@@ -1515,7 +1472,7 @@ class EntryDialog(QDialog):
             self.sticker_clear_btn.setToolTip("스티커 제거")
             self.sticker_clear_btn.setCursor(Qt.PointingHandCursor)
             self.sticker_clear_btn.setFixedSize(24, 30)
-            self.sticker_clear_btn.setStyleSheet("font-weight: bold; font-size: 11px; color: #dc2626; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 4px;")
+            self.sticker_clear_btn.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {self.palette['danger']}; background: {self.palette['panel_alt']}; border: 1px solid {self.palette['line']}; border-radius: 4px;")
             self.sticker_clear_btn.clicked.connect(self._clear_sticker)
             sticker_wrap_layout.addWidget(self.sticker_clear_btn)
             sticker_wrap_layout.addStretch(1)
@@ -1630,23 +1587,23 @@ class EntryDialog(QDialog):
                 p_btn.setCursor(Qt.PointingHandCursor)
                 p_btn.setToolTip(f"종료일을 시작일 기준 {btn_text} 뒤로 자동 설정")
                 if duration_key == "forever":
-                    p_btn.setStyleSheet("""
-                        QPushButton {
+                    p_btn.setStyleSheet(f"""
+                        QPushButton {{
                             min-width: 40px;
                             max-width: 40px;
                             font-size: 11px;
                             font-weight: bold;
                             padding: 2px 2px;
-                            background: #fdf4ff;
-                            color: #7e22ce;
-                            border: 1px solid #d8b4fe;
+                            background: {self.palette['accent_soft']};
+                            color: {self.palette['accent']};
+                            border: 1px solid {self.palette['accent']};
                             border-radius: 4px;
-                        }
-                        QPushButton:hover {
-                            background: #f3e8ff;
-                            border-color: #a855f7;
-                            color: #6b21a8;
-                        }
+                        }}
+                        QPushButton:hover {{
+                            background: {self.palette['panel_alt']};
+                            border-color: {self.palette['accent']};
+                            color: {self.palette['accent']};
+                        }}
                     """)
                 else:
                     p_btn.setStyleSheet(f"""
@@ -1656,15 +1613,15 @@ class EntryDialog(QDialog):
                             font-size: 11px;
                             font-weight: 500;
                             padding: 2px 2px;
-                            background: #f8fafc;
-                            color: #334155;
-                            border: 1px solid #cbd5e1;
+                            background: {self.palette['panel_alt']};
+                            color: {self.palette['text']};
+                            border: 1px solid {self.palette['line']};
                             border-radius: 4px;
                         }}
                         QPushButton:hover {{
-                            background: #e0f2fe;
-                            border-color: #0284c7;
-                            color: #0284c7;
+                            background: {self.palette['accent_soft']};
+                            border-color: {self.palette['accent']};
+                            color: {self.palette['accent']};
                         }}
                     """)
                 p_btn.clicked.connect(lambda _chk=False, dk=duration_key: self._set_period_duration(dk))
@@ -1675,7 +1632,7 @@ class EntryDialog(QDialog):
 
             self.start_lunar_badge = QLabel("")
             self.start_lunar_badge.setFixedHeight(24)
-            self.start_lunar_badge.setStyleSheet("font-size: 11px; font-weight: bold; color: #0284c7; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 4px; padding: 2px 6px;")
+            self.start_lunar_badge.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {self.palette['info']}; background: {self.palette['accent_soft']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 2px 6px;")
             period_row_layout.addWidget(self.start_lunar_badge)
 
             details_layout.addWidget(period_row, 2, 1)
@@ -1827,136 +1784,7 @@ class EntryDialog(QDialog):
         return line
 
     def _apply_styles(self) -> None:
-        check_icon = asset_path("checkmark.svg").as_posix()
-        self.setStyleSheet(
-            """
-            QDialog#entryDialog {
-                background: #f4f7fb;
-                color: #1f2328;
-                font-family: "Segoe UI";
-                font-size: 13px;
-            }
-            QLabel {
-                color: #1f2328;
-            }
-            QLabel#muted {
-                color: #667085;
-                font-size: 12px;
-                font-weight: 600;
-            }
-            QLabel#sectionTitle {
-                color: #223044;
-                font-size: 13px;
-                font-weight: 700;
-                padding-bottom: 2px;
-            }
-            QLabel#hint {
-                color: #667085;
-                font-size: 12px;
-                font-weight: 600;
-                padding-right: 2px;
-            }
-            QFrame#card, QFrame#softCard {
-                border: 1px solid #dbe3ec;
-                border-radius: 12px;
-            }
-            QFrame#card {
-                background: #ffffff;
-            }
-            QFrame#softCard {
-                background: #f8fafc;
-            }
-            QFrame#separator {
-                background: #e5ebf2;
-                max-height: 1px;
-                border: none;
-            }
-            QLineEdit, QComboBox, QDateEdit, QTimeEdit, QSpinBox, QPlainTextEdit {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 8px;
-                color: #1f2328;
-            }
-            QLineEdit, QComboBox, QDateEdit {
-                min-height: 20px;
-                padding: 4px 8px;
-            }
-            QTimeEdit, QSpinBox {
-                min-height: 20px;
-                padding: 4px 8px;
-            }
-            QPlainTextEdit {
-                padding: 8px;
-                selection-background-color: #cfe7df;
-            }
-            QCheckBox, QRadioButton {
-                color: #1f2328;
-                spacing: 6px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border: 1px solid #788496;
-                background: #ffffff;
-                border-radius: 0px;
-            }
-            QCheckBox::indicator:checked {
-                background: #d7ece6;
-                border: 1px solid #1f7a67;
-            }
-            """
-            + f"""
-            QCheckBox::indicator:checked {{
-                image: url("{check_icon}");
-            }}
-            """
-            + """
-            QDialogButtonBox QPushButton {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 8px;
-                padding: 7px 16px;
-                min-width: 88px;
-            }
-            QPushButton {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 6px;
-                padding: 4px 8px;
-            }
-            QPushButton:focus, QDialogButtonBox QPushButton:focus, QToolButton:focus {
-                outline: none;
-            }
-            QToolButton#stepButton {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 6px;
-                padding: 0px;
-                font-size: 9px;
-                color: #344054;
-            }
-            QToolButton#stepButton:hover {
-                background: #f7fafc;
-            }
-            QPushButton:hover, QDialogButtonBox QPushButton:hover {
-                background: #f7fafc;
-            }
-            QPushButton#primary, QDialogButtonBox QPushButton#primary {
-                background: #1f7a67;
-                color: #ffffff;
-                border: 1px solid #1f7a67;
-                font-weight: 700;
-            }
-            QPushButton#primary:hover, QDialogButtonBox QPushButton#primary:hover {
-                background: #236f60;
-            }
-            QComboBox:disabled, QDateEdit:disabled, QTimeEdit:disabled, QSpinBox:disabled {
-                background: #e2e8f0;
-                color: #8a94a6;
-                border: 1px solid #d1d8e2;
-            }
-            """
-        )
+        self.setStyleSheet(dialog_stylesheet(self.palette))
 
     def _attachments_text(self) -> str:
         return f"{len(self.attachments)}개 파일 선택" if self.attachments else "첨부파일 없음"
@@ -4963,7 +4791,7 @@ class EntryViewDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         logger.info(f"[EntryViewDialog.__init__] entry_type={entry_type}, id={entry.entry_id if entry else None}, title='{entry.title if entry else ''}'")
-        self.palette = parent.palette if (parent and hasattr(parent, "palette")) else {"text": "#333333", "line": "#e2e8f0", "muted": "#718096"}
+        self.palette = resolve_palette(parent)
         self.entry_type = entry_type
         self.entry = entry
         self._on_download_attachment = on_download_attachment
@@ -5230,104 +5058,7 @@ class EntryViewDialog(QDialog):
         return frame, layout
 
     def _apply_styles(self) -> None:
-        check_icon = asset_path("checkmark.svg").as_posix()
-        self.setStyleSheet(
-            """
-            QDialog#entryDialog {
-                background: #f4f7fb;
-                color: #1f2328;
-                font-family: "Segoe UI";
-                font-size: 13px;
-            }
-            QLabel {
-                color: #1f2328;
-            }
-            QLabel#muted {
-                color: #667085;
-                font-size: 12px;
-                font-weight: 600;
-            }
-            QLabel#sectionTitle {
-                color: #223044;
-                font-size: 13px;
-                font-weight: 700;
-                padding-bottom: 2px;
-            }
-            QFrame#card, QFrame#softCard {
-                border: 1px solid #dbe3ec;
-                border-radius: 12px;
-            }
-            QFrame#card {
-                background: #ffffff;
-            }
-            QFrame#softCard {
-                background: #f8fafc;
-            }
-            QLineEdit, QPlainTextEdit {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 8px;
-                color: #1f2328;
-            }
-            QLineEdit {
-                min-height: 20px;
-                padding: 4px 8px;
-            }
-            QPlainTextEdit {
-                padding: 8px;
-                selection-background-color: #cfe7df;
-            }
-            """
-            + f"""
-            QCheckBox::indicator:checked {{
-                image: url("{check_icon}");
-            }}
-            """
-            + """
-            QPushButton, QDialogButtonBox QPushButton {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 8px;
-                padding: 7px 16px;
-                min-width: 88px;
-            }
-            QPushButton:focus, QDialogButtonBox QPushButton:focus, QToolButton:focus {
-                outline: none;
-            }
-            QPushButton:hover, QDialogButtonBox QPushButton:hover {
-                background: #f7fafc;
-            }
-            QPushButton#secondary, QDialogButtonBox QPushButton#secondary {
-                background: #ffffff;
-                color: #1f2328;
-                border: 1px solid #cfd8e3;
-                font-weight: 600;
-            }
-            QPushButton#secondary:hover, QDialogButtonBox QPushButton#secondary:hover {
-                background: #f1f5f9;
-            }
-            QPushButton#primary, QDialogButtonBox QPushButton#primary {
-                background: #1f7a67;
-                color: #ffffff;
-                border: 1px solid #1f7a67;
-                font-weight: 700;
-            }
-            QPushButton#primary:hover, QDialogButtonBox QPushButton#primary:hover {
-                background: #236f60;
-            }
-            QPushButton#attachLink {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 8px;
-                text-align: left;
-                color: #1f2328;
-                padding: 4px 10px;
-            }
-            QPushButton#attachLink:hover {
-                background: #eef4fb;
-            }
-            """
-        )
+        self.setStyleSheet(dialog_stylesheet(self.palette))
 
     def mousePressEvent(self, event) -> None:
         if self.entry_type == EntryType.MEMO and event.button() == Qt.MouseButton.LeftButton:
@@ -5440,6 +5171,7 @@ class SettingsDialog(QDialog):
         memo_title_only: bool = True,
     ) -> None:
         super().__init__(parent)
+        self.palette = resolve_palette(parent)
         self._db_path = db_path
         self.result: dict[str, object] | None = None
         self._current_shortcut = normalize_shortcut(current_shortcut)
@@ -5453,117 +5185,7 @@ class SettingsDialog(QDialog):
         self.setWindowIcon(_dialog_icon())
         self.resize(700, 520)
         self.setFixedWidth(700)
-        self.setStyleSheet(
-            """
-            QDialog {
-                background: #f4f7fb;
-                color: #1f2328;
-                font-family: "Segoe UI";
-                font-size: 13px;
-            }
-            QLabel#title {
-                color: #223044;
-                font-size: 18px;
-                font-weight: 700;
-            }
-            QLabel#subtitle {
-                color: #667085;
-                font-size: 12px;
-            }
-            QLabel#sectionTitle {
-                color: #223044;
-                font-size: 13px;
-                font-weight: 700;
-            }
-            QLabel#muted {
-                color: #667085;
-                font-size: 12px;
-                font-weight: 600;
-            }
-            QLabel#value {
-                color: #1f2328;
-                font-size: 13px;
-            }
-            QFrame#card {
-                background: #ffffff;
-                border: 1px solid #dbe3ec;
-                border-radius: 10px;
-            }
-            QListWidget#navSidebar {
-                background: #ffffff;
-                border: 1px solid #dbe3ec;
-                border-radius: 10px;
-                outline: none;
-                padding: 6px;
-            }
-            QListWidget#navSidebar::item {
-                height: 38px;
-                padding-left: 12px;
-                font-size: 13px;
-                font-weight: 600;
-                color: #334155;
-                border-radius: 6px;
-                margin-bottom: 3px;
-            }
-            QListWidget#navSidebar::item:hover {
-                background-color: #f1f5f9;
-                color: #0f172a;
-            }
-            QListWidget#navSidebar::item:selected {
-                background-color: #e2e8f0;
-                color: #0f172a;
-                font-weight: 700;
-            }
-            QComboBox {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 6px;
-                color: #1f2328;
-                min-height: 24px;
-                padding: 3px 8px;
-            }
-            QCheckBox {
-                color: #1f2328;
-                spacing: 6px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border: 1px solid #788496;
-                background: #ffffff;
-                border-radius: 0px;
-            }
-            QCheckBox::indicator:checked {
-                background: #d7ece6;
-                border: 1px solid #1f7a67;
-                image: url("%s");
-            }
-            QPushButton, QDialogButtonBox QPushButton {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 6px;
-                padding: 6px 14px;
-                min-width: 80px;
-            }
-            QPushButton:hover, QDialogButtonBox QPushButton:hover {
-                background: #f8fafc;
-                border-color: #94a3b8;
-            }
-            QPushButton:focus, QDialogButtonBox QPushButton:focus, QToolButton:focus {
-                outline: none;
-            }
-            QPushButton#primary, QDialogButtonBox QPushButton#primary {
-                background: #1f7a67;
-                color: #ffffff;
-                border: 1px solid #1f7a67;
-                font-weight: 700;
-            }
-            QPushButton#primary:hover, QDialogButtonBox QPushButton#primary:hover {
-                background: #186354;
-            }
-            """
-            % (asset_path("checkmark.svg").as_posix(),)
-        )
+        self.setStyleSheet(dialog_stylesheet(self.palette))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 14)
@@ -5576,7 +5198,7 @@ class SettingsDialog(QDialog):
         title.setObjectName("title")
         title_row.addWidget(title)
         ver_badge = QLabel(APP_VERSION)
-        ver_badge.setStyleSheet("font-size: 11px; font-weight: bold; color: #475569; padding: 2px 6px; background: #e2e8f0; border-radius: 4px;")
+        ver_badge.setStyleSheet(f"font-size: 11px; font-weight: bold; color: {self.palette['muted']}; padding: 2px 6px; background: {self.palette['panel_alt']}; border-radius: 4px;")
         title_row.addWidget(ver_badge)
         title_row.addStretch(1)
         title_box.addLayout(title_row)
@@ -5671,7 +5293,7 @@ class SettingsDialog(QDialog):
         behavior_layout.addWidget(self.show_solar_terms_check)
 
         intro_btn = QPushButton("💡 기능 안내 팝업 다시 보기")
-        intro_btn.setStyleSheet("padding: 5px 10px; font-size: 12px; margin-top: 4px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px;")
+        intro_btn.setStyleSheet(f"padding: 5px 10px; font-size: 12px; margin-top: 4px; background: {self.palette['panel']}; border: 1px solid {self.palette['line']}; border-radius: 4px;")
         intro_btn.setCursor(Qt.PointingHandCursor)
         intro_btn.clicked.connect(self._show_intro_guide)
         behavior_layout.addWidget(intro_btn)
@@ -5980,7 +5602,7 @@ class SettingsDialog(QDialog):
 
         backup_note = QLabel("(※ 첨부파일은 백업에 포함되지 않습니다.)")
         backup_note.setObjectName("subtitle")
-        backup_note.setStyleSheet("color: #d15d48; font-weight: 600;")
+        backup_note.setStyleSheet(f"color: {self.palette['danger']}; font-weight: 600;")
         backup_row1.addWidget(backup_note)
         backup_row1.addStretch(1)
         backup_layout.addLayout(backup_row1)
@@ -6162,7 +5784,7 @@ class SettingsDialog(QDialog):
         cal_shortcut = "+".join(cal_modifiers + [cal_key_token]) if cal_modifiers else cal_key_token
         cal_available, cal_message = self._check_shortcut_availability(cal_shortcut, is_memo=False)
         if not cal_available:
-            self.shortcut_status_label.setStyleSheet("color: #d15d48;")
+            self.shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
             self.shortcut_status_label.setText(cal_message)
             self.nav_list.setCurrentRow(3)
             QMessageBox.warning(self, "단축키 오류", f"캘린더 단축키 오류: {cal_message}")
@@ -6189,7 +5811,7 @@ class SettingsDialog(QDialog):
 
         memo_available, memo_message = self._check_shortcut_availability(memo_shortcut, is_memo=True)
         if not memo_available:
-            self.memo_shortcut_status_label.setStyleSheet("color: #d15d48;")
+            self.memo_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
             self.memo_shortcut_status_label.setText(memo_message)
             self.nav_list.setCurrentRow(3)
             QMessageBox.warning(self, "단축키 오류", f"메모 단축키 오류: {memo_message}")
@@ -6233,12 +5855,12 @@ class SettingsDialog(QDialog):
             modifiers.append("Alt")
         key_token = str(self.shortcut_key_combo.currentData())
         if not modifiers and not (key_token.startswith("F") and key_token[1:].isdigit()):
-            self.shortcut_status_label.setStyleSheet("color: #d15d48;")
+            self.shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
             self.shortcut_status_label.setText("단독 키는 F1~F12만 가능합니다.")
             return
         shortcut = "+".join(modifiers + [key_token]) if modifiers else key_token
         available, message = self._check_shortcut_availability(shortcut, is_memo=False)
-        self.shortcut_status_label.setStyleSheet("color: #1f7a67;" if available else "color: #d15d48;")
+        self.shortcut_status_label.setStyleSheet(f"color: {self.palette['accent']};" if available else f"color: {self.palette['danger']};")
         self.shortcut_status_label.setText(message)
 
     def _refresh_memo_shortcut_status(self) -> None:
@@ -6251,12 +5873,12 @@ class SettingsDialog(QDialog):
             modifiers.append("Alt")
         key_token = str(self.memo_shortcut_key_combo.currentData())
         if not modifiers and not (key_token.startswith("F") and key_token[1:].isdigit()):
-            self.memo_shortcut_status_label.setStyleSheet("color: #d15d48;")
+            self.memo_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
             self.memo_shortcut_status_label.setText("단독 키는 F1~F12만 가능합니다.")
             return
         shortcut = "+".join(modifiers + [key_token]) if modifiers else key_token
         available, message = self._check_shortcut_availability(shortcut, is_memo=True)
-        self.memo_shortcut_status_label.setStyleSheet("color: #1f7a67;" if available else "color: #d15d48;")
+        self.memo_shortcut_status_label.setStyleSheet(f"color: {self.palette['accent']};" if available else f"color: {self.palette['danger']};")
         self.memo_shortcut_status_label.setText(message)
 
     def _check_shortcut_availability(self, shortcut: str, is_memo: bool = False) -> tuple[bool, str]:
@@ -6349,6 +5971,7 @@ class SettingsDialog(QDialog):
 class AlarmEditDialog(QDialog):
     def __init__(self, parent, alarm: Alarm | None = None) -> None:
         super().__init__(parent)
+        self.palette = resolve_palette(parent)
         self.alarm = alarm
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowTitle("알람 등록" if alarm is None else "알람 수정")
@@ -6356,107 +5979,7 @@ class AlarmEditDialog(QDialog):
         self.resize(500, 440)
         self.setFixedWidth(500)
         
-        self.setStyleSheet(
-            """
-            QDialog {
-                background: #f4f7fb;
-                color: #1f2328;
-                font-family: "Segoe UI";
-                font-size: 13px;
-            }
-            QRadioButton {
-                color: #1f2328;
-                spacing: 6px;
-            }
-            QLabel#title {
-                color: #223044;
-                font-size: 18px;
-                font-weight: 700;
-            }
-            QLabel#sectionTitle {
-                color: #223044;
-                font-size: 13px;
-                font-weight: 700;
-            }
-            QLabel#muted {
-                color: #667085;
-                font-size: 12px;
-                font-weight: 600;
-            }
-            QFrame#card {
-                background: #ffffff;
-                border: 1px solid #dbe3ec;
-                border-radius: 12px;
-            }
-            QLineEdit {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 8px;
-                padding: 6px 10px;
-                color: #1f2328;
-            }
-            QTimeEdit, QDateEdit {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 8px;
-                padding: 4px 8px;
-                color: #1f2328;
-            }
-            QComboBox {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 8px;
-                color: #1f2328;
-                min-height: 22px;
-                padding: 4px 8px;
-            }
-            QCheckBox {
-                color: #1f2328;
-                spacing: 6px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border: 1px solid #788496;
-                background: #ffffff;
-            }
-            QCheckBox::indicator:checked {
-                background: #d7ece6;
-                border: 1px solid #1f7a67;
-                image: url("%s");
-            }
-            QPushButton {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 8px;
-                padding: 7px 16px;
-                min-width: 88px;
-            }
-            QPushButton#primary {
-                background: #1f7a67;
-                color: #ffffff;
-                border: 1px solid #1f7a67;
-                font-weight: 700;
-            }
-            QToolButton#weekdayBtn {
-                border: 1px solid #cfd8e3;
-                border-radius: 14px;
-                background: #ffffff;
-                color: #1f2328;
-                font-weight: 600;
-                min-width: 28px;
-                min-height: 28px;
-                max-width: 28px;
-                max-height: 28px;
-            }
-            QToolButton#weekdayBtn:checked {
-                background: #1f7a67;
-                color: #ffffff;
-                border: 1px solid #1f7a67;
-            }
-            """
-            % (asset_path("checkmark.svg").as_posix(),)
-        )
+        self.setStyleSheet(dialog_stylesheet(self.palette))
         
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 12, 16, 12)
@@ -6594,7 +6117,7 @@ class AlarmEditDialog(QDialog):
         period_layout.setSpacing(8)
         
         self.period_checkbox = QCheckBox("기간")
-        self.period_checkbox.setStyleSheet("color: #667085; font-size: 12px; font-weight: 600;")
+        self.period_checkbox.setStyleSheet(f"color: {self.palette['muted']}; font-size: 12px; font-weight: 600;")
         self.period_checkbox.setFixedWidth(70)
         self.period_checkbox.toggled.connect(self._on_period_toggled)
         period_layout.addWidget(self.period_checkbox)
@@ -6769,98 +6292,9 @@ class AlarmManagerDialog(QDialog):
         self.resize(600, 500)
         self.setFixedWidth(600)
         
-        self.palette = parent.palette if hasattr(parent, "palette") else {
-            "bg": "#f4f7fb", "text": "#1f2328", "muted": "#667085", "accent": "#1f7a67"
-        }
+        self.palette = resolve_palette(parent)
         
-        self.setStyleSheet(
-            """
-            QDialog {
-                background: #f4f7fb;
-                color: #1f2328;
-                font-family: "Segoe UI";
-                font-size: 13px;
-            }
-            QLabel#title {
-                color: #223044;
-                font-size: 18px;
-                font-weight: 700;
-            }
-            QLabel#subtitle {
-                color: #667085;
-                font-size: 12px;
-            }
-            QScrollArea {
-                border: none;
-                background: transparent;
-            }
-            QFrame#card {
-                background: #ffffff;
-                border: 1px solid #dbe3ec;
-                border-radius: 12px;
-            }
-            QFrame#alarmItem {
-                background: #ffffff;
-                border: 1px solid #dbe3ec;
-                border-radius: 10px;
-            }
-            QLabel#alarmTime {
-                color: #223044;
-                font-size: 20px;
-                font-weight: 700;
-            }
-            QLabel#alarmTitle {
-                color: #1f2328;
-                font-size: 13px;
-                font-weight: 600;
-            }
-            QLabel#alarmInfo {
-                color: #667085;
-                font-size: 11px;
-            }
-            QPushButton {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 8px;
-                padding: 5px 12px;
-                min-width: 60px;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background: #f4f7fb;
-            }
-            QPushButton#primary {
-                background: #1f7a67;
-                color: #ffffff;
-                border: 1px solid #1f7a67;
-                font-weight: 700;
-                padding: 7px 16px;
-                min-width: 88px;
-                font-size: 13px;
-            }
-            QPushButton#danger {
-                background: #ffffff;
-                color: #d15d48;
-                border: 1px solid #cfd8e3;
-            }
-            QPushButton#danger:hover {
-                background: #ffebe9;
-                border: 1px solid #d15d48;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border: 1px solid #788496;
-                background: #ffffff;
-            }
-            QCheckBox::indicator:checked {
-                background: #d7ece6;
-                border: 1px solid #1f7a67;
-                image: url("%s");
-            }
-            """
-            % (asset_path("checkmark.svg").as_posix(),)
-        )
+        self.setStyleSheet(dialog_stylesheet(self.palette))
         
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -7051,6 +6485,7 @@ class AlarmManagerDialog(QDialog):
 class BackupRestoreFormatDialog(QDialog):
     def __init__(self, parent, mode: str = "export") -> None:
         super().__init__(parent)
+        self.palette = resolve_palette(parent)
         self.mode = mode  # "export" or "import"
         self.selected_format = "zip"  # default
         self.setWindowModality(Qt.WindowModality.WindowModal)
@@ -7059,63 +6494,7 @@ class BackupRestoreFormatDialog(QDialog):
         self.setFixedWidth(480)
 
         # Style sheet
-        self.setStyleSheet(
-            """
-            QDialog {
-                background: #f4f7fb;
-                color: #1f2328;
-                font-family: "Segoe UI";
-                font-size: 13px;
-            }
-            QLabel#title {
-                color: #223044;
-                font-size: 16px;
-                font-weight: 700;
-            }
-            QLabel#description {
-                color: #667085;
-                font-size: 12px;
-            }
-            QFrame#card {
-                background: #ffffff;
-                border: 1px solid #dbe3ec;
-                border-radius: 10px;
-                padding: 10px;
-            }
-            QFrame#card:hover {
-                border-color: #1f7a67;
-            }
-            QRadioButton {
-                font-weight: 600;
-                color: #223044;
-                font-size: 14px;
-            }
-            QLabel#info_label {
-                color: #667085;
-                font-size: 11px;
-                margin-left: 20px;
-            }
-            QLabel#warning_label {
-                color: #e15741;
-                font-size: 11px;
-                font-weight: 600;
-                margin-left: 20px;
-            }
-            QPushButton {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 6px;
-                padding: 6px 14px;
-                min-width: 70px;
-            }
-            QPushButton#primary {
-                background: #1f7a67;
-                color: #ffffff;
-                border: 1px solid #1f7a67;
-                font-weight: 700;
-            }
-            """
-        )
+        self.setStyleSheet(dialog_stylesheet(self.palette))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -7204,6 +6583,7 @@ class BackupRestoreFormatDialog(QDialog):
 class CivilComplaintCalculatorDialog(QDialog):
     def __init__(self, parent=None, holidays_fixed: dict[str, str] | None = None, holidays_yearly: dict[str, str] | None = None) -> None:
         super().__init__(parent)
+        self.palette = resolve_palette(parent)
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowTitle("민원 처리기한 모의계산기")
         self.setFixedWidth(560)
@@ -7220,57 +6600,7 @@ class CivilComplaintCalculatorDialog(QDialog):
         self._select_preset("days", 3)
 
     def _apply_dialog_styles(self) -> None:
-        self.setStyleSheet("""
-            QDialog {
-                background: #f4f7fb;
-                font-family: "Segoe UI", "Malgun Gothic", sans-serif;
-            }
-            QFrame#card {
-                background: #ffffff;
-                border: 1px solid #dbe3ec;
-                border-radius: 10px;
-            }
-            QLineEdit, QDateEdit, QTimeEdit, QSpinBox, QComboBox {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 6px;
-                padding: 3px 6px;
-                color: #1f2328;
-                font-size: 12px;
-            }
-            QPushButton {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 6px;
-                color: #334155;
-            }
-            QPushButton#primary {
-                background: #1f7a67;
-                color: #ffffff;
-                border: 1px solid #1f7a67;
-                font-weight: 700;
-            }
-            QPushButton#primary:hover {
-                background: #196354;
-            }
-            QToolButton#stepButton {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 6px;
-                padding: 0px;
-                font-size: 9px;
-                color: #344054;
-            }
-            QToolButton#stepButton:hover {
-                background: #f7fafc;
-            }
-            QToolButton#stepButton:pressed {
-                background: #eef2f6;
-            }
-            QToolButton:focus {
-                outline: none;
-            }
-        """)
+        self.setStyleSheet(dialog_stylesheet(self.palette))
 
     def _step_field(self, field: QAbstractSpinBox, button_width: int = 20, button_height: int = 14) -> QWidget:
         wrap = QWidget()
@@ -7650,6 +6980,7 @@ class CivilComplaintCalculatorDialog(QDialog):
 class WelcomeFeatureIntroDialog(QDialog):
     def __init__(self, parent=None, is_dismissed: bool = False) -> None:
         super().__init__(parent)
+        self.palette = resolve_palette(parent)
         self.setWindowTitle("TaskCalendar 기능 안내 & 팁")
         self.setWindowIcon(_dialog_icon())
         self.setModal(False)
@@ -7657,65 +6988,7 @@ class WelcomeFeatureIntroDialog(QDialog):
         self.resize(520, 440)
         self.open_settings_requested = False
 
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #f8fafc;
-                font-family: 'Segoe UI', 'Malgun Gothic';
-            }
-            QFrame#headerBox {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1e3a8a, stop:1 #3b82f6);
-                border-radius: 8px;
-                padding: 12px;
-            }
-            QLabel#headerTitle {
-                color: #ffffff;
-                font-size: 15px;
-                font-weight: 700;
-            }
-            QLabel#headerSubtitle {
-                color: #e0e7ff;
-                font-size: 12px;
-            }
-            QFrame#itemCard {
-                background-color: #ffffff;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
-            }
-            QLabel#itemTitle {
-                color: #0f172a;
-                font-size: 13px;
-                font-weight: 700;
-            }
-            QLabel#itemDesc {
-                color: #475569;
-                font-size: 12px;
-                line-height: 1.4;
-            }
-            QPushButton#primaryBtn {
-                background-color: #2563eb;
-                color: #ffffff;
-                font-weight: 600;
-                font-size: 12px;
-                padding: 6px 18px;
-                border-radius: 6px;
-                border: none;
-            }
-            QPushButton#primaryBtn:hover {
-                background-color: #1d4ed8;
-            }
-            QPushButton#secondaryBtn {
-                background-color: #ffffff;
-                color: #334155;
-                font-weight: 600;
-                font-size: 12px;
-                padding: 6px 14px;
-                border-radius: 6px;
-                border: 1px solid #cbd5e1;
-            }
-            QPushButton#secondaryBtn:hover {
-                background-color: #f1f5f9;
-            }
-        """)
+        self.setStyleSheet(dialog_stylesheet(self.palette))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 14)
@@ -7761,7 +7034,7 @@ class WelcomeFeatureIntroDialog(QDialog):
         footer.setSpacing(8)
         self.dismiss_check = QCheckBox("다시 보지 않기")
         self.dismiss_check.setChecked(is_dismissed)
-        self.dismiss_check.setStyleSheet("color: #475569; font-size: 12px; font-weight: 500;")
+        self.dismiss_check.setStyleSheet(f"color: {self.palette['muted']}; font-size: 12px; font-weight: 500;")
         footer.addWidget(self.dismiss_check)
         footer.addStretch(1)
 
