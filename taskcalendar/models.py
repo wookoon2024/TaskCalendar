@@ -66,7 +66,7 @@ class DaySummary:
 
 
 STATUS_OPTIONS = ["", "예정", "진행중", "완료", "보류"]
-THEME_OPTIONS = ["light", "warm", "dark"]
+THEME_OPTIONS = ["light", "warm", "dark", "pink", "mint", "lavender"]
 RECURRENCE_OPTIONS = [
     ("반복 안함", RecurrenceType.NONE),
     ("매일", RecurrenceType.DAILY),

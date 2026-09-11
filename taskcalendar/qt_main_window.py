@@ -3415,6 +3415,8 @@ class MainWindow(QMainWindow):
             self._sticker_animation_state.pop(sticker_id, None)
 
     def refresh(self) -> None:
+        if self.theme_name not in THEMES:
+            self.theme_name = "light"
         self.palette = THEMES[self.theme_name]
         if self.sidebar_mode == "search" and self.search_query:
             self.search_results = self.repository.search_entries(self.search_query)

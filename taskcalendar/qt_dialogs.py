@@ -67,6 +67,7 @@ from taskcalendar.models import (
     calculate_next_alarm_trigger,
 )
 from taskcalendar import APP_VERSION
+from taskcalendar.themes import THEME_LABELS
 from taskcalendar.desktop_services import _parse_hotkey, normalize_shortcut
 from taskcalendar.paths import asset_path, custom_stickers_path
 from taskcalendar.lunar import get_lunar_date
@@ -5710,7 +5711,7 @@ class SettingsDialog(QDialog):
         appearance_layout.addRow(appearance_title)
         self.theme_combo = QComboBox()
         for theme_name in THEME_OPTIONS:
-            self.theme_combo.addItem(theme_name, theme_name)
+            self.theme_combo.addItem(THEME_LABELS.get(theme_name, theme_name), theme_name)
         self.theme_combo.setCurrentIndex(max(0, self.theme_combo.findData(current_theme)))
         theme_label = QLabel("테마")
         theme_label.setObjectName("muted")
