@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="20" viewBox="0 0 48 20">
+  <defs>
+    <linearGradient id="g_save" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0284c7"/>
+      <stop offset="100%" stop-color="#0369a1"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="20" rx="10" fill="url(#g_save)"/>
+  <path d="M12 5.5 L12 12 M9.2 9.5 L12 12.3 L14.8 9.5 M7.5 14.5 L16.5 14.5" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="31" y="14.2" font-family="'Malgun Gothic', 'Segoe UI', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" font-weight="bold" fill="#ffffff" text-anchor="middle">저장</text>
+</svg>

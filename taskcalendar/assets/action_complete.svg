@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="20" viewBox="0 0 48 20">
+  <defs>
+    <linearGradient id="g_comp" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="20" rx="10" fill="url(#g_comp)"/>
+  <path d="M7.5 10.5 L10.5 13.5 L15.5 7" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="31" y="14.2" font-family="'Malgun Gothic', 'Segoe UI', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" font-weight="bold" fill="#ffffff" text-anchor="middle">완료</text>
+</svg>

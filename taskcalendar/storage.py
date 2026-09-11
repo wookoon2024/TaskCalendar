@@ -503,6 +503,58 @@ class EncryptedRepository:
 
         return (deleted_count, freed_bytes)
 
+    def maybe_auto_vacuum(self) -> bool:
+        """Check if DB fragmentation warrants an automatic vacuum (freelist >= 30 pages and 7 days elapsed).
+        Executes silently in the background without blocking the user."""
+        try:
+            last_ts_str = self.get_setting("last_auto_vacuum_ts") or "0"
+            try:
+                last_ts = float(last_ts_str)
+            except ValueError:
+                last_ts = 0.0
+            now = time.time()
+            if now - last_ts < 7 * 86400:
+                return False
+
+            row_free = self.connection.execute("PRAGMA freelist_count").fetchone()
+            free_pages = row_free[0] if row_free else 0
+
+            row_total = self.connection.execute("PRAGMA page_count").fetchone()
+            total_pages = row_total[0] if row_total else 1
+
+            if free_pages < 30 and (free_pages / max(1, total_pages)) < 0.15:
+                return False
+
+            self.vacuum()
+            self.cleanup_orphan_attachments()
+            self.set_setting("last_auto_vacuum_ts", str(now))
+            self.save()
+            return True
+        except Exception as exc:
+            self._log_diagnostic("auto_vacuum_failed", str(exc))
+            return False
+
+    def get_day_order(self, day: date) -> list[int]:
+        key = f"day_order_{day.isoformat()}"
+        val = self.get_setting(key)
+        if not val:
+            return []
+        try:
+            return [int(x) for x in json.loads(val) if int(x) > 0]
+        except Exception:
+            return []
+
+    def set_day_order(self, day: date, ids: list[int]) -> None:
+        key = f"day_order_{day.isoformat()}"
+        clean: list[int] = []
+        seen: set[int] = set()
+        for x in ids:
+            ix = int(x)
+            if ix > 0 and ix not in seen:
+                seen.add(ix)
+                clean.append(ix)
+        self.set_setting(key, json.dumps(clean, ensure_ascii=False))
+
     def _seed(self) -> None:
         # Keep initial DB empty; only default settings are seeded.
         self.set_setting("theme", "light")
@@ -609,7 +661,21 @@ class EncryptedRepository:
         items: list[CalendarEntry] = []
         for row in rows:
             items.extend(self._expand_entry_for_month(self._row_to_entry(row), year, month))
-        items.sort(key=lambda item: ((item.day or date.min), item.start_time, item.entry_id or 0))
+        day_orders: dict[date, dict[int, int]] = {}
+        for item in items:
+            d = item.day or date.min
+            if d not in day_orders:
+                order_list = self.get_day_order(d) if d != date.min else []
+                day_orders[d] = {eid: idx for idx, eid in enumerate(order_list)}
+        items.sort(
+            key=lambda item: (
+                (item.day or date.min),
+                day_orders.get(item.day or date.min, {}).get(item.entry_id or 0, 999999),
+                0 if item.entry_type == EntryType.TASK else 1,
+                item.start_time,
+                item.entry_id or 0,
+            )
+        )
         return items
 
     def list_entries_for_day(self, target_day: date) -> list[CalendarEntry]:
@@ -619,7 +685,18 @@ class EncryptedRepository:
             entry = self._row_to_entry(row)
             if self._occurs_on(entry, target_day):
                 items.append(replace(entry, day=target_day, source_entry_id=entry.entry_id))
-        items.sort(key=lambda item: (0 if item.entry_type == EntryType.TASK else 1, item.start_time, item.entry_id or 0))
+        order_map = {eid: idx for idx, eid in enumerate(self.get_day_order(target_day))}
+        if order_map:
+            items.sort(
+                key=lambda item: (
+                    order_map.get(item.entry_id, 999999),
+                    0 if item.entry_type == EntryType.TASK else 1,
+                    item.start_time,
+                    item.entry_id or 0,
+                )
+            )
+        else:
+            items.sort(key=lambda item: (0 if item.entry_type == EntryType.TASK else 1, item.start_time, item.entry_id or 0))
         return items
 
     def list_memos(self) -> list[CalendarEntry]:

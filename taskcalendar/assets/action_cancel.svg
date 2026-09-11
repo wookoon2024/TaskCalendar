@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="20" viewBox="0 0 48 20">
+  <defs>
+    <linearGradient id="g_canc" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#64748b"/>
+      <stop offset="100%" stop-color="#475569"/>
+    </linearGradient>
+  </defs>
+  <rect width="48" height="20" rx="10" fill="url(#g_canc)"/>
+  <path d="M9.5 8 L7 10.5 L9.5 13 M7.5 10.5 L13 10.5 C14.5 10.5 15.5 11.5 15.5 13" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="31" y="14.2" font-family="'Malgun Gothic', 'Segoe UI', 'Apple SD Gothic Neo', sans-serif" font-size="10.5" font-weight="bold" fill="#ffffff" text-anchor="middle">취소</text>
+</svg>

@@ -472,10 +472,35 @@ class DayCell(QFrame):
         except ValueError:
             event.ignore()
             return
-        moved = bool(self.callback_move_entry(entry_id, source_day, self.day_value))
-        if moved:
-            event.acceptProposedAction()
-            return
+
+        drop_pos = event.position().toPoint()
+        chips: list[DraggableCalendarEntryChip] = []
+        for i in range(self.items_layout.count()):
+            w = self.items_layout.itemAt(i).widget()
+            if isinstance(w, DraggableCalendarEntryChip):
+                chips.append(w)
+
+        target_id: int | None = None
+        before = True
+
+        if chips:
+            matched = False
+            for c in chips:
+                geom = c.geometry()
+                if drop_pos.y() < geom.center().y():
+                    target_id = int(c.entry.entry_id) if c.entry.entry_id is not None else None
+                    before = True
+                    matched = True
+                    break
+            if not matched:
+                target_id = int(chips[-1].entry.entry_id) if chips[-1].entry.entry_id is not None else None
+                before = False
+
+        if callable(self.callback_move_entry):
+            moved = bool(self.callback_move_entry(entry_id, source_day, self.day_value, target_id, before))
+            if moved:
+                event.acceptProposedAction()
+                return
         event.ignore()
 
     @staticmethod
@@ -497,18 +522,33 @@ class DayCell(QFrame):
 
 
 class DraggableCalendarEntryChip(QFrame):
-    def __init__(self, parent, entry: CalendarEntry, source_day: date, title_text: str, time_text: str, entry_fg: str, time_fg: str, on_edit, completed: bool = False, bg_color: str = "") -> None:
+    def __init__(
+        self,
+        parent,
+        entry: CalendarEntry,
+        source_day: date,
+        title_text: str,
+        time_text: str,
+        entry_fg: str,
+        time_fg: str,
+        on_edit,
+        completed: bool = False,
+        bg_color: str = "",
+        on_reorder=None,
+    ) -> None:
         super().__init__(parent)
         self.entry = entry
         self.source_day = source_day
         self._on_edit = on_edit
+        self._on_reorder = on_reorder
         self._press_pos: QPoint | None = None
         self.setCursor(Qt.PointingHandCursor)
+        self.setAcceptDrops(True)
         chip_bg = str(bg_color or "").strip()
         actual_entry_fg = entry_fg
         actual_time_fg = time_fg
         if chip_bg:
-            self.setStyleSheet(f"background: {chip_bg}; border: none; border-radius: 4px;")
+            self._base_style = f"background: {chip_bg}; border: none; border-radius: 4px;"
             try:
                 c = chip_bg.lstrip("#")
                 if len(c) == 6:
@@ -523,7 +563,8 @@ class DraggableCalendarEntryChip(QFrame):
             except Exception:
                 pass
         else:
-            self.setStyleSheet("background: transparent; border: none;")
+            self._base_style = "background: transparent; border: none; border-radius: 4px;"
+        self.setStyleSheet(self._base_style)
 
         chip_layout = QHBoxLayout(self)
         chip_layout.setContentsMargins(3, 0, 3, 0)
@@ -551,14 +592,14 @@ class DraggableCalendarEntryChip(QFrame):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
-            self._press_pos = event.position().toPoint()
+            self._press_pos = event.globalPosition().toPoint()
             event.accept()
             return
         event.ignore()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         if self._press_pos is not None and (event.buttons() & Qt.LeftButton):
-            distance = (event.position().toPoint() - self._press_pos).manhattanLength()
+            distance = (event.globalPosition().toPoint() - self._press_pos).manhattanLength()
             if distance >= QApplication.startDragDistance():
                 if self._start_drag():
                     self._press_pos = None
@@ -567,13 +608,60 @@ class DraggableCalendarEntryChip(QFrame):
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        was_click = self._press_pos is not None
         self._press_pos = None
         event.accept()
+        if was_click and event.button() == Qt.LeftButton:
+            cell = self.parentWidget()
+            if cell is not None and hasattr(cell, "callback_select") and callable(cell.callback_select) and self.source_day:
+                cell.callback_select(self.source_day)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         if callable(self._on_edit):
             self._on_edit()
         event.accept()
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        payload = DayCell._parse_drag_payload(event.mimeData())
+        if payload is not None and self.entry.entry_id is not None:
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        payload = DayCell._parse_drag_payload(event.mimeData())
+        if payload is not None and self.entry.entry_id is not None:
+            event.acceptProposedAction()
+            before = event.position().y() < (self.height() / 2.0)
+            indicator = "border-top: 2px solid #10b981;" if before else "border-bottom: 2px solid #10b981;"
+            self.setStyleSheet(f"{self._base_style} {indicator}")
+            return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        self.setStyleSheet(self._base_style)
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        self.setStyleSheet(self._base_style)
+        payload = DayCell._parse_drag_payload(event.mimeData())
+        if payload is None or self.entry.entry_id is None:
+            event.ignore()
+            return
+        entry_id = int(payload.get("entry_id", 0))
+        source_day_text = str(payload.get("source_day", "")).strip()
+        try:
+            source_day = date.fromisoformat(source_day_text)
+        except ValueError:
+            event.ignore()
+            return
+        before = event.position().y() < (self.height() / 2.0)
+        if callable(self._on_reorder):
+            handled = self._on_reorder(entry_id, source_day, self.source_day, int(self.entry.entry_id), before)
+            if handled is not False:
+                event.acceptProposedAction()
+                return
+        event.ignore()
 
     def _start_drag(self) -> bool:
         if self.entry.entry_id is None:
@@ -586,7 +674,11 @@ class DraggableCalendarEntryChip(QFrame):
         mime = QMimeData()
         mime.setData(CALENDAR_ENTRY_DRAG_MIME, json.dumps(payload).encode("utf-8"))
         drag.setMimeData(mime)
-        drag.exec(Qt.DropAction.MoveAction)
+        pix = self.grab()
+        if not pix.isNull():
+            drag.setPixmap(pix)
+            drag.setHotSpot(QPoint(pix.width() // 2, pix.height() // 2))
+        drag.exec(Qt.DropAction.MoveAction | Qt.DropAction.CopyAction)
         return True
 
 
@@ -704,11 +796,21 @@ class MemoDragCard(QFrame):
     clicked = Signal(int)
     _MIME_TYPE = "application/x-taskcalendar-memo-id"
 
-    def __init__(self, parent, memo_id: int, drag_enabled: bool) -> None:
+    def __init__(
+        self,
+        parent,
+        memo_id: int,
+        drag_enabled: bool,
+        mime_type: str | None = None,
+        source_day: date | None = None,
+    ) -> None:
         super().__init__(parent)
         self.memo_id = int(memo_id)
         self.drag_enabled = bool(drag_enabled)
+        self._mime_type = mime_type or self._MIME_TYPE
+        self.source_day = source_day
         self._press_pos: QPoint | None = None
+        self._base_style = ""
         self.setAcceptDrops(self.drag_enabled)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
@@ -772,18 +874,18 @@ class MemoDragCard(QFrame):
         if self._is_valid_drag(event):
             event.acceptProposedAction()
             if event.position().y() < (self.height() / 2.0):
-                self.setStyleSheet("border-top: 2px solid #2a9d8f; border-radius: 6px;")
+                self.setStyleSheet(f"{self._base_style} border-top: 2px solid #2a9d8f;")
             else:
-                self.setStyleSheet("border-bottom: 2px solid #2a9d8f; border-radius: 6px;")
+                self.setStyleSheet(f"{self._base_style} border-bottom: 2px solid #2a9d8f;")
             return
         event.ignore()
 
     def dragLeaveEvent(self, event) -> None:  # noqa: N802
-        self.setStyleSheet("")
+        self.setStyleSheet(self._base_style)
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:  # noqa: N802
-        self.setStyleSheet("")
+        self.setStyleSheet(self._base_style)
         source_id = self._drag_source_id(event)
         if source_id is None or source_id == self.memo_id:
             event.ignore()
@@ -795,10 +897,19 @@ class MemoDragCard(QFrame):
     def _start_drag(self) -> None:
         drag = QDrag(self)
         mime = QMimeData()
-        mime.setData(self._MIME_TYPE, str(self.memo_id).encode("utf-8"))
+        if self._mime_type == CALENDAR_ENTRY_DRAG_MIME:
+            payload = {
+                "entry_id": int(self.memo_id),
+                "source_day": self.source_day.isoformat() if self.source_day else "",
+            }
+            mime.setData(CALENDAR_ENTRY_DRAG_MIME, json.dumps(payload).encode("utf-8"))
+        else:
+            mime.setData(self._mime_type, str(self.memo_id).encode("utf-8"))
         drag.setMimeData(mime)
-        drag.setPixmap(self.grab())
-        drag.exec(Qt.MoveAction)
+        pix = self.grab()
+        if not pix.isNull():
+            drag.setPixmap(pix)
+        drag.exec(Qt.DropAction.MoveAction)
 
     def _is_valid_drag(self, event) -> bool:
         if not self.drag_enabled:
@@ -807,7 +918,15 @@ class MemoDragCard(QFrame):
         return source_id is not None and source_id != self.memo_id
 
     def _drag_source_id(self, event) -> int | None:
-        data = event.mimeData().data(self._MIME_TYPE)
+        if self._mime_type == CALENDAR_ENTRY_DRAG_MIME:
+            payload = DayCell._parse_drag_payload(event.mimeData())
+            if payload and "entry_id" in payload:
+                try:
+                    return int(payload["entry_id"])
+                except (ValueError, TypeError):
+                    return None
+            return None
+        data = event.mimeData().data(self._mime_type)
         if not data:
             return None
         try:
@@ -1520,6 +1639,9 @@ class MainWindow(QMainWindow):
 
         self._apply_sidebar_visibility(self._sidebar_visible, save=False)
         self._apply_topbar_visibility(self._topbar_visible, save=False)
+
+        # Background silent auto-vacuum if fragmentation threshold is met
+        QTimer.singleShot(3000, lambda: threading.Thread(target=self.repository.maybe_auto_vacuum, daemon=True).start())
 
     def _apply_clickable_cursor(self, root: QWidget | None = None) -> None:
         target = root or self
@@ -3180,16 +3302,20 @@ class MainWindow(QMainWindow):
 
     def _load_action_icons(self) -> dict[str, QIcon]:
         mapping = {
-            "complete": asset_path("action_complete.png"),
-            "cancel": asset_path("action_cancel.png"),
-            "edit": asset_path("action_edit.png"),
-            "save": asset_path("action_save.png"),
-            "delete": asset_path("action_delete.png"),
+            "complete": asset_path("action_complete.svg"),
+            "cancel": asset_path("action_cancel.svg"),
+            "edit": asset_path("action_edit.svg"),
+            "save": asset_path("action_save.svg"),
+            "delete": asset_path("action_delete.svg"),
         }
         icons: dict[str, QIcon] = {}
         for key, path in mapping.items():
             if not path.exists():
-                continue
+                png_path = path.with_suffix(".png")
+                if png_path.exists():
+                    path = png_path
+                else:
+                    continue
             icon = QIcon(str(path))
             if not icon.isNull():
                 icons[key] = icon
@@ -3919,6 +4045,7 @@ class MainWindow(QMainWindow):
             # Prefer showing one more real item instead of a lone "+1건" marker.
             if len(day_entries) == slots_for_entries + 1:
                 slots_for_entries += 1
+            on_reorder = lambda s_id, s_day, t_day, t_id, b: self._move_calendar_entry(s_id, s_day, t_day, t_id, b)
             for entry in day_entries[:slots_for_entries]:
                 edit_entry = lambda e=entry: self._edit_entry(e.entry_type, e)
                 completed_on_day = self._is_entry_completed_on_day(entry, current_day)
@@ -3933,6 +4060,7 @@ class MainWindow(QMainWindow):
                     edit_entry,
                     completed_on_day,
                     entry.bg_color,
+                    on_reorder,
                 )
                 cell.items_layout.addWidget(chip, 0, Qt.AlignLeft)
             if len(day_entries) > slots_for_entries:
@@ -4061,17 +4189,29 @@ class MainWindow(QMainWindow):
         is_completed = self._is_entry_completed_on_day(entry, self.selected_day)
         hide_memo_body = (entry.entry_type == EntryType.MEMO and getattr(self, "memo_title_only", True))
         card: QFrame
-        drag_enabled = (
-            self.sidebar_mode == "memo"
-            and entry.entry_type == EntryType.MEMO
-            and entry.entry_id is not None
-        )
+        is_memo = (self.sidebar_mode == "memo" and entry.entry_type == EntryType.MEMO)
+        is_day_entry = (self.sidebar_mode == "day" and entry.entry_type != EntryType.MEMO)
+        drag_enabled = (is_memo or is_day_entry) and entry.entry_id is not None
         if drag_enabled and entry.entry_id is not None:
-            card = MemoDragCard(self.sidebar_content, int(entry.entry_id), True)
-            card._on_double_click = lambda e=entry: self._open_entry_view(e)
-            card._on_context_menu = lambda pos, e=entry: self._show_memo_card_context_menu(e, pos)
-            card.clicked.connect(lambda _id, e=entry: self._open_entry_view(e))
-            card.reordered.connect(self._on_memo_card_reordered)
+            card = MemoDragCard(
+                self.sidebar_content,
+                int(entry.entry_id),
+                True,
+                mime_type=MemoDragCard._MIME_TYPE if is_memo else CALENDAR_ENTRY_DRAG_MIME,
+                source_day=self.selected_day if is_day_entry else None,
+            )
+            if is_memo:
+                card._on_double_click = lambda e=entry: self._open_entry_view(e)
+                card._on_context_menu = lambda pos, e=entry: self._show_memo_card_context_menu(e, pos)
+                card.clicked.connect(lambda _id, e=entry: self._open_entry_view(e))
+                card.reordered.connect(self._on_memo_card_reordered)
+            else:
+                card._on_double_click = lambda e=entry: self._edit_entry(e.entry_type, e)
+                card.reordered.connect(
+                    lambda s_id, t_id, before: self._move_calendar_entry(
+                        s_id, self.selected_day, self.selected_day, t_id, before
+                    )
+                )
         else:
             card = QFrame()
         card.setObjectName("donePanel" if is_completed else "panel")
@@ -4080,6 +4220,8 @@ class MainWindow(QMainWindow):
             card.setStyleSheet(
                 f"background: {self.palette.get('done_panel_qt', '#d7dce2')}; border: 1px solid {self.palette['line_soft']}; border-radius: 10px;"
             )
+        if isinstance(card, MemoDragCard):
+            card._base_style = card.styleSheet()
         layout = QVBoxLayout(card)
         layout.setContentsMargins(10, 9, 10, 9)
         layout.setSpacing(6)
@@ -4146,33 +4288,41 @@ class MainWindow(QMainWindow):
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(4)
         actions.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        action_btn_style = (
+            "QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; border-radius: 10px; }"
+            "QToolButton:hover { background: rgba(0, 0, 0, 0.06); }"
+            "QToolButton:pressed { margin-top: 1px; }"
+        )
         if entry.entry_type != EntryType.MEMO:
             complete = QToolButton()
             complete.setAutoRaise(False)
+            complete.setCursor(Qt.CursorShape.PointingHandCursor)
             complete.setToolTip("완료 취소" if is_completed else "완료")
             complete.setText("")
             icon_key = "cancel" if is_completed else "complete"
             if icon_key in self._action_icons:
                 complete.setIcon(self._action_icons[icon_key])
-                complete.setIconSize(QSize(46, 20))
-            complete.setFixedSize(46, 20)
-            complete.setStyleSheet("QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; }")
+                complete.setIconSize(QSize(48, 20))
+            complete.setFixedSize(48, 20)
+            complete.setStyleSheet(action_btn_style)
             complete.clicked.connect(lambda _checked=False, e=entry: self._toggle_complete(e))
             actions.addWidget(complete)
         if entry.entry_type != EntryType.MEMO:
             edit = QToolButton()
             edit.setAutoRaise(False)
+            edit.setCursor(Qt.CursorShape.PointingHandCursor)
             edit.setToolTip("수정")
             edit.setText("")
             if "edit" in self._action_icons:
                 edit.setIcon(self._action_icons["edit"])
-                edit.setIconSize(QSize(46, 20))
-            edit.setFixedSize(46, 20)
-            edit.setStyleSheet("QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; }")
+                edit.setIconSize(QSize(48, 20))
+            edit.setFixedSize(48, 20)
+            edit.setStyleSheet(action_btn_style)
             edit.clicked.connect(lambda _checked=False, e=entry: self._edit_entry(e.entry_type, e))
             actions.addWidget(edit)
         delete = QToolButton()
         delete.setAutoRaise(False)
+        delete.setCursor(Qt.CursorShape.PointingHandCursor)
         delete.setToolTip("메모 삭제" if entry.entry_type == EntryType.MEMO else "삭제")
         delete.setText("")
         if entry.entry_type == EntryType.MEMO:
@@ -4182,13 +4332,14 @@ class MainWindow(QMainWindow):
             delete.setStyleSheet(
                 "QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; border-radius: 4px; }"
                 "QToolButton:hover { background: rgba(0, 0, 0, 0.08); }"
+                "QToolButton:pressed { margin-top: 1px; }"
             )
         else:
             if "delete" in self._action_icons:
                 delete.setIcon(self._action_icons["delete"])
-                delete.setIconSize(QSize(46, 20))
-            delete.setFixedSize(46, 20)
-            delete.setStyleSheet("QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; }")
+                delete.setIconSize(QSize(48, 20))
+            delete.setFixedSize(48, 20)
+            delete.setStyleSheet(action_btn_style)
         delete.clicked.connect(lambda _checked=False, e=entry: self._delete_entry(e))
         actions.addWidget(delete)
         meta_layout.addWidget(actions_wrap, 0, Qt.AlignVCenter | Qt.AlignRight)
@@ -4245,23 +4396,25 @@ class MainWindow(QMainWindow):
                 name_label.setMinimumWidth(0)
                 row_layout.addWidget(name_label, 1)
                 down = QToolButton()
-                down.setToolTip("save")
+                down.setCursor(Qt.CursorShape.PointingHandCursor)
+                down.setToolTip("저장")
                 down.setText("")
                 if "save" in self._action_icons:
                     down.setIcon(self._action_icons["save"])
-                    down.setIconSize(QSize(46, 20))
-                down.setFixedSize(46, 20)
-                down.setStyleSheet("QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; }")
+                    down.setIconSize(QSize(48, 20))
+                down.setFixedSize(48, 20)
+                down.setStyleSheet(action_btn_style)
                 down.clicked.connect(lambda _checked=False, a=attachment: self._download_attachment(a))
                 row_layout.addWidget(down)
                 remove = QToolButton()
-                remove.setToolTip("del")
+                remove.setCursor(Qt.CursorShape.PointingHandCursor)
+                remove.setToolTip("삭제")
                 remove.setText("")
                 if "delete" in self._action_icons:
                     remove.setIcon(self._action_icons["delete"])
-                    remove.setIconSize(QSize(46, 20))
-                remove.setFixedSize(46, 20)
-                remove.setStyleSheet("QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; }")
+                    remove.setIconSize(QSize(48, 20))
+                remove.setFixedSize(48, 20)
+                remove.setStyleSheet(action_btn_style)
                 remove.clicked.connect(lambda _checked=False, e=entry, a=attachment: self._remove_attachment(e, a))
                 row_layout.addWidget(remove)
                 attach_block_layout.addWidget(row_widget)
@@ -5188,30 +5341,70 @@ class MainWindow(QMainWindow):
         self.refresh()
         self._edit_entry(EntryType.SCHEDULE, None)
 
-    def _move_calendar_entry(self, entry_id: int, source_day: date, target_day: date) -> bool:
-        if target_day == source_day:
-            return False
+    def _move_calendar_entry(
+        self,
+        entry_id: int,
+        source_day: date,
+        target_day: date,
+        target_entry_id: int | None = None,
+        before: bool = True,
+    ) -> bool:
         entry = self.repository.get_entry(int(entry_id))
         if entry is None:
             return False
         if entry.entry_type == EntryType.MEMO:
             return False
-        if entry.recurrence_enabled or (entry.source_entry_id is not None and entry.source_entry_id != entry.entry_id):
-            QMessageBox.information(self, "안내", "반복 일정은 아직 드래그 이동을 지원하지 않습니다.")
-            return False
 
-        delta_days = (target_day - source_day).days
-        if delta_days == 0:
-            return False
+        if source_day == target_day and target_entry_id == entry_id:
+            return True
 
-        if entry.day is not None:
-            entry.day = entry.day + timedelta(days=delta_days)
-        if entry.start_date is not None:
-            entry.start_date = entry.start_date + timedelta(days=delta_days)
-        if entry.end_date is not None:
-            entry.end_date = entry.end_date + timedelta(days=delta_days)
+        if source_day != target_day:
+            if entry.recurrence_enabled or (entry.source_entry_id is not None and entry.source_entry_id != entry.entry_id):
+                QMessageBox.information(self, "안내", "반복 일정은 아직 드래그 이동을 지원하지 않습니다.")
+                return False
 
-        self.repository.upsert_entry(entry)
+            delta_days = (target_day - source_day).days
+            if entry.day is not None:
+                entry.day = entry.day + timedelta(days=delta_days)
+            if entry.start_date is not None:
+                entry.start_date = entry.start_date + timedelta(days=delta_days)
+            if entry.end_date is not None:
+                entry.end_date = entry.end_date + timedelta(days=delta_days)
+
+            self.repository.upsert_entry(entry)
+
+            # Remove from source_day order
+            src_order = self.repository.get_day_order(source_day)
+            if entry_id in src_order:
+                src_order.remove(entry_id)
+                self.repository.set_day_order(source_day, src_order)
+
+        # Update order on target_day
+        entries_on_target = self.repository.list_entries_for_day(target_day)
+        target_ids = [int(e.entry_id) for e in entries_on_target if e.entry_id is not None]
+        if entry_id not in target_ids:
+            target_ids.append(entry_id)
+
+        existing_order = self.repository.get_day_order(target_day)
+        ordered_ids = [eid for eid in existing_order if eid in target_ids]
+        for eid in target_ids:
+            if eid not in ordered_ids:
+                ordered_ids.append(eid)
+
+        if entry_id in ordered_ids:
+            ordered_ids.remove(entry_id)
+
+        if target_entry_id is not None and target_entry_id in ordered_ids:
+            idx = ordered_ids.index(target_entry_id)
+            insert_pos = idx if before else idx + 1
+            ordered_ids.insert(insert_pos, entry_id)
+        else:
+            if before:
+                ordered_ids.insert(0, entry_id)
+            else:
+                ordered_ids.append(entry_id)
+
+        self.repository.set_day_order(target_day, ordered_ids)
         self.repository.save()
         self.selected_day = target_day
         self.sidebar_mode = "day"

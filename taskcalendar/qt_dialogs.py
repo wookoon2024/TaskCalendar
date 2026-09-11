@@ -5977,15 +5977,6 @@ class SettingsDialog(QDialog):
         data_buttons.addWidget(reload_holiday_button, 1, 1)
         data_layout.addLayout(data_buttons)
 
-        optimize_box = QHBoxLayout()
-        optimize_box.setContentsMargins(0, 4, 0, 0)
-        optimize_button = QPushButton("⚡ 데이터베이스 압축 및 저장공간 정리 (VACUUM)")
-        optimize_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        optimize_button.setToolTip("데이터베이스 빈 공간을 회수(VACUUM)하고 참조가 끊긴 고아 첨부파일을 정리하여 디스크 용량을 확보합니다.")
-        optimize_button.clicked.connect(self._request_optimize_db)
-        optimize_box.addWidget(optimize_button)
-        data_layout.addLayout(optimize_box)
-
         pg_dt_layout.addWidget(data_card)
         pg_dt_layout.addStretch(1)
 
@@ -6208,9 +6199,6 @@ class SettingsDialog(QDialog):
         self.result = {"action": "restore_auto_backup"}
         self.accept()
 
-    def _request_optimize_db(self) -> None:
-        self.result = {"action": "optimize_database"}
-        self.accept()
 
     def _open_backup_folder(self) -> None:
         import os
