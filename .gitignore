@@ -54,3 +54,6 @@ browser_extension/
 # Scratch & temp
 scratch/
 .commandcode/
+generated/
+build.txt
+run.bat

@@ -5264,7 +5264,15 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("memo_default_font_size", str(dialog.result.get("memo_default_font_size", 11)))
             new_title_only = bool(dialog.result.get("memo_title_only", True))
             self.repository.set_setting("memo_title_only", "1" if new_title_only else "0")
-            self.repository.set_setting("memo_expand_anchor", str(dialog.result.get("memo_expand_anchor", "left")))
+            new_anchor = str(dialog.result.get("memo_expand_anchor", "left"))
+            self.repository.set_setting("memo_expand_anchor", new_anchor)
+            is_right_anchor = (new_anchor == "right")
+            for dlg in list(getattr(self, "_active_memo_dialogs", {}).values()):
+                if dlg is not None:
+                    dlg._expand_anchor_right = is_right_anchor
+            for gdlg in list(getattr(self, "_active_group_dialogs", {}).values()):
+                if gdlg is not None:
+                    gdlg._expand_anchor_right = is_right_anchor
             self._apply_window_controls_visibility(bool(dialog.result.get("show_window_controls", True)), save=True)
             if getattr(self, "memo_title_only", True) != new_title_only:
                 self.memo_title_only = new_title_only

@@ -1006,6 +1006,7 @@ class EntryDialog(QDialog):
             self._expanded_height = 360
             self._collapsed_width = None
             self._expand_anchor_right = bool(repo) and repo.get_setting("memo_expand_anchor", "left") == "right"
+            self._anchored_to_right = False
             
             # Load remembered geometry, collapse state, and opacity
             has_saved_geo = False
@@ -1074,11 +1075,6 @@ class EntryDialog(QDialog):
                     ny = max(avail.top(), min(geo.y(), avail.bottom() - 36))
                     self.move(nx, ny)
 
-            if getattr(self, "_is_collapsed", False):
-                target_w = self._collapsed_width if self._collapsed_width is not None else self._expanded_width
-                self._resize_with_anchor(target_w, 36)
-                self.setFixedHeight(36)
-                
             self.setMouseTracking(True)
             root.setContentsMargins(0, 0, 0, 0)
             root.setSpacing(0)
@@ -2304,9 +2300,25 @@ class EntryDialog(QDialog):
             self._prev_compact_width = curr_w
             new_w = target_w
 
-        if r_dir == "l":
+        screen = self.screen() or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        screen_right = avail.x() + avail.width()
+        old_right = self.x() + self.width()
+
+        should_shift_left = (r_dir == "l")
+        if not should_shift_left and getattr(self, "_expand_anchor_right", False):
+            if (self.x() + new_w > screen_right) or getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16):
+                should_shift_left = True
+                self._anchored_to_right = True
+
+        if should_shift_left:
             delta_w = new_w - curr_w
-            self.move(self.x() - delta_w, self.y())
+            new_x = self.x() - delta_w
+            if new_x + new_w > screen_right:
+                new_x = screen_right - new_w
+            if new_x < avail.left():
+                new_x = avail.left()
+            self.move(new_x, self.y())
         self._collapsed_width = new_w
         self.resize(new_w, self.height())
         self._save_memo_geometry()
@@ -2933,12 +2945,37 @@ class EntryDialog(QDialog):
             self._auto_save_to_db()
 
     def _resize_with_anchor(self, width: int, height: int) -> None:
+        screen = self.screen() or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        screen_right = avail.x() + avail.width()
+
+        old_right = self.x() + self.width()
+        target_x = self.x()
+
         if getattr(self, "_expand_anchor_right", False):
-            old_right = self.x() + self.width()
-            self.resize(width, height)
-            self.move(old_right - self.width(), self.y())
-        else:
-            self.resize(width, height)
+            is_expanding = width > self.width()
+            is_collapsing = width < self.width()
+
+            if is_expanding:
+                if (target_x + width > screen_right) or getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16):
+                    target_x = old_right - width
+                    self._anchored_to_right = True
+                else:
+                    self._anchored_to_right = False
+            elif is_collapsing:
+                if getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16):
+                    target_x = old_right - width
+                    self._anchored_to_right = True
+                else:
+                    self._anchored_to_right = False
+
+            if getattr(self, "_anchored_to_right", False):
+                if target_x + width > screen_right:
+                    target_x = screen_right - width
+                if target_x < avail.left():
+                    target_x = avail.left()
+
+        self.setGeometry(target_x, self.y(), width, height)
 
     def _toggle_collapse(self) -> None:
         self._is_collapsed = not getattr(self, "_is_collapsed", False)
@@ -2983,8 +3020,12 @@ class EntryDialog(QDialog):
             w_val = getattr(self, "_expanded_width", curr_geo.width())
             h_val = getattr(self, "_expanded_height", curr_geo.height())
             save_x = curr_geo.x()
-            if getattr(self, "_expand_anchor_right", False):
-                save_x = curr_geo.x() + curr_geo.width() - w_val
+            if is_col and getattr(self, "_expand_anchor_right", False):
+                screen = self.screen() or QApplication.primaryScreen()
+                avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+                screen_right = avail.x() + avail.width()
+                if getattr(self, "_anchored_to_right", False) or (curr_geo.x() + w_val > screen_right) or (curr_geo.x() + curr_geo.width() >= screen_right - 16):
+                    save_x = curr_geo.x() + curr_geo.width() - w_val
             parent.repository.set_setting(f"memo_geo_{self.entry.entry_id}", f"{save_x},{curr_geo.y()},{w_val},{h_val}")
             parent.repository.set_setting(f"memo_collapsed_{self.entry.entry_id}", "1" if is_col else "0")
             if getattr(self, "_collapsed_width", None) is not None:
@@ -2994,6 +3035,12 @@ class EntryDialog(QDialog):
     def _end_window_drag(self) -> None:
         if hasattr(self, "_drag_position"):
             delattr(self, "_drag_position")
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            screen_right = avail.x() + avail.width()
+            exp_w = getattr(self, "_expanded_width", 380)
+            self._anchored_to_right = (self.x() + exp_w > screen_right) or (self.x() + self.width() >= screen_right - 16)
         self._save_memo_geometry()
 
     def _start_window_drag(self, global_pos: QPoint) -> None:
@@ -3687,6 +3734,7 @@ class FloatingGroupDialog(QDialog):
         self._collapsed_width = self.group_dict.get("collapsed_width", None)
         _owner_repo = getattr(parent, "repository", None)
         self._expand_anchor_right = bool(_owner_repo) and _owner_repo.get_setting("memo_expand_anchor", "left") == "right"
+        self._anchored_to_right = False
         self._drag_pos: QPoint | None = None
         self._cards: list[MiniMemoCardWidget] = []
         self._current_cols: int = 0
@@ -4314,10 +4362,10 @@ class FloatingGroupDialog(QDialog):
                 self._expanded_width = curr_w
             self._expanded_height = max(180, getattr(self, "_expanded_height", self.height()))
             self.content_wrap.hide()
-            self.setFixedHeight(36)
-            target_w = getattr(self, "_collapsed_width", None)
-            if target_w:
-                self._resize_with_anchor(target_w, 36)
+            self.setMinimumHeight(36)
+            self.setMaximumHeight(36)
+            target_w = getattr(self, "_collapsed_width", None) or self._expanded_width
+            self._resize_with_anchor(target_w, 36)
         else:
             curr_w = self.width()
             exp_w = getattr(self, "_expanded_width", None)
@@ -4334,12 +4382,37 @@ class FloatingGroupDialog(QDialog):
         self._save_group_state()
 
     def _resize_with_anchor(self, width: int, height: int) -> None:
+        screen = self.screen() or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        screen_right = avail.x() + avail.width()
+
+        old_right = self.x() + self.width()
+        target_x = self.x()
+
         if getattr(self, "_expand_anchor_right", False):
-            old_right = self.x() + self.width()
-            self.resize(width, height)
-            self.move(old_right - self.width(), self.y())
-        else:
-            self.resize(width, height)
+            is_expanding = width > self.width()
+            is_collapsing = width < self.width()
+
+            if is_expanding:
+                if (target_x + width > screen_right) or getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16):
+                    target_x = old_right - width
+                    self._anchored_to_right = True
+                else:
+                    self._anchored_to_right = False
+            elif is_collapsing:
+                if getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16):
+                    target_x = old_right - width
+                    self._anchored_to_right = True
+                else:
+                    self._anchored_to_right = False
+
+            if getattr(self, "_anchored_to_right", False):
+                if target_x + width > screen_right:
+                    target_x = screen_right - width
+                if target_x < avail.left():
+                    target_x = avail.left()
+
+        self.setGeometry(target_x, self.y(), width, height)
 
     def paintEvent(self, event) -> None:
         opt = QStyleOption()
@@ -4381,8 +4454,12 @@ class FloatingGroupDialog(QDialog):
             w_val = getattr(self, "_expanded_width", curr_geo.width())
             h_val = getattr(self, "_expanded_height", curr_geo.height())
             save_x = curr_geo.x()
-            if getattr(self, "_expand_anchor_right", False):
-                save_x = curr_geo.x() + curr_geo.width() - w_val
+            if is_col and getattr(self, "_expand_anchor_right", False):
+                screen = self.screen() or QApplication.primaryScreen()
+                avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+                screen_right = avail.x() + avail.width()
+                if getattr(self, "_anchored_to_right", False) or (curr_geo.x() + w_val > screen_right) or (curr_geo.x() + curr_geo.width() >= screen_right - 16):
+                    save_x = curr_geo.x() + curr_geo.width() - w_val
             self.group_dict["geo"] = f"{save_x},{curr_geo.y()},{w_val},{h_val}"
             self.group_dict["color"] = self.group_color
             self.group_dict["is_floating"] = self._is_floating
@@ -4456,7 +4533,13 @@ class FloatingGroupDialog(QDialog):
     def _end_window_drag(self) -> None:
         if hasattr(self, "_drag_pos") and self._drag_pos is not None:
             self._drag_pos = None
-            self._save_group_state()
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            screen_right = avail.x() + avail.width()
+            exp_w = getattr(self, "_expanded_width", 360)
+            self._anchored_to_right = (self.x() + exp_w > screen_right) or (self.x() + self.width() >= screen_right - 16)
+        self._save_group_state()
 
     def _get_resize_direction(self, global_pos: QPoint) -> str | None:
         local_pos = self.mapFromGlobal(global_pos)
@@ -4700,9 +4783,25 @@ class FloatingGroupDialog(QDialog):
             self._prev_compact_width = curr_w
             new_w = target_w
 
-        if r_dir == "l":
+        screen = self.screen() or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        screen_right = avail.x() + avail.width()
+        old_right = self.x() + self.width()
+
+        should_shift_left = (r_dir == "l")
+        if not should_shift_left and getattr(self, "_expand_anchor_right", False):
+            if (self.x() + new_w > screen_right) or getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16):
+                should_shift_left = True
+                self._anchored_to_right = True
+
+        if should_shift_left:
             delta_w = new_w - curr_w
-            self.move(self.x() - delta_w, self.y())
+            new_x = self.x() - delta_w
+            if new_x + new_w > screen_right:
+                new_x = screen_right - new_w
+            if new_x < avail.left():
+                new_x = avail.left()
+            self.move(new_x, self.y())
         self._collapsed_width = new_w
         self.resize(new_w, self.height())
         self._save_group_state()
