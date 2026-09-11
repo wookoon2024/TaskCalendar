@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMenu,
@@ -5529,30 +5530,42 @@ class MainWindow(QMainWindow):
         return dlg
 
     def _create_new_memo_group(self, title: str = "", assign_memo_id: int | None = None) -> QDialog | None:
-        if not title:
-            title, ok = QInputDialog.getText(self, "새 메모 그룹", "새 그룹 이름을 입력하세요:", text="새 그룹")
-            if not ok or not title.strip():
-                return None
-            title = title.strip()
+        try:
+            if not title:
+                input_dlg = QInputDialog(self)
+                input_dlg.setWindowTitle("새 메모 그룹")
+                input_dlg.setLabelText("새 그룹 이름을 입력하세요:")
+                input_dlg.setTextValue("새 그룹")
+                input_dlg.setOkButtonText("확인")
+                input_dlg.setCancelButtonText("취소")
+                input_dlg.setStyleSheet(dialog_stylesheet(self.palette))
+                if not input_dlg.exec():
+                    return None
+                title = input_dlg.textValue().strip()
+                if not title:
+                    return None
 
-        grp = {"title": title, "color": "yellow", "view_mode": "list"}
-        saved_grp = self.repository.upsert_memo_group(grp)
-        gid = saved_grp.get("id", "")
+            grp = {"title": title, "color": "yellow", "view_mode": "list"}
+            saved_grp = self.repository.upsert_memo_group(grp)
+            gid = saved_grp.get("id", "")
 
-        if assign_memo_id is not None:
-            entry = self.repository.get_entry(assign_memo_id)
-            if entry:
-                entry.memo_group = gid
-                self.repository.upsert_entry(entry)
-                self.repository.save()
-                if assign_memo_id in self._active_memo_dialogs:
-                    memo_dlg = self._active_memo_dialogs[assign_memo_id]
-                    if hasattr(memo_dlg, "entry"):
-                        memo_dlg.entry.memo_group = gid
+            if assign_memo_id is not None:
+                entry = self.repository.get_entry(assign_memo_id)
+                if entry:
+                    entry.memo_group = gid
+                    self.repository.upsert_entry(entry)
+                    self.repository.save()
+                    if assign_memo_id in self._active_memo_dialogs:
+                        memo_dlg = self._active_memo_dialogs[assign_memo_id]
+                        if hasattr(memo_dlg, "entry"):
+                            memo_dlg.entry.memo_group = gid
 
-        dlg = self._open_memo_group(gid)
-        self._refresh_all_group_dialogs()
-        return dlg
+            dlg = self._open_memo_group(gid)
+            self._refresh_all_group_dialogs()
+            return dlg
+        except Exception:
+            logger.exception("failed to create new memo group")
+            return None
 
     def _refresh_all_group_dialogs(self, status_only: bool = False) -> None:
         if getattr(self, "_batch_updating_memos", False):
