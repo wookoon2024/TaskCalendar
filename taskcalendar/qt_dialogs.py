@@ -1005,6 +1005,7 @@ class EntryDialog(QDialog):
             self._expanded_width = 380
             self._expanded_height = 360
             self._collapsed_width = None
+            self._expand_anchor_right = bool(repo) and repo.get_setting("memo_expand_anchor", "left") == "right"
             
             # Load remembered geometry, collapse state, and opacity
             has_saved_geo = False
@@ -1075,7 +1076,7 @@ class EntryDialog(QDialog):
 
             if getattr(self, "_is_collapsed", False):
                 target_w = self._collapsed_width if self._collapsed_width is not None else self._expanded_width
-                self.resize(target_w, 36)
+                self._resize_with_anchor(target_w, 36)
                 self.setFixedHeight(36)
                 
             self.setMouseTracking(True)
@@ -1238,7 +1239,7 @@ class EntryDialog(QDialog):
             if getattr(self, "_is_collapsed", False):
                 self.content_wrap.hide()
                 target_w = self._collapsed_width if self._collapsed_width is not None else self._expanded_width
-                self.resize(target_w, 36)
+                self._resize_with_anchor(target_w, 36)
                 self.setFixedHeight(36)
                 if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
                     self._collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg"))))
@@ -2931,6 +2932,14 @@ class EntryDialog(QDialog):
                 self.attachment_bar.hide()
             self._auto_save_to_db()
 
+    def _resize_with_anchor(self, width: int, height: int) -> None:
+        if getattr(self, "_expand_anchor_right", False):
+            old_right = self.x() + self.width()
+            self.resize(width, height)
+            self.move(old_right - self.width(), self.y())
+        else:
+            self.resize(width, height)
+
     def _toggle_collapse(self) -> None:
         self._is_collapsed = not getattr(self, "_is_collapsed", False)
         if self._is_collapsed:
@@ -2944,7 +2953,7 @@ class EntryDialog(QDialog):
             self.setMinimumHeight(36)
             self.setMaximumHeight(36)
             target_w = getattr(self, "_collapsed_width", None) or self._expanded_width
-            self.resize(target_w, 36)
+            self._resize_with_anchor(target_w, 36)
             if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
                 self._collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg"))))
                 self._collapse_btn.setToolTip("메모 펼치기")
@@ -2959,7 +2968,7 @@ class EntryDialog(QDialog):
             self.setMaximumHeight(16777215)
             target_w = getattr(self, "_expanded_width", 380)
             target_h = getattr(self, "_expanded_height", 360)
-            self.resize(target_w, target_h)
+            self._resize_with_anchor(target_w, target_h)
             if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
                 self._collapse_btn.setIcon(QIcon(str(asset_path("memo_minimize.svg"))))
                 self._collapse_btn.setToolTip("메모 접기")
@@ -2973,7 +2982,10 @@ class EntryDialog(QDialog):
             is_col = getattr(self, "_is_collapsed", False)
             w_val = getattr(self, "_expanded_width", curr_geo.width())
             h_val = getattr(self, "_expanded_height", curr_geo.height())
-            parent.repository.set_setting(f"memo_geo_{self.entry.entry_id}", f"{curr_geo.x()},{curr_geo.y()},{w_val},{h_val}")
+            save_x = curr_geo.x()
+            if getattr(self, "_expand_anchor_right", False):
+                save_x = curr_geo.x() + curr_geo.width() - w_val
+            parent.repository.set_setting(f"memo_geo_{self.entry.entry_id}", f"{save_x},{curr_geo.y()},{w_val},{h_val}")
             parent.repository.set_setting(f"memo_collapsed_{self.entry.entry_id}", "1" if is_col else "0")
             if getattr(self, "_collapsed_width", None) is not None:
                 parent.repository.set_setting(f"memo_collapsed_w_{self.entry.entry_id}", str(self._collapsed_width))
@@ -3673,6 +3685,8 @@ class FloatingGroupDialog(QDialog):
         self._expanded_height = 420
         self._expanded_width = 360
         self._collapsed_width = self.group_dict.get("collapsed_width", None)
+        _owner_repo = getattr(parent, "repository", None)
+        self._expand_anchor_right = bool(_owner_repo) and _owner_repo.get_setting("memo_expand_anchor", "left") == "right"
         self._drag_pos: QPoint | None = None
         self._cards: list[MiniMemoCardWidget] = []
         self._current_cols: int = 0
@@ -3721,7 +3735,7 @@ class FloatingGroupDialog(QDialog):
         if self._is_collapsed:
             self.content_wrap.hide()
             target_w = self._collapsed_width if self._collapsed_width is not None else self._expanded_width
-            self.resize(target_w, 36)
+            self._resize_with_anchor(target_w, 36)
             self.setFixedHeight(36)
             self._update_collapse_btn()
             self._apply_theme(self.group_color)
@@ -4303,7 +4317,7 @@ class FloatingGroupDialog(QDialog):
             self.setFixedHeight(36)
             target_w = getattr(self, "_collapsed_width", None)
             if target_w:
-                self.resize(target_w, 36)
+                self._resize_with_anchor(target_w, 36)
         else:
             curr_w = self.width()
             exp_w = getattr(self, "_expanded_width", None)
@@ -4314,10 +4328,18 @@ class FloatingGroupDialog(QDialog):
             self.setMaximumHeight(16777215)
             target_w = getattr(self, "_expanded_width", 360)
             target_h = getattr(self, "_expanded_height", 420)
-            self.resize(target_w, target_h)
+            self._resize_with_anchor(target_w, target_h)
         self._update_collapse_btn()
         self._apply_theme(self.group_color)
         self._save_group_state()
+
+    def _resize_with_anchor(self, width: int, height: int) -> None:
+        if getattr(self, "_expand_anchor_right", False):
+            old_right = self.x() + self.width()
+            self.resize(width, height)
+            self.move(old_right - self.width(), self.y())
+        else:
+            self.resize(width, height)
 
     def paintEvent(self, event) -> None:
         opt = QStyleOption()
@@ -4358,7 +4380,10 @@ class FloatingGroupDialog(QDialog):
             is_col = getattr(self, "_is_collapsed", False)
             w_val = getattr(self, "_expanded_width", curr_geo.width())
             h_val = getattr(self, "_expanded_height", curr_geo.height())
-            self.group_dict["geo"] = f"{curr_geo.x()},{curr_geo.y()},{w_val},{h_val}"
+            save_x = curr_geo.x()
+            if getattr(self, "_expand_anchor_right", False):
+                save_x = curr_geo.x() + curr_geo.width() - w_val
+            self.group_dict["geo"] = f"{save_x},{curr_geo.y()},{w_val},{h_val}"
             self.group_dict["color"] = self.group_color
             self.group_dict["is_floating"] = self._is_floating
             self.group_dict["view_mode"] = self.view_mode
@@ -5169,6 +5194,7 @@ class SettingsDialog(QDialog):
         memo_default_size: str = "380,360",
         memo_default_font_size: int = 11,
         memo_title_only: bool = True,
+        memo_expand_anchor: str = "left",
     ) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
@@ -5467,6 +5493,14 @@ class SettingsDialog(QDialog):
         self.memo_title_only_check.setChecked(memo_title_only)
         self.memo_title_only_check.setToolTip("우측 사이드바의 메모 카드에서 본문 내용을 숨기고 제목만 1줄로 콤팩트하게 표시합니다.\n체크 해제 시 메모 본문 내용이 함께 표시됩니다.")
         mc2_layout.addWidget(self.memo_title_only_check)
+
+        self.memo_expand_anchor_check = QCheckBox("메모/그룹 펼칠 때 우측 기준으로 확장 (화면 밖으로 안 넘침)")
+        self.memo_expand_anchor_check.setChecked(memo_expand_anchor == "right")
+        self.memo_expand_anchor_check.setToolTip(
+            "화면 오른쪽 끝에 붙여둔 메모나 그룹을 접었다 펼칠 때, 왼쪽 대신 오른쪽 끝을 기준으로\n"
+            "넓어지게 하여 창이 화면 밖으로 밀려나지 않게 합니다."
+        )
+        mc2_layout.addWidget(self.memo_expand_anchor_check)
 
         pg_memo_layout.addWidget(memo_card2)
         pg_memo_layout.addStretch(1)
@@ -5838,6 +5872,7 @@ class SettingsDialog(QDialog):
             "memo_default_size": str(self.memo_default_size_combo.currentData() or "380,360"),
             "memo_default_font_size": int(self.memo_default_font_size_combo.currentData() or 11),
             "memo_title_only": self.memo_title_only_check.isChecked(),
+            "memo_expand_anchor": "right" if self.memo_expand_anchor_check.isChecked() else "left",
         }
         self.accept()
 
