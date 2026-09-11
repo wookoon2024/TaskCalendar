@@ -257,19 +257,37 @@ class DateCalculatorDialog(QDialog):
         res_layout = QVBoxLayout(res_card)
         res_layout.setSpacing(10)
 
-        top_res = QHBoxLayout()
-        self.t1_dday_badge = QLabel("D-100")
-        accent = self.palette.get("accent", "#1f7a67")
-        self.t1_dday_badge.setStyleSheet(
-            f"background-color: {accent}; color: white; font-size: 22px; font-weight: 800; "
-            f"border-radius: 8px; padding: 6px 16px;"
-        )
-        top_res.addWidget(self.t1_dday_badge)
-
+        # Date Range label
         self.t1_range_label = QLabel("")
-        self.t1_range_label.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {self.palette.get('text', '#1f2328')};")
-        top_res.addWidget(self.t1_range_label, 1)
-        res_layout.addLayout(top_res)
+        self.t1_range_label.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {self.palette.get('muted', '#667085')};")
+        res_layout.addWidget(self.t1_range_label)
+
+        # Main Hero Value: 총 일수 (Prominent) + compact D-Day pill badge
+        main_val_row = QHBoxLayout()
+        main_val_row.setSpacing(10)
+        main_val_row.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        accent = self.palette.get("accent", "#1f7a67")
+        self.t1_hero_days_lbl = QLabel("총 0일")
+        self.t1_hero_days_lbl.setStyleSheet(
+            f"font-size: 28px; font-weight: 800; color: {accent};"
+        )
+        main_val_row.addWidget(self.t1_hero_days_lbl)
+
+        self.t1_dday_badge = QLabel("D-Day")
+        self.t1_dday_badge.setStyleSheet(
+            f"background-color: {self.palette.get('accent_soft', '#e7f4f0')}; color: {accent}; "
+            f"border: 1px solid {accent}; font-size: 12px; font-weight: 700; "
+            f"border-radius: 6px; padding: 3px 8px;"
+        )
+        main_val_row.addWidget(self.t1_dday_badge)
+
+        self.t1_inc_msg_lbl = QLabel("(시작일 포함)")
+        self.t1_inc_msg_lbl.setStyleSheet(f"font-size: 12px; color: {self.palette.get('muted', '#667085')};")
+        main_val_row.addWidget(self.t1_inc_msg_lbl)
+        main_val_row.addStretch()
+
+        res_layout.addLayout(main_val_row)
 
         # Detail rows
         detail_frame = QFrame()
@@ -278,12 +296,8 @@ class DateCalculatorDialog(QDialog):
         df_layout.setContentsMargins(10, 8, 10, 8)
         df_layout.setSpacing(6)
 
-        self.t1_total_days_lbl = QLabel("")
-        self.t1_total_days_lbl.setStyleSheet("font-size: 13px; font-weight: 700;")
-        df_layout.addWidget(self.t1_total_days_lbl)
-
         self.t1_weeks_lbl = QLabel("")
-        self.t1_weeks_lbl.setStyleSheet(f"font-size: 12px; color: {self.palette.get('muted', '#667085')};")
+        self.t1_weeks_lbl.setStyleSheet(f"font-size: 12px; color: {self.palette.get('text', '#1f2328')};")
         df_layout.addWidget(self.t1_weeks_lbl)
 
         self.t1_ymd_lbl = QLabel("")
@@ -331,7 +345,8 @@ class DateCalculatorDialog(QDialog):
         total_days = abs(diff) + (1 if inc_start else 0)
         inc_msg = "(시작일 1일째 포함)" if inc_start else "(시작일 제외)"
 
-        self.t1_total_days_lbl.setText(f"총 일수: {total_days:,}일 {inc_msg}")
+        self.t1_hero_days_lbl.setText(f"총 {total_days:,}일")
+        self.t1_inc_msg_lbl.setText(inc_msg)
 
         w = total_days // 7
         rem_d = total_days % 7
@@ -354,14 +369,14 @@ class DateCalculatorDialog(QDialog):
         base_d = date(q_b.year(), q_b.month(), q_b.day())
         target_d = date(q_t.year(), q_t.month(), q_t.day())
         badge = self.t1_dday_badge.text()
-        total_days_txt = self.t1_total_days_lbl.text()
+        total_days_txt = self.t1_hero_days_lbl.text()
+        inc_msg = self.t1_inc_msg_lbl.text()
 
-        title = f"[{badge}] 일정 ({target_d.strftime('%m/%d')})"
+        title = f"[{badge}] 일정 ({total_days_txt}, {target_d.strftime('%m/%d')})"
         desc = (
-            f"• D-Day 구분: {badge}\n"
-            f"• 대상일자: {target_d.strftime('%Y-%m-%d')}\n"
+            f"• 대상일자: {target_d.strftime('%Y-%m-%d')} ({badge})\n"
             f"• 기준일자: {base_d.strftime('%Y-%m-%d')}\n"
-            f"• {total_days_txt}\n"
+            f"• 계산일수: {total_days_txt} {inc_msg}\n"
             f"• {self.t1_weeks_lbl.text()}\n"
             f"• {self.t1_ymd_lbl.text()}"
         )
