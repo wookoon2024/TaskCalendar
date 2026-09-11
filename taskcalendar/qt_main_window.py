@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSlider,
+    QSplitter,
     QScrollArea,
     QStyle,
     QStyleOptionButton,
@@ -343,6 +344,18 @@ def app_stylesheet(p: dict[str, str]) -> str:
     }}
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
         background: transparent;
+    }}
+    QSplitter#bodySplitter::handle:horizontal {{
+        background: transparent;
+        width: 8px;
+    }}
+    QSplitter#bodySplitter::handle:horizontal:hover {{
+        background: {p.get('line_soft', 'rgba(0, 0, 0, 0.12)')};
+        border-radius: 4px;
+    }}
+    QSplitter#bodySplitter::handle:horizontal:pressed {{
+        background: {p['accent']};
+        border-radius: 4px;
     }}
     """
 
@@ -1167,6 +1180,19 @@ class MainWindow(QMainWindow):
             app_inst.aboutToQuit.connect(self._on_app_about_to_quit)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if (
+            hasattr(self, "body_splitter")
+            and watched == self.body_splitter.handle(1)
+            and event.type() == QEvent.Type.MouseButtonDblClick
+        ):
+            default_w = self._memo_button_aligned_sidebar_width()
+            total_w = sum(self.body_splitter.sizes())
+            hw = self.body_splitter.handleWidth()
+            self.body_splitter.setSizes([max(300, total_w - default_w - hw), default_w])
+            self.repository.set_setting("sidebar_width", str(default_w))
+            self._schedule_calendar_rerender()
+            self._sync_sticker_overlay()
+            return True
         if event.type() == QEvent.Type.KeyPress and self._handle_calendar_navigation_key(event):
             event.accept()
             return True
@@ -1565,11 +1591,11 @@ class MainWindow(QMainWindow):
         self.sticker_toolbar.hide()
         self.sticker_overlay.raise_()
         calendar_layout.addWidget(self.calendar_grid_widget, 1)
-        body.addWidget(calendar_panel, 1)
 
         self.sidebar_panel = QFrame()
         self.sidebar_panel.setObjectName("sidebarPanel")
-        self.sidebar_panel.setFixedWidth(290)
+        self.sidebar_panel.setMinimumWidth(220)
+        self.sidebar_panel.setMaximumWidth(700)
         sidebar_layout = QVBoxLayout(self.sidebar_panel)
         sidebar_layout.setContentsMargins(12, 12, 12, 12)
         sidebar_layout.setSpacing(10)
@@ -1627,7 +1653,23 @@ class MainWindow(QMainWindow):
         self.sidebar_expand_edge_btn = QPushButton()
         self.sidebar_expand_edge_btn.hide()
 
-        body.addWidget(self.sidebar_panel)
+        self.body_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.body_splitter.setObjectName("bodySplitter")
+        self.body_splitter.setHandleWidth(8)
+        self.body_splitter.setChildrenCollapsible(False)
+        self.body_splitter.addWidget(calendar_panel)
+        self.body_splitter.addWidget(self.sidebar_panel)
+        self.body_splitter.setStretchFactor(0, 1)
+        self.body_splitter.setStretchFactor(1, 0)
+        self.body_splitter.splitterMoved.connect(self._on_sidebar_splitter_moved)
+
+        handle = self.body_splitter.handle(1)
+        if handle:
+            handle.setCursor(Qt.CursorShape.SplitHCursor)
+            handle.setToolTip("사이드바 크기 조절 (더블클릭 시 [메모] 버튼 정렬로 초기화)")
+            handle.installEventFilter(self)
+
+        body.addWidget(self.body_splitter, 1)
         self._sync_sticker_overlay()
         self._apply_clickable_cursor()
 
@@ -2416,10 +2458,9 @@ class MainWindow(QMainWindow):
         if rect.width() <= 0 or rect.height() <= 0:
             return
         header_h = 28
-        cell_w = max(1, rect.width() // 7)
         cell_h = max(1, (rect.height() - header_h) // 6)
         for col in range(7):
-            self.calendar_grid.setColumnMinimumWidth(col, cell_w)
+            self.calendar_grid.setColumnMinimumWidth(col, 20)
         self.calendar_grid.setRowMinimumHeight(0, header_h)
         for row in range(6):
             self.calendar_grid.setRowMinimumHeight(row + 1, cell_h)
@@ -4598,6 +4639,38 @@ class MainWindow(QMainWindow):
     def _toggle_sidebar(self) -> None:
         self._apply_sidebar_visibility(not self._sidebar_visible, save=True)
 
+    def _memo_button_aligned_sidebar_width(self) -> int:
+        try:
+            if hasattr(self, "memo_button") and hasattr(self, "outer_layout"):
+                memo_x = self.memo_button.mapTo(self, QPoint(0, 0)).x()
+                right_margin = self.outer_layout.contentsMargins().right()
+                avail_right = self.width() - right_margin
+                target_w = avail_right - memo_x
+                if 220 <= target_w <= 700:
+                    return target_w
+        except Exception:
+            pass
+        return 309
+
+    def _get_saved_sidebar_width(self) -> int:
+        try:
+            val = self.repository.get_setting("sidebar_width")
+            if val:
+                w = int(val)
+                if 220 <= w <= 700:
+                    return w
+        except Exception:
+            pass
+        return self._memo_button_aligned_sidebar_width()
+
+    def _on_sidebar_splitter_moved(self, pos: int, index: int) -> None:
+        if hasattr(self, "sidebar_panel") and self.sidebar_panel.isVisible():
+            w = self.sidebar_panel.width()
+            if 220 <= w <= 700:
+                self.repository.set_setting("sidebar_width", str(w))
+        self._schedule_calendar_rerender()
+        self._sync_sticker_overlay()
+
     def _apply_sidebar_visibility(self, visible: bool, save: bool = True) -> None:
         self._sidebar_visible = visible
         if hasattr(self, "sidebar_panel"):
@@ -4612,6 +4685,12 @@ class MainWindow(QMainWindow):
 
         self._update_expand_container_visibility()
         self._apply_panel_margins()
+        if visible and hasattr(self, "body_splitter"):
+            total_w = sum(self.body_splitter.sizes())
+            if total_w > 0:
+                saved_w = self._get_saved_sidebar_width()
+                hw = self.body_splitter.handleWidth()
+                self.body_splitter.setSizes([max(300, total_w - saved_w - hw), saved_w])
         if save and hasattr(self, "repository"):
             self.repository.set_setting("sidebar_visible", "1" if visible else "0")
             self.repository.save()
@@ -4638,7 +4717,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, "body_layout"):
                 self.body_layout.setContentsMargins(0, 0, 0, 0)
         if hasattr(self, "body_layout"):
-            self.body_layout.setSpacing(10 if sidebar_visible else 0)
+            self.body_layout.setSpacing(0)
 
     def _apply_topbar_visibility(self, visible: bool, save: bool = True) -> None:
         self._topbar_visible = visible
@@ -6011,6 +6090,13 @@ class MainWindow(QMainWindow):
         dialog.show()
 
     def _stabilize_first_layout(self) -> None:
+        if hasattr(self, "body_splitter") and getattr(self, "_sidebar_visible", True) and not getattr(self, "_splitter_layout_stabilized", False):
+            self._splitter_layout_stabilized = True
+            total_w = sum(self.body_splitter.sizes())
+            if total_w > 0:
+                saved_w = self._get_saved_sidebar_width()
+                hw = self.body_splitter.handleWidth()
+                self.body_splitter.setSizes([max(300, total_w - saved_w - hw), saved_w])
         self._enforce_equal_calendar_cells()
         self._sync_sticker_overlay()
         self._capture_band_baseline()
@@ -6033,6 +6119,10 @@ class MainWindow(QMainWindow):
             self._persist_window_state()
             self._sync_open_memo_ids(persist=True)
             self._sync_open_group_ids(persist=True)
+            if hasattr(self, "sidebar_panel") and self.sidebar_panel.isVisible():
+                w = self.sidebar_panel.width()
+                if 220 <= w <= 700:
+                    self.repository.set_setting("sidebar_width", str(w))
             self.repository.set_setting("sidebar_visible", "1" if getattr(self, "_sidebar_visible", True) else "0")
             self.repository.set_setting("topbar_visible", "1" if getattr(self, "_topbar_visible", True) else "0")
             self.repository.set_setting("window_opacity", str(int(getattr(self, "_window_opacity_pct", 100))))
