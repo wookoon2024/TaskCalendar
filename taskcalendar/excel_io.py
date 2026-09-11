@@ -104,7 +104,11 @@ def _strip_html_to_plain_text(text: str) -> str:
     return "\n".join(line.strip() for line in clean.splitlines() if line.strip())
 
 
-def export_entries_to_excel(file_path: Path, entries: list[CalendarEntry]) -> int:
+def export_entries_to_excel(
+    file_path: Path,
+    entries: list[CalendarEntry],
+    settings: dict[str, str] | None = None,
+) -> int:
     Workbook, _ = _require_openpyxl()
     wb = Workbook()
     ws = wb.active
@@ -145,82 +149,109 @@ def export_entries_to_excel(file_path: Path, entries: list[CalendarEntry]) -> in
     for idx, name in enumerate(_HEADERS, start=1):
         width = min(40, max(10, len(name) + 2))
         ws.column_dimensions[chr(64 + idx)].width = width
+
+    if settings:
+        ws_settings = wb.create_sheet(title="settings")
+        ws_settings.append(["key", "value"])
+        for k, v in sorted(settings.items()):
+            ws_settings.append([str(k), str(v)])
+        ws_settings.freeze_panes = "A2"
+        ws_settings.column_dimensions["A"].width = 30
+        ws_settings.column_dimensions["B"].width = 60
+
     wb.save(file_path)
     return len(entries)
 
 
-def import_entries_from_excel(file_path: Path) -> list[CalendarEntry]:
+def import_entries_from_excel(file_path: Path) -> tuple[list[CalendarEntry], dict[str, str]]:
     _, load_workbook = _require_openpyxl()
     wb = load_workbook(filename=file_path, read_only=True, data_only=True)
-    ws = wb.active
+    try:
+        ws = wb["entries"] if "entries" in wb.sheetnames else wb.active
 
-    rows = ws.iter_rows(values_only=True)
-    first = next(rows, None)
-    if not first:
-        return []
-    header = [str(item or "").strip() for item in first]
-    mapping = {name: idx for idx, name in enumerate(header)}
-    required_headers = [name for name in _HEADERS if name != "attachments_json"]
-    missing = [name for name in required_headers if name not in mapping]
-    if missing:
-        raise ValueError(f"엑셀 형식이 올바르지 않습니다. 누락 컬럼: {', '.join(missing)}")
+        rows = ws.iter_rows(values_only=True)
+        first = next(rows, None)
+        if not first:
+            return [], {}
+        header = [str(item or "").strip() for item in first]
+        mapping = {name: idx for idx, name in enumerate(header)}
+        required_headers = [name for name in _HEADERS if name != "attachments_json"]
+        missing = [name for name in required_headers if name not in mapping]
+        if missing:
+            raise ValueError(f"엑셀 형식이 올바르지 않습니다. 누락 컬럼: {', '.join(missing)}")
 
-    result: list[CalendarEntry] = []
-    for row_no, row in enumerate(rows, start=2):
-        if row is None:
-            continue
+        result: list[CalendarEntry] = []
+        for row_no, row in enumerate(rows, start=2):
+            if row is None:
+                continue
 
-        def get(name: str):
-            idx = mapping[name]
-            return row[idx] if idx < len(row) else None
+            def get(name: str):
+                idx = mapping[name]
+                return row[idx] if idx < len(row) else None
 
-        raw_title = str(get("title") or "").strip()
-        raw_desc = str(get("description") or "").strip()
-        if not raw_title and not raw_desc:
-            continue
-        title = raw_title or raw_desc.splitlines()[0][:40] or "일정"
+            raw_title = str(get("title") or "").strip()
+            raw_desc = str(get("description") or "").strip()
+            if not raw_title and not raw_desc:
+                continue
+            title = raw_title or raw_desc.splitlines()[0][:40] or "일정"
 
-        entry_type_raw = str(get("entry_type") or EntryType.SCHEDULE.value).strip().lower()
-        if entry_type_raw not in {EntryType.SCHEDULE.value, EntryType.TASK.value, EntryType.MEMO.value}:
-            entry_type_raw = EntryType.SCHEDULE.value
-        recurrence_raw = str(get("recurrence_type") or RecurrenceType.NONE.value).strip().lower()
-        if recurrence_raw not in {item.value for item in RecurrenceType}:
-            recurrence_raw = RecurrenceType.NONE.value
-        alert_raw = str(get("alert_type") or AlertType.NONE.value).strip().lower()
-        if alert_raw not in {item.value for item in AlertType}:
-            alert_raw = AlertType.NONE.value
+            entry_type_raw = str(get("entry_type") or EntryType.SCHEDULE.value).strip().lower()
+            if entry_type_raw not in {EntryType.SCHEDULE.value, EntryType.TASK.value, EntryType.MEMO.value}:
+                entry_type_raw = EntryType.SCHEDULE.value
+            recurrence_raw = str(get("recurrence_type") or RecurrenceType.NONE.value).strip().lower()
+            if recurrence_raw not in {item.value for item in RecurrenceType}:
+                recurrence_raw = RecurrenceType.NONE.value
+            alert_raw = str(get("alert_type") or AlertType.NONE.value).strip().lower()
+            if alert_raw not in {item.value for item in AlertType}:
+                alert_raw = AlertType.NONE.value
 
-        try:
-            entry = CalendarEntry(
-                entry_type=EntryType(entry_type_raw),
-                title=title,
-                description=raw_desc,
-                day=_parse_date_cell(get("day")),
-                start_date=_parse_date_cell(get("start_date")),
-                end_date=_parse_date_cell(get("end_date")),
-                start_time=str(get("start_time") or "").strip(),
-                end_time=str(get("end_time") or "").strip(),
-                all_day=_parse_bool(get("all_day")),
-                assignee=str(get("assignee") or "").strip(),
-                status=str(get("status") or "").strip(),
-                # Cross-device share via Excel intentionally excludes attachment paths.
-                attachments=[],
-                recurrence_enabled=_parse_bool(get("recurrence_enabled")),
-                recurrence_type=RecurrenceType(recurrence_raw),
-                recurrence_interval=max(1, _parse_int(get("recurrence_interval"), 1)),
-                recurrence_weekdays=[int(v) for v in _parse_json_list(get("recurrence_weekdays_json")) if str(v).isdigit()],
-                recurrence_month_day=max(1, _parse_int(get("recurrence_month_day"), 1)),
-                recurrence_month_week=_parse_int(get("recurrence_month_week"), 1),
-                recurrence_month_end=_parse_bool(get("recurrence_month_end")),
-                completed_dates=[str(item) for item in _parse_json_list(get("completed_dates_json"))],
-                icon_type=str(get("icon_type") or "").strip(),
-                alert_type=AlertType(alert_raw),
-                alert_offset=str(get("alert_offset") or "at_start").strip() or "at_start",
-            )
-        except Exception as exc:
-            raise ValueError(f"{row_no}행 처리 중 오류가 발생했습니다: {exc}") from exc
+            try:
+                entry = CalendarEntry(
+                    entry_type=EntryType(entry_type_raw),
+                    title=title,
+                    description=raw_desc,
+                    day=_parse_date_cell(get("day")),
+                    start_date=_parse_date_cell(get("start_date")),
+                    end_date=_parse_date_cell(get("end_date")),
+                    start_time=str(get("start_time") or "").strip(),
+                    end_time=str(get("end_time") or "").strip(),
+                    all_day=_parse_bool(get("all_day")),
+                    assignee=str(get("assignee") or "").strip(),
+                    status=str(get("status") or "").strip(),
+                    # Cross-device share via Excel intentionally excludes attachment paths.
+                    attachments=[],
+                    recurrence_enabled=_parse_bool(get("recurrence_enabled")),
+                    recurrence_type=RecurrenceType(recurrence_raw),
+                    recurrence_interval=max(1, _parse_int(get("recurrence_interval"), 1)),
+                    recurrence_weekdays=[int(v) for v in _parse_json_list(get("recurrence_weekdays_json")) if str(v).isdigit()],
+                    recurrence_month_day=max(1, _parse_int(get("recurrence_month_day"), 1)),
+                    recurrence_month_week=_parse_int(get("recurrence_month_week"), 1),
+                    recurrence_month_end=_parse_bool(get("recurrence_month_end")),
+                    completed_dates=[str(item) for item in _parse_json_list(get("completed_dates_json"))],
+                    icon_type=str(get("icon_type") or "").strip(),
+                    alert_type=AlertType(alert_raw),
+                    alert_offset=str(get("alert_offset") or "at_start").strip() or "at_start",
+                )
+            except Exception as exc:
+                raise ValueError(f"{row_no}행 처리 중 오류가 발생했습니다: {exc}") from exc
 
-        if entry.entry_type != EntryType.MEMO and entry.day is None:
-            entry.day = entry.start_date or date.today()
-        result.append(entry)
-    return result
+            if entry.entry_type != EntryType.MEMO and entry.day is None:
+                entry.day = entry.start_date or date.today()
+            result.append(entry)
+
+        extracted_settings: dict[str, str] = {}
+        if "settings" in wb.sheetnames:
+            ws_settings = wb["settings"]
+            s_rows = ws_settings.iter_rows(values_only=True)
+            # Skip header
+            next(s_rows, None)
+            for s_row in s_rows:
+                if s_row and len(s_row) >= 2 and s_row[0] is not None:
+                    sk = str(s_row[0]).strip()
+                    sv = str(s_row[1] if s_row[1] is not None else "")
+                    if sk:
+                        extracted_settings[sk] = sv
+
+        return result, extracted_settings
+    finally:
+        wb.close()

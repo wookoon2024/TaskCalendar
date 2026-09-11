@@ -905,7 +905,7 @@ class MainWindow(QMainWindow):
         self.show_solar_terms = self.repository.get_setting("show_solar_terms", "1") == "1"
         self._action_icons: dict[str, QIcon] = self._load_action_icons()
         self._holidays_fixed, self._holidays_yearly = self._load_holidays()
-        self.memo_title_only = self.repository.get_setting("memo_title_only", "0") == "1"
+        self.memo_title_only = self.repository.get_setting("memo_title_only", "1") == "1"
         self._sidebar_visible = self.repository.get_setting("sidebar_visible", "1") == "1"
         self._topbar_visible = self.repository.get_setting("topbar_visible", "1") == "1"
         self.search_query = ""
@@ -3814,7 +3814,7 @@ class MainWindow(QMainWindow):
 
     def _sidebar_card(self, entry: CalendarEntry) -> QWidget:
         is_completed = self._is_entry_completed_on_day(entry, self.selected_day)
-        hide_memo_body = (entry.entry_type == EntryType.MEMO)
+        hide_memo_body = (entry.entry_type == EntryType.MEMO and getattr(self, "memo_title_only", True))
         card: QFrame
         drag_enabled = (
             self.sidebar_mode == "memo"
@@ -4416,7 +4416,12 @@ class MainWindow(QMainWindow):
             target = target.with_suffix(".xlsx")
         return target
 
-    def _export_entries_with_picker(self, entries: list[CalendarEntry], default_filename: str) -> None:
+    def _export_entries_with_picker(
+        self,
+        entries: list[CalendarEntry],
+        default_filename: str,
+        include_settings: bool = False,
+    ) -> None:
         if not entries:
             QMessageBox.information(self, "엑셀 저장", "저장할 데이터가 없습니다.")
             return
@@ -4424,7 +4429,11 @@ class MainWindow(QMainWindow):
         if file_path is None:
             return
         try:
-            count = export_entries_to_excel(file_path, entries)
+            settings_to_export = None
+            if include_settings:
+                self._flush_current_settings_to_repository()
+                settings_to_export = self.repository.get_all_settings()
+            count = export_entries_to_excel(file_path, entries, settings=settings_to_export)
         except RuntimeError as exc:
             QMessageBox.warning(self, "엑셀 기능", str(exc))
             return
@@ -4436,12 +4445,12 @@ class MainWindow(QMainWindow):
 
     def _export_search_results_to_excel(self) -> None:
         stamp = datetime.now().strftime("%Y%m%d_%H%M")
-        self._export_entries_with_picker(self.search_results, f"taskcalendar_search_{stamp}.xlsx")
+        self._export_entries_with_picker(self.search_results, f"taskcalendar_search_{stamp}.xlsx", include_settings=False)
 
     def _export_all_entries_to_excel(self) -> None:
         stamp = datetime.now().strftime("%Y%m%d_%H%M")
         entries = self.repository.list_all_entries()
-        self._export_entries_with_picker(entries, f"taskcalendar_all_{stamp}.xlsx")
+        self._export_entries_with_picker(entries, f"taskcalendar_all_{stamp}.xlsx", include_settings=True)
 
     def _import_all_entries_from_excel(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -4459,10 +4468,14 @@ class MainWindow(QMainWindow):
         ) != QMessageBox.Yes:
             return
         try:
-            imported = import_entries_from_excel(Path(file_path))
+            imported, imported_settings = import_entries_from_excel(Path(file_path))
             count = self.repository.replace_all_entries(imported)
             self.repository.set_setting("memo_order_v1", "[]")
-            self.repository.save()
+            if imported_settings:
+                self._reload_and_apply_all_settings(companion_settings=imported_settings)
+            else:
+                self.repository.save()
+                self.refresh()
         except RuntimeError as exc:
             QMessageBox.warning(self, "엑셀 기능", str(exc))
             return
@@ -4475,7 +4488,10 @@ class MainWindow(QMainWindow):
         self.search_results = []
         self.sidebar_mode = "day"
         self.refresh()
-        QMessageBox.information(self, "엑셀 불러오기", f"{count}건을 불러왔습니다.")
+        msg = f"{count}건을 불러왔습니다."
+        if imported_settings:
+            msg += f"\n(환경설정 {len(imported_settings)}개 항목도 함께 복원되었습니다)"
+        QMessageBox.information(self, "엑셀 불러오기", msg)
 
     def _export_data_flow(self) -> None:
         dialog = BackupRestoreFormatDialog(self, mode="export")
@@ -4503,6 +4519,7 @@ class MainWindow(QMainWindow):
                     self.repository.attachments_root,
                     Path(file_path),
                     settings_dict=self.repository.get_all_settings(),
+                    plain_db_bytes=self.repository.connection.serialize(),
                 )
                 QMessageBox.information(self, "데이터 내보내기", f"백업 파일이 성공적으로 저장되었습니다.\n{file_path}")
             except Exception as exc:
@@ -4520,7 +4537,7 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("lunar_display_frequency", getattr(self, "lunar_display_frequency", "all"))
             self.repository.set_setting("show_solar_terms", "1" if getattr(self, "show_solar_terms", True) else "0")
             self.repository.set_setting("sticker_animation_enabled", "1" if getattr(self, "_sticker_animation_enabled", True) else "0")
-            self.repository.set_setting("memo_title_only", "1" if getattr(self, "memo_title_only", False) else "0")
+            self.repository.set_setting("memo_title_only", "1" if getattr(self, "memo_title_only", True) else "0")
             self._remember_window_state()
             self._persist_window_state()
             if getattr(self, "_memos_restored", False):
@@ -4537,21 +4554,21 @@ class MainWindow(QMainWindow):
         """
         if companion_settings and isinstance(companion_settings, dict):
             for k, v in companion_settings.items():
-                if not self.repository.get_setting(k):
-                    self.repository.set_setting(k, str(v))
+                self.repository.set_setting(k, str(v))
 
         # 1. Theme
         stored_theme = self.repository.get_setting("theme", "light")
         if stored_theme in THEMES:
             self.theme_name = stored_theme
             self.palette = THEMES[self.theme_name]
+            self.setStyleSheet(app_stylesheet(self.palette))
 
         # 2. Lunar & Display preferences
         self.hide_completed_on_calendar = self.repository.get_setting("hide_completed_on_calendar", "1") == "1"
         self.show_lunar_calendar = self.repository.get_setting("show_lunar_calendar", "1") == "1"
         self.lunar_display_frequency = self.repository.get_setting("lunar_display_frequency", "all")
         self.show_solar_terms = self.repository.get_setting("show_solar_terms", "1") == "1"
-        self.memo_title_only = self.repository.get_setting("memo_title_only", "0") == "1"
+        self.memo_title_only = self.repository.get_setting("memo_title_only", "1") == "1"
         self._sticker_animation_enabled = self.repository.get_setting("sticker_animation_enabled", "1") == "1"
 
         # 3. Sidebar & Topbar visibility
@@ -4604,7 +4621,8 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        # 8. Refresh UI
+        # 8. Save & Refresh UI
+        self.repository.save()
         self.refresh()
 
     def _import_data_flow(self) -> None:
@@ -4654,31 +4672,67 @@ class MainWindow(QMainWindow):
 
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "복원할 백업 파일 선택 (taskcalendar_backup_*.db.enc)",
+            "복원할 백업 파일 선택 (taskcalendar_backup_*.db.enc / *.sqlite.bak / *.zip)",
             str(backup_dir),
-            "Backup Files (taskcalendar_backup_*.db.enc);;All Files (*.*)",
+            "모든 지원 백업 (*.db.enc *.sqlite.bak *.zip);;암호화 백업 (*.db.enc);;SQLite 백업 (*.sqlite.bak);;ZIP 백업 (*.zip);;All Files (*.*)",
         )
         if not file_path:
             return
 
+        target_path = Path(file_path)
+        if target_path.suffix.lower() == ".zip":
+            # Delegate to zip restore flow
+            try:
+                extracted_settings = restore_from_zip(target_path, self.repository.db_path, self.repository.attachments_root)
+                self.repository.reload_database()
+                self._reload_and_apply_all_settings(companion_settings=extracted_settings)
+                self.search_query = ""
+                self.search_results = []
+                self.sidebar_mode = "day"
+                self.refresh()
+                QMessageBox.information(self, "데이터 복원", "ZIP 백업 데이터 및 환경설정이 성공적으로 복원되었습니다.")
+            except Exception as exc:
+                logger.exception("zip backup restore failed")
+                QMessageBox.critical(self, "복원 실패", f"ZIP 복원 중 오류가 발생했습니다.\n{exc}")
+            return
+
         try:
-            from taskcalendar.storage import unprotect_bytes
+            from taskcalendar.storage import unprotect_bytes, protect_bytes, _can_deserialize_sqlite_blob
             import sqlite3
             import shutil
 
-            db_path = Path(file_path)
+            db_path = target_path
             raw = db_path.read_bytes()
 
-            # 1. Try Decrypt
-            try:
-                plain = unprotect_bytes(raw)
-            except Exception as exc:
+            # 1. Try to obtain plain SQLite bytes
+            plain = None
+            if _can_deserialize_sqlite_blob(raw):
+                plain = raw
+            else:
+                try:
+                    candidate_plain = unprotect_bytes(raw)
+                    if _can_deserialize_sqlite_blob(candidate_plain):
+                        plain = candidate_plain
+                except Exception:
+                    pass
+
+                # If direct decrypt failed, check for companion .sqlite.bak or database_latest.sqlite.bak
+                if plain is None:
+                    companion_sqlite = db_path.with_name(db_path.name.replace(".db.enc", ".sqlite.bak"))
+                    if not companion_sqlite.exists():
+                        companion_sqlite = backup_dir / "database_latest.sqlite.bak"
+                    if companion_sqlite.exists():
+                        c_raw = companion_sqlite.read_bytes()
+                        if _can_deserialize_sqlite_blob(c_raw):
+                            plain = c_raw
+
+            if plain is None:
                 QMessageBox.critical(
                     self,
                     "복원 실패",
-                    f"파일 복호화에 실패했습니다.\n"
-                    f"다른 PC/계정에서 생성된 백업 파일이거나 암호화 키가 다릅니다.\n\n"
-                    f"상세 오류: {exc}"
+                    "파일 복호화에 실패했습니다.\n"
+                    "다른 PC/계정에서 생성된 백업 파일이거나 암호화 키가 다릅니다.\n\n"
+                    "백업 폴더에 .sqlite.bak 또는 ZIP 백업 파일이 있는지 확인해 주세요."
                 )
                 return
 
@@ -4715,19 +4769,31 @@ class MainWindow(QMainWindow):
             if reply != QMessageBox.Yes:
                 return
 
-            # 4. Backup current DB and apply restored DB
+            # 4. Backup current DB and apply restored DB (re-encrypted for current machine/user)
             current_db = self.repository.db_path
             current_bak = current_db.with_name("taskcalendar.db.enc.backup_before_restore")
 
             if current_db.exists():
                 shutil.copy2(current_db, current_bak)
 
-            shutil.copy2(db_path, current_db)
-            shutil.copy2(db_path, current_db.with_suffix(current_db.suffix + ".bak"))
+            try:
+                encrypted_for_current = protect_bytes(plain)
+            except Exception:
+                encrypted_for_current = plain
+
+            current_db.write_bytes(encrypted_for_current)
+            try:
+                current_db.with_suffix(current_db.suffix + ".bak").write_bytes(encrypted_for_current)
+            except Exception:
+                pass
 
             # Check companion settings file
             companion_settings = None
-            companion_settings_path = db_path.with_name(db_path.name.replace(".db.enc", ".settings.json"))
+            companion_settings_path = db_path.with_name(
+                db_path.name.replace(".db.enc", ".settings.json").replace(".sqlite.bak", ".settings.json")
+            )
+            if not companion_settings_path.exists():
+                companion_settings_path = backup_dir / "settings_latest.json"
             if companion_settings_path.exists():
                 try:
                     companion_settings = json.loads(companion_settings_path.read_text(encoding="utf-8"))
@@ -4742,7 +4808,10 @@ class MainWindow(QMainWindow):
             self.sidebar_mode = "day"
             self.refresh()
 
-            QMessageBox.information(self, "복원 완료", f"성공적으로 데이터와 환경설정을 복원했습니다!\n일정/메모 {count}건을 로드했습니다.")
+            msg = f"성공적으로 데이터와 환경설정을 복원했습니다!\n일정/메모 {count}건을 로드했습니다."
+            if companion_settings:
+                msg += f"\n(환경설정 {len(companion_settings)}개 항목 복원 완료)"
+            QMessageBox.information(self, "복원 완료", msg)
 
         except Exception as exc:
             logger.exception("auto backup restore failed")
@@ -4980,7 +5049,7 @@ class MainWindow(QMainWindow):
             memo_default_opacity=int(self.repository.get_setting("memo_default_opacity", "100")),
             memo_default_size=self.repository.get_setting("memo_default_size", "380,360"),
             memo_default_font_size=int(self.repository.get_setting("memo_default_font_size", "11")),
-            memo_title_only=getattr(self, "memo_title_only", False),
+            memo_title_only=getattr(self, "memo_title_only", True),
         )
         if dialog.exec() and dialog.result is not None:
             action = str(dialog.result.get("action", "apply"))
@@ -5031,8 +5100,9 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("memo_default_opacity", str(dialog.result.get("memo_default_opacity", 100)))
             self.repository.set_setting("memo_default_size", str(dialog.result.get("memo_default_size", "380,360")))
             self.repository.set_setting("memo_default_font_size", str(dialog.result.get("memo_default_font_size", 11)))
-            new_title_only = bool(dialog.result.get("memo_title_only", False))
-            if getattr(self, "memo_title_only", False) != new_title_only:
+            new_title_only = bool(dialog.result.get("memo_title_only", True))
+            self.repository.set_setting("memo_title_only", "1" if new_title_only else "0")
+            if getattr(self, "memo_title_only", True) != new_title_only:
                 self.memo_title_only = new_title_only
                 if hasattr(self, "_render_sidebar") and getattr(self, "sidebar_mode", "") == "memo":
                     self._render_sidebar()
@@ -5549,6 +5619,7 @@ class MainWindow(QMainWindow):
                 keep_count,
                 last_backup,
                 settings_dict=self.repository.get_all_settings(),
+                plain_db_bytes=self.repository.connection.serialize(),
             )
             if new_stamp:
                 self.repository.set_setting("last_auto_backup_time", new_stamp)

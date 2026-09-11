@@ -330,11 +330,11 @@ class EncryptedRepository:
         # If primary and .bak candidates failed and db_path had non-empty content on disk:
         has_existing_data = self.db_path.exists() and self.db_path.stat().st_size > 0
         if has_existing_data:
-            # 1. Search backups folder for newest valid auto backup
+            # 1. Search backups folder for newest valid auto backup (.sqlite.bak or .db.enc)
             backup_dir = self.db_path.parent / "backups"
             if backup_dir.is_dir():
                 backup_files = sorted(
-                    backup_dir.glob("taskcalendar_backup_*.db.enc"),
+                    list(backup_dir.glob("*.sqlite.bak")) + list(backup_dir.glob("taskcalendar_backup_*.db.enc")),
                     key=lambda p: p.stat().st_mtime,
                     reverse=True,
                 )
@@ -343,14 +343,15 @@ class EncryptedRepository:
                         b_raw = b_file.read_bytes()
                         if not b_raw:
                             continue
-                        try:
-                            b_plain = unprotect_bytes(b_raw)
-                        except OSError:
-                            if _can_deserialize_sqlite_blob(b_raw):
-                                b_plain = b_raw
-                            else:
+                        b_plain = None
+                        if _can_deserialize_sqlite_blob(b_raw):
+                            b_plain = b_raw
+                        else:
+                            try:
+                                b_plain = unprotect_bytes(b_raw)
+                            except OSError:
                                 continue
-                        if _can_deserialize_sqlite_blob(b_plain):
+                        if b_plain and _can_deserialize_sqlite_blob(b_plain):
                             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                             unreadable_copy = self.db_path.with_name(f"{self.db_path.name}.unreadable.{stamp}")
                             try:
@@ -361,6 +362,22 @@ class EncryptedRepository:
                             self.connection = sqlite3.connect(":memory:")
                             self.connection.row_factory = sqlite3.Row
                             self.connection.deserialize(b_plain)
+
+                            # Restore companion settings if available
+                            companion_json = b_file.with_name(
+                                b_file.name.replace(".db.enc", ".settings.json").replace(".sqlite.bak", ".settings.json")
+                            )
+                            if not companion_json.exists():
+                                companion_json = backup_dir / "settings_latest.json"
+                            if companion_json.exists():
+                                try:
+                                    s_data = json.loads(companion_json.read_text(encoding="utf-8"))
+                                    if isinstance(s_data, dict):
+                                        for k, v in s_data.items():
+                                            self.set_setting(k, str(v))
+                                except Exception:
+                                    pass
+
                             self._log_diagnostic(
                                 "load_recovered_from_auto_backup",
                                 f"recovered_from={b_file}\npreserved_unreadable={unreadable_copy}",

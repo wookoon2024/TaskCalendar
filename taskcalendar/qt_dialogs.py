@@ -448,38 +448,50 @@ def snap_window_rect(current_geo: QRect, other_geos: list[QRect], screen_geo: QR
     w = current_geo.width()
     h = current_geo.height()
     
+    screen_left = screen_geo.x()
+    screen_top = screen_geo.y()
+    screen_right = screen_geo.x() + screen_geo.width()
+    screen_bottom = screen_geo.y() + screen_geo.height()
+
     # 1. Screen edge snapping
-    if abs(x - screen_geo.left()) <= threshold:
-        x = screen_geo.left()
-    elif abs((x + w) - screen_geo.right()) <= threshold:
-        x = screen_geo.right() - w
+    if abs(x - screen_left) <= threshold:
+        x = screen_left
+    elif abs((x + w) - screen_right) <= threshold:
+        x = screen_right - w
         
-    if abs(y - screen_geo.top()) <= threshold:
-        y = screen_geo.top()
-    elif abs((y + h) - screen_geo.bottom()) <= threshold:
-        y = screen_geo.bottom() - h
+    if abs(y - screen_top) <= threshold:
+        y = screen_top
+    elif abs((y + h) - screen_bottom) <= threshold:
+        y = screen_bottom - h
         
-    # 2. Other memo windows snapping
+    # 2. Other windows (memos & groups) snapping
     for other in other_geos:
+        o_x = other.x()
+        o_y = other.y()
+        o_w = other.width()
+        o_h = other.height()
+        o_right = o_x + o_w
+        o_bottom = o_y + o_h
+
         # Horizontal docking & alignment
-        if abs((x + w) - other.left()) <= threshold:
-            x = other.left() - w
-        elif abs(x - other.right()) <= threshold:
-            x = other.right()
-        elif abs(x - other.left()) <= threshold:
-            x = other.left()
-        elif abs((x + w) - other.right()) <= threshold:
-            x = other.right() - w
+        if abs((x + w) - o_x) <= threshold:
+            x = o_x - w
+        elif abs(x - o_right) <= threshold:
+            x = o_right
+        elif abs(x - o_x) <= threshold:
+            x = o_x
+        elif abs((x + w) - o_right) <= threshold:
+            x = o_right - w
             
         # Vertical docking & alignment
-        if abs((y + h) - other.top()) <= threshold:
-            y = other.top() - h
-        elif abs(y - other.bottom()) <= threshold:
-            y = other.bottom()
-        elif abs(y - other.top()) <= threshold:
-            y = other.top()
-        elif abs((y + h) - other.bottom()) <= threshold:
-            y = other.bottom() - h
+        if abs((y + h) - o_y) <= threshold:
+            y = o_y - h
+        elif abs(y - o_bottom) <= threshold:
+            y = o_bottom
+        elif abs(y - o_y) <= threshold:
+            y = o_y
+        elif abs((y + h) - o_bottom) <= threshold:
+            y = o_bottom - h
             
     return QPoint(x, y)
 
@@ -578,6 +590,9 @@ class EditableTitleLineEdit(QLineEdit):
         self.setCursor(Qt.CursorShape.ArrowCursor)
         self.deselect()
         super().focusOutEvent(event)
+        dlg = self.window()
+        if dlg and hasattr(dlg, "_auto_save_to_db"):
+            dlg._auto_save_to_db()
         
     def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -2990,18 +3005,25 @@ class EntryDialog(QDialog):
     def _start_window_drag(self, global_pos: QPoint) -> None:
         self._drag_position = global_pos - self.frameGeometry().topLeft()
 
+    def _other_window_geometries(self) -> list[QRect]:
+        geos: list[QRect] = []
+        parent = getattr(self, "_owner_window", None) or self.parent()
+        if not parent:
+            return geos
+        for attr in ("_active_group_dialogs", "_active_memo_dialogs"):
+            dialogs = getattr(parent, attr, None)
+            if not dialogs:
+                continue
+            for dlg in list(dialogs.values()):
+                if dlg is not None and dlg is not self and dlg.isVisible():
+                    geos.append(dlg.geometry())
+        return geos
+
     def _perform_window_drag(self, global_pos: QPoint) -> None:
         if hasattr(self, "_drag_position"):
             target_pos = global_pos - self._drag_position
             curr_geo = QRect(target_pos, self.size())
-            
-            parent = getattr(self, "_owner_window", None) or self.parent()
-            other_geos: list[QRect] = []
-            if parent and hasattr(parent, "_active_memo_dialogs"):
-                for dlg in parent._active_memo_dialogs.values():
-                    if dlg is not self and dlg.isVisible():
-                        other_geos.append(dlg.geometry())
-                        
+            other_geos = self._other_window_geometries()
             screen = self.screen()
             screen_geo = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
             snapped_pos = snap_window_rect(curr_geo, other_geos, screen_geo, threshold=16)
@@ -3261,13 +3283,7 @@ class EntryDialog(QDialog):
                         else:
                             geom.setHeight(max(150, geom.height() + delta.y()))
                             
-                    parent = getattr(self, "_owner_window", None) or self.parent()
-                    other_geos: list[QRect] = []
-                    if parent and hasattr(parent, "_active_memo_dialogs"):
-                        for dlg in parent._active_memo_dialogs.values():
-                            if dlg is not self and dlg.isVisible():
-                                other_geos.append(dlg.geometry())
-                                
+                    other_geos = self._other_window_geometries()
                     screen = self.screen()
                     screen_geo = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
                     snapped_geom = snap_resize_rect(geom, self._resize_dir, other_geos, screen_geo, threshold=16)
@@ -3813,10 +3829,10 @@ class FloatingGroupDialog(QDialog):
         self.title_input = EditableTitleLineEdit(self.group_title, self.header)
         self.title_input.setPlaceholderText("그룹 이름")
         self.title_input.setFixedHeight(24)
-        self.title_input.setMinimumWidth(60)
-        self.title_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.title_input.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.title_input.textChanged.connect(self._on_title_changed)
-        h_layout.addWidget(self.title_input, 1)
+        self.title_input.textChanged.connect(self._update_title_input_width)
+        h_layout.addWidget(self.title_input)
 
         self.count_badge = QLabel("0개")
         self.count_badge.setStyleSheet("font-size: 11px; font-weight: bold; background: rgba(0,0,0,0.08); padding: 2px 6px; border-radius: 4px; color: #333333;")
@@ -3824,6 +3840,9 @@ class FloatingGroupDialog(QDialog):
         self.count_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.count_badge.installEventFilter(self)
         h_layout.addWidget(self.count_badge)
+
+        h_layout.addStretch(1)
+        self._update_title_input_width()
 
         self.add_memo_btn = QPushButton("+ 메모")
         self.add_memo_btn.setToolTip("이 그룹에 새 메모 추가")
@@ -3982,11 +4001,14 @@ class FloatingGroupDialog(QDialog):
         self.pin_btn.setStyleSheet(self._icon_btn_style)
         self.collapse_btn.setStyleSheet(self._icon_btn_style)
         self.close_btn.setStyleSheet(self._icon_btn_style)
+        if hasattr(self, "title_input"):
+            self.title_input.setStyleSheet(f"font-size: 13px; font-weight: bold; border: none; background: transparent; padding: 2px; color: {text_col};")
         self._update_header_mode(force=True)
 
     def _update_header_mode(self, force: bool = False) -> None:
         is_narrow = self.width() < 480
         if not force and getattr(self, "_header_is_narrow", None) == is_narrow:
+            self._update_title_input_width()
             return
         self._header_is_narrow = is_narrow
 
@@ -4016,6 +4038,7 @@ class FloatingGroupDialog(QDialog):
             self.close_all_btn.setFixedHeight(22)
             if txt_style:
                 self.close_all_btn.setStyleSheet(txt_style)
+        self._update_title_input_width()
 
     def update_open_statuses(self) -> None:
         parent = self._owner_window
@@ -4291,9 +4314,22 @@ class FloatingGroupDialog(QDialog):
         else:
             self.update_open_statuses()
 
+    def _update_title_input_width(self) -> None:
+        if hasattr(self, "title_input") and self.title_input is not None:
+            text = self.title_input.text() or self.title_input.placeholderText() or "그룹 이름"
+            fm = self.title_input.fontMetrics()
+            w = fm.horizontalAdvance(text) + 20
+            occupied = 160 if self.width() < 480 else 380
+            max_w = max(60, self.width() - occupied)
+            self.title_input.setFixedWidth(min(max_w, max(60, w)))
+
+    def _auto_save_to_db(self) -> None:
+        self._save_group_state()
+
     def _on_title_changed(self, new_title: str) -> None:
         self.group_title = new_title.strip() or "새 그룹"
         self.group_dict["title"] = self.group_title
+        self._update_title_input_width()
         self._save_group_state()
 
     def _update_view_mode_btn(self) -> None:
@@ -4406,6 +4442,7 @@ class FloatingGroupDialog(QDialog):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._update_header_mode()
+        self._update_title_input_width()
         if hasattr(self, "cards_container") and hasattr(self, "scroll") and self.scroll.viewport():
             if self.view_mode == "list":
                 vp_w = self.scroll.viewport().width()
@@ -4418,7 +4455,7 @@ class FloatingGroupDialog(QDialog):
 
     def _other_window_geometries(self) -> list[QRect]:
         geos: list[QRect] = []
-        parent = self._owner_window
+        parent = getattr(self, "_owner_window", None) or self.parent()
         if not parent:
             return geos
         for attr in ("_active_group_dialogs", "_active_memo_dialogs"):
@@ -4561,10 +4598,14 @@ class FloatingGroupDialog(QDialog):
                     self._save_group_state()
                     return True
 
-        # 2. Header drag and context menu
+        # 2. Header drag, context menu, and double-click collapse/expand
         header_targets = (getattr(self, "header", None), getattr(self, "icon_lbl", None), getattr(self, "count_badge", None))
         if watched in header_targets:
-            if event.type() == QEvent.Type.MouseButtonPress:
+            if event.type() == QEvent.Type.MouseButtonDblClick:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self._toggle_collapse()
+                    return True
+            elif event.type() == QEvent.Type.MouseButtonPress:
                 if event.button() == Qt.MouseButton.LeftButton:
                     r_dir = self._get_resize_direction(event.globalPosition().toPoint())
                     if not r_dir:
@@ -4664,6 +4705,16 @@ class FloatingGroupDialog(QDialog):
         if was_resizing:
             self._save_group_state()
         super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint()
+            hdr_h = self.header.height() if hasattr(self, "header") and self.header else 36
+            if pos.y() <= hdr_h:
+                self._toggle_collapse()
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
 
     def closeEvent(self, event) -> None:
         self._save_group_state()
@@ -5197,7 +5248,7 @@ class SettingsDialog(QDialog):
         memo_default_opacity: int = 100,
         memo_default_size: str = "380,360",
         memo_default_font_size: int = 11,
-        memo_title_only: bool = False,
+        memo_title_only: bool = True,
     ) -> None:
         super().__init__(parent)
         self._db_path = db_path
@@ -5601,9 +5652,9 @@ class SettingsDialog(QDialog):
         font_row.addStretch(1)
         mc2_layout.addLayout(font_row)
 
-        self.memo_title_only_check = QCheckBox("사이드바 메모 목록에서 제목만 간단히 표시 (본문 미리보기 숨김)")
+        self.memo_title_only_check = QCheckBox("사이드바 메모 목록: 제목만 1줄로 표시")
         self.memo_title_only_check.setChecked(memo_title_only)
-        self.memo_title_only_check.setToolTip("사이드바의 메모 리스트에서 본문 2줄 미리보기를 생략하고 콤팩트한 한줄 목록으로 표시합니다.")
+        self.memo_title_only_check.setToolTip("우측 사이드바의 메모 카드에서 본문 내용을 숨기고 제목만 1줄로 콤팩트하게 표시합니다.\n체크 해제 시 메모 본문 내용이 함께 표시됩니다.")
         mc2_layout.addWidget(self.memo_title_only_check)
 
         pg_memo_layout.addWidget(memo_card2)

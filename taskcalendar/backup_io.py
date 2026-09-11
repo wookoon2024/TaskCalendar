@@ -12,11 +12,14 @@ def backup_to_zip(
     attachments_dir: Path,
     zip_filepath: Path,
     settings_dict: dict[str, str] | None = None,
+    plain_db_bytes: bytes | None = None,
 ) -> None:
-    """Compresses the encrypted database file, companion settings, and attachments into a single zip file."""
+    """Compresses the database file, portable plain SQLite bytes, companion settings, and attachments into a single zip file."""
     with zipfile.ZipFile(zip_filepath, "w", zipfile.ZIP_DEFLATED) as zipf:
         if db_path.exists():
             zipf.write(db_path, arcname=db_path.name)
+        if plain_db_bytes:
+            zipf.writestr("taskcalendar.db", plain_db_bytes)
         if settings_dict:
             zipf.writestr("settings.json", json.dumps(settings_dict, ensure_ascii=False, indent=2))
         else:
@@ -34,8 +37,8 @@ def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -
     """Verifies and extracts database and attachments from zip backup, replacing existing files safely."""
     with zipfile.ZipFile(zip_filepath, "r") as zipf:
         names = zipf.namelist()
-        if "taskcalendar.db.enc" not in names:
-            raise ValueError("올바른 백업 ZIP 파일이 아닙니다. (taskcalendar.db.enc 파일 누락)")
+        if "taskcalendar.db.enc" not in names and "taskcalendar.db" not in names:
+            raise ValueError("올바른 백업 ZIP 파일이 아닙니다. (데이터베이스 파일 누락)")
 
     extracted_settings: dict[str, str] | None = None
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -43,7 +46,8 @@ def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -
         with zipfile.ZipFile(zip_filepath, "r") as zipf:
             zipf.extractall(tmp_path)
 
-        extracted_db = tmp_path / "taskcalendar.db.enc"
+        extracted_enc = tmp_path / "taskcalendar.db.enc"
+        extracted_plain = tmp_path / "taskcalendar.db"
         extracted_attachments = tmp_path / "attachments"
         extracted_settings_file = tmp_path / "settings.json"
 
@@ -53,8 +57,39 @@ def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -
             except Exception:
                 pass
 
-        if not extracted_db.exists():
-            raise ValueError("임시 경로에 데이터베이스 파일 추출을 실패했습니다.")
+        from taskcalendar.storage import protect_bytes, unprotect_bytes, _can_deserialize_sqlite_blob
+
+        final_db_bytes: bytes | None = None
+        # 1. Prefer unencrypted taskcalendar.db for universal cross-account and cross-machine portability
+        if extracted_plain.exists():
+            plain_bytes = extracted_plain.read_bytes()
+            if _can_deserialize_sqlite_blob(plain_bytes):
+                try:
+                    final_db_bytes = protect_bytes(plain_bytes)
+                except Exception:
+                    final_db_bytes = plain_bytes
+
+        # 2. Fallback to extracted_enc (legacy backups)
+        if final_db_bytes is None and extracted_enc.exists():
+            enc_bytes = extracted_enc.read_bytes()
+            try:
+                decrypted = unprotect_bytes(enc_bytes)
+                if _can_deserialize_sqlite_blob(decrypted):
+                    try:
+                        final_db_bytes = protect_bytes(decrypted)
+                    except Exception:
+                        final_db_bytes = decrypted
+            except Exception:
+                if _can_deserialize_sqlite_blob(enc_bytes):
+                    try:
+                        final_db_bytes = protect_bytes(enc_bytes)
+                    except Exception:
+                        final_db_bytes = enc_bytes
+                else:
+                    final_db_bytes = enc_bytes
+
+        if final_db_bytes is None:
+            raise ValueError("임시 경로에 데이터베이스 파일 추출 및 복원에 실패했습니다.")
 
         db_backup_path = db_path.with_suffix(db_path.suffix + ".restore_bak")
         attachments_backup_path = attachments_dir.parent / "attachments_restore_bak"
@@ -71,8 +106,12 @@ def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -
                 shutil.copytree(attachments_dir, attachments_backup_path, dirs_exist_ok=True)
                 attachments_backed_up = True
 
-            # Replace database file
-            shutil.copy2(extracted_db, db_path)
+            # Write restored database file
+            db_path.write_bytes(final_db_bytes)
+            try:
+                db_path.with_suffix(db_path.suffix + ".bak").write_bytes(final_db_bytes)
+            except Exception:
+                pass
 
             # Replace attachments
             if attachments_dir.exists():
@@ -121,11 +160,12 @@ def run_auto_backup_db(
     keep_count: int,
     last_backup_iso: str,
     settings_dict: dict[str, str] | None = None,
+    plain_db_bytes: bytes | None = None,
 ) -> str | None:
     """
     Checks if a backup is due based on interval_days and last_backup_iso.
     If due, creates a copy of the database file in backup_dir, writes companion settings JSON,
-    rotates old backups, and returns the new backup ISO timestamp. Otherwise, returns None.
+    writes fail-safe plain SQLite backup, rotates old backups, and returns the new backup ISO timestamp.
     """
     from datetime import datetime, timedelta
 
@@ -153,8 +193,17 @@ def run_auto_backup_db(
     try:
         shutil.copy2(db_path, backup_filepath)
     except Exception:
-        # Ignore errors during auto-backup to not crash startup
         return None
+
+    # Write fail-safe plain SQLite snapshot to ensure recovery across Windows account changes
+    if plain_db_bytes:
+        try:
+            sqlite_path = backup_dir / f"taskcalendar_backup_{stamp}.sqlite.bak"
+            sqlite_path.write_bytes(plain_db_bytes)
+            latest_sqlite = backup_dir / "database_latest.sqlite.bak"
+            latest_sqlite.write_bytes(plain_db_bytes)
+        except Exception:
+            pass
 
     # Write companion settings JSON alongside .db.enc
     if settings_dict:
@@ -175,12 +224,16 @@ def run_auto_backup_db(
                 to_delete = backups[:-keep_count]
                 for file_to_del in to_delete:
                     file_to_del.unlink(missing_ok=True)
-                    # Also remove companion .settings.json
+                    # Also remove companion .settings.json and .sqlite.bak
                     companion_json = file_to_del.with_name(
                         file_to_del.name.replace(".db.enc", ".settings.json")
                     )
                     companion_json.unlink(missing_ok=True)
+                    companion_sqlite = file_to_del.with_name(
+                        file_to_del.name.replace(".db.enc", ".sqlite.bak")
+                    )
+                    companion_sqlite.unlink(missing_ok=True)
         except Exception:
-            pass  # Ignore rotation errors to not crash startup
+            pass
 
     return now.isoformat()
