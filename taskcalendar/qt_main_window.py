@@ -1180,6 +1180,8 @@ class MainWindow(QMainWindow):
             app_inst.aboutToQuit.connect(self._on_app_about_to_quit)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if hasattr(self, "sidebar_panel") and watched == self.sidebar_panel and event.type() == QEvent.Type.Resize:
+            self._sync_topbar_sidebar_alignment()
         if (
             hasattr(self, "body_splitter")
             and watched == self.body_splitter.handle(1)
@@ -1190,6 +1192,7 @@ class MainWindow(QMainWindow):
             hw = self.body_splitter.handleWidth()
             self.body_splitter.setSizes([max(300, total_w - default_w - hw), default_w])
             self.repository.set_setting("sidebar_width", str(default_w))
+            self._sync_topbar_sidebar_alignment()
             self._schedule_calendar_rerender()
             self._sync_sticker_overlay()
             return True
@@ -1307,37 +1310,45 @@ class MainWindow(QMainWindow):
 
         right.addWidget(self._window_controls)
 
+        self.topbar_actions_container = QWidget()
+        tac_layout = QHBoxLayout(self.topbar_actions_container)
+        tac_layout.setContentsMargins(0, 0, 0, 0)
+        tac_layout.setSpacing(6)
+
         self.memo_button = self._top_button("메모")
         self.memo_button.clicked.connect(lambda: self._set_sidebar_mode("memo"))
-        right.addWidget(self.memo_button)
+        tac_layout.addWidget(self.memo_button)
 
         # 민원계산기 버튼 (추후 보완 후 재오픈 예정)
         # self.complaint_button = self._top_button("민원계산기")
         # self.complaint_button.setToolTip("민원 처리기한 모의계산기 (법정 공휴일/근무시간 자동 산정)")
         # self.complaint_button.clicked.connect(self._open_complaint_calculator)
-        # right.addWidget(self.complaint_button)
+        # tac_layout.addWidget(self.complaint_button)
 
         self.alarm_button = self._top_button("알람")
         self.alarm_button.setToolTip("알람 목록 및 소리/팝업 설정")
         self.alarm_button.clicked.connect(self._open_alarm_settings)
-        right.addWidget(self.alarm_button)
+        tac_layout.addWidget(self.alarm_button)
 
         self.date_calc_button = self._top_button("날짜계산기")
         self.date_calc_button.setToolTip("날짜 계산기 (D-Day, 기념일, 영업일/근무일, 나이/근속기간 계산 및 일정 등록)")
         self.date_calc_button.clicked.connect(self._open_date_calculator)
-        right.addWidget(self.date_calc_button)
+        tac_layout.addWidget(self.date_calc_button)
 
         settings_button = self._top_button("환경설정")
         settings_button.clicked.connect(self._open_settings)
-        right.addWidget(settings_button)
+        tac_layout.addWidget(settings_button)
+
+        tac_layout.addStretch(1)
 
         self.topbar_collapse_btn = self._top_button("", 28)
         self.topbar_collapse_btn.setIcon(QIcon(str(asset_path("chevron_up.svg"))))
         self.topbar_collapse_btn.setIconSize(QSize(14, 14))
         self.topbar_collapse_btn.setToolTip("상단바 숨기기 (단축키: Ctrl+T)")
         self.topbar_collapse_btn.clicked.connect(self._toggle_topbar)
-        right.addWidget(self.topbar_collapse_btn)
+        tac_layout.addWidget(self.topbar_collapse_btn)
 
+        right.addWidget(self.topbar_actions_container)
         topbar_layout.addLayout(right)
         outer.addWidget(topbar)
 
@@ -1564,32 +1575,36 @@ class MainWindow(QMainWindow):
 
         self.sidebar_panel = QFrame()
         self.sidebar_panel.setObjectName("sidebarPanel")
-        self.sidebar_panel.setMinimumWidth(220)
+        self.sidebar_panel.setMinimumWidth(341)
         self.sidebar_panel.setMaximumWidth(700)
+        self.sidebar_panel.installEventFilter(self)
         sidebar_layout = QVBoxLayout(self.sidebar_panel)
         sidebar_layout.setContentsMargins(12, 12, 12, 12)
         sidebar_layout.setSpacing(10)
 
         info_card = QFrame()
+        self.info_card = info_card
         info_card.setObjectName("panel")
+        info_card.setFixedHeight(38)
         info_layout = QHBoxLayout(info_card)
-        info_layout.setContentsMargins(10, 10, 10, 10)
-        info_layout.setSpacing(8)
+        info_layout.setContentsMargins(10, 4, 10, 4)
+        info_layout.setSpacing(6)
         self.info_title = QLabel("")
         info_layout.addWidget(self.info_title, 1)
         self.info_export_button = QPushButton("엑셀저장")
         self.info_export_button.setObjectName("topbarButton")
-        self.info_export_button.setFixedWidth(78)
+        self.info_export_button.setFixedHeight(24)
         self.info_export_button.clicked.connect(self._export_search_results_to_excel)
         self.info_export_button.hide()
         info_layout.addWidget(self.info_export_button)
         self.info_add_button = QPushButton("일정 추가")
         self.info_add_button.setObjectName("primary")
+        self.info_add_button.setFixedHeight(24)
         self.info_add_button.clicked.connect(self._handle_add_button)
         info_layout.addWidget(self.info_add_button)
         self.info_group_button = QPushButton("그룹")
         self.info_group_button.setObjectName("topbarButton")
-        self.info_group_button.setFixedWidth(52)
+        self.info_group_button.setFixedHeight(24)
         self.info_group_button.setToolTip("플로팅 메모 그룹 관리")
         self.info_group_button.clicked.connect(self._handle_group_button)
         self.info_group_button.hide()
@@ -1597,9 +1612,9 @@ class MainWindow(QMainWindow):
 
         self.sidebar_close_btn = QPushButton()
         self.sidebar_close_btn.setIcon(QIcon(str(asset_path("chevron_right.svg"))))
-        self.sidebar_close_btn.setIconSize(QSize(14, 14))
+        self.sidebar_close_btn.setIconSize(QSize(12, 12))
         self.sidebar_close_btn.setObjectName("topbarButton")
-        self.sidebar_close_btn.setFixedSize(26, 26)
+        self.sidebar_close_btn.setFixedSize(24, 24)
         self.sidebar_close_btn.setToolTip("우측 사이드바 숨기기 (단축키: Ctrl+B)")
         self.sidebar_close_btn.clicked.connect(self._toggle_sidebar)
         info_layout.addWidget(self.sidebar_close_btn)
@@ -3907,7 +3922,15 @@ class MainWindow(QMainWindow):
         self.sidebar_content.setStyleSheet(f"background: {self.palette['panel']};")
         self.calendar_grid_widget.setStyleSheet("background: transparent;")
         if hasattr(self, "info_title"):
-            self.info_title.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {self.palette['text']}; background: transparent; border: none;")
+            self.info_title.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {self.palette['text']}; background: transparent; border: none;")
+        if hasattr(self, "info_add_button"):
+            self.info_add_button.setStyleSheet(f"background: {self.palette['accent']}; color: {self.palette['button_text']}; border: none; border-radius: 4px; padding: 1px 8px; font-size: 12px; font-weight: bold;")
+        if hasattr(self, "info_group_button"):
+            self.info_group_button.setStyleSheet(f"background: {self.palette['panel_alt']}; color: {self.palette['text']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 1px 6px; font-size: 12px;")
+        if hasattr(self, "info_export_button"):
+            self.info_export_button.setStyleSheet(f"background: {self.palette['panel_alt']}; color: {self.palette['text']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 1px 6px; font-size: 12px;")
+        if hasattr(self, "sidebar_close_btn"):
+            self.sidebar_close_btn.setStyleSheet(f"background: {self.palette['panel_alt']}; color: {self.palette['text']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 0px;")
         if hasattr(self, "search_input"):
             self.search_input.setStyleSheet(
                 f"background: {self.palette['panel_alt']}; color: {self.palette['text']};"
@@ -4088,7 +4111,7 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.deleteLater()
         self._memo_card_widgets.clear()
-        self.info_title.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {self.palette['text']}; background: transparent; border: none;")
+        self.info_title.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {self.palette['text']}; background: transparent; border: none;")
 
         if self.sidebar_mode == "search":
             self.info_add_button.hide()
@@ -4432,6 +4455,9 @@ class MainWindow(QMainWindow):
 
             layout.addWidget(attach_block)
 
+        if (entry.entry_type == EntryType.MEMO and hide_memo_body) or (not entry.description and not entry.attachments):
+            card.setFixedHeight(38)
+
         return card
 
     def _empty_label(self, text: str) -> QLabel:
@@ -4609,35 +4635,36 @@ class MainWindow(QMainWindow):
     def _toggle_sidebar(self) -> None:
         self._apply_sidebar_visibility(not self._sidebar_visible, save=True)
 
+    def _sync_topbar_sidebar_alignment(self) -> None:
+        if not hasattr(self, "topbar_actions_container") or not hasattr(self, "info_card"):
+            return
+        natural_w = 315
+        if getattr(self, "_sidebar_visible", True) and hasattr(self, "sidebar_panel") and self.sidebar_panel.isVisible():
+            target_w = max(natural_w, self.info_card.width())
+            self.topbar_actions_container.setFixedWidth(target_w)
+        else:
+            self.topbar_actions_container.setFixedWidth(natural_w)
+
     def _memo_button_aligned_sidebar_width(self) -> int:
-        try:
-            if hasattr(self, "memo_button") and hasattr(self, "outer_layout"):
-                memo_x = self.memo_button.mapTo(self, QPoint(0, 0)).x()
-                right_margin = self.outer_layout.contentsMargins().right()
-                avail_right = self.width() - right_margin
-                target_w = avail_right - memo_x
-                if 220 <= target_w <= 700:
-                    return target_w
-        except Exception:
-            pass
-        return 309
+        return 341
 
     def _get_saved_sidebar_width(self) -> int:
         try:
             val = self.repository.get_setting("sidebar_width")
             if val:
                 w = int(val)
-                if 220 <= w <= 700:
+                if 341 <= w <= 700:
                     return w
         except Exception:
             pass
-        return self._memo_button_aligned_sidebar_width()
+        return 341
 
     def _on_sidebar_splitter_moved(self, pos: int, index: int) -> None:
         if hasattr(self, "sidebar_panel") and self.sidebar_panel.isVisible():
             w = self.sidebar_panel.width()
-            if 220 <= w <= 700:
+            if 341 <= w <= 700:
                 self.repository.set_setting("sidebar_width", str(w))
+        self._sync_topbar_sidebar_alignment()
         self._schedule_calendar_rerender()
         self._sync_sticker_overlay()
 
@@ -4661,6 +4688,7 @@ class MainWindow(QMainWindow):
                 saved_w = self._get_saved_sidebar_width()
                 hw = self.body_splitter.handleWidth()
                 self.body_splitter.setSizes([max(300, total_w - saved_w - hw), saved_w])
+        self._sync_topbar_sidebar_alignment()
         if save and hasattr(self, "repository"):
             self.repository.set_setting("sidebar_visible", "1" if visible else "0")
             self.repository.save()
@@ -6013,6 +6041,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._remember_window_state()
+        self._sync_topbar_sidebar_alignment()
         self._enforce_equal_calendar_cells()
         self._schedule_calendar_rerender()
 
@@ -6067,6 +6096,7 @@ class MainWindow(QMainWindow):
                 saved_w = self._get_saved_sidebar_width()
                 hw = self.body_splitter.handleWidth()
                 self.body_splitter.setSizes([max(300, total_w - saved_w - hw), saved_w])
+        self._sync_topbar_sidebar_alignment()
         self._enforce_equal_calendar_cells()
         self._sync_sticker_overlay()
         self._capture_band_baseline()
