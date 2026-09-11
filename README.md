@@ -13,7 +13,7 @@
 
 | 03. 다채로운 스티커 & 아이콘 피커 | 04. 플로팅 메모 및 그룹 관리 |
 | :---: | :---: |
-| ![스티커 피커 팝업](docs/07_sticker_picker.png) | ![플로팅 메모](docs/TaskCalendar_업무활용가이드.md) |
+| ![스티커 피커 팝업](docs/07_sticker_picker.png) | ![플로팅 메모](docs/02_floating_memo.png) |
 
 📖 **[👉 사내 임직원 업무 활용 가이드 상세 보기 (docs/TaskCalendar_업무활용가이드.md)](docs/TaskCalendar_업무활용가이드.md)**
 
