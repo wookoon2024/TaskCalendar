@@ -981,7 +981,7 @@ class MainWindow(QMainWindow):
         self._window_state_dirty = False
         self._did_memo_restore = False
 
-        self.setWindowTitle(f"캘린더 {APP_VERSION}")
+        self.setWindowTitle(f"K캘린더 {APP_VERSION}")
         self.setWindowIcon(app_icon())
         self.resize(1024, 640)
         self.setMinimumSize(980, 620)
@@ -1163,6 +1163,11 @@ class MainWindow(QMainWindow):
         self.alarm_button.setToolTip("알람 목록 및 소리/팝업 설정")
         self.alarm_button.clicked.connect(self._open_alarm_settings)
         right.addWidget(self.alarm_button)
+
+        self.date_calc_button = self._top_button("날짜계산기")
+        self.date_calc_button.setToolTip("날짜 계산기 (D-Day, 기념일, 영업일/근무일, 나이/근속기간 계산 및 일정 등록)")
+        self.date_calc_button.clicked.connect(self._open_date_calculator)
+        right.addWidget(self.date_calc_button)
 
         settings_button = self._top_button("환경설정")
         settings_button.clicked.connect(self._open_settings)
@@ -1895,6 +1900,42 @@ class MainWindow(QMainWindow):
     def _open_alarm_settings(self) -> None:
         dialog = AlarmManagerDialog(self, self.repository)
         dialog.exec()
+
+    def _open_date_calculator(self) -> None:
+        from taskcalendar.date_calculator_dialog import DateCalculatorDialog
+        dialog = DateCalculatorDialog(
+            parent=self,
+            holidays_fixed=self._holidays_fixed,
+            holidays_yearly=self._holidays_yearly,
+        )
+        dialog.register_schedule_requested.connect(self._on_register_schedule_from_calc)
+        dialog.exec()
+
+    def _on_register_schedule_from_calc(self, data: dict) -> None:
+        start_d = data.get("start_date") or date.today()
+        end_d = data.get("end_date") or start_d
+        title = data.get("title", "새 일정")
+        desc = data.get("description", "")
+        all_day = data.get("all_day", True)
+        start_t = data.get("start_time", "09:00")
+        end_t = data.get("end_time", "18:00")
+
+        self.selected_day = start_d
+        new_entry = CalendarEntry(
+            entry_type=EntryType.SCHEDULE,
+            title=title,
+            description=desc,
+            day=start_d,
+            start_date=start_d,
+            end_date=end_d,
+            start_time=start_t,
+            end_time=end_t,
+            all_day=all_day,
+            alert_type=AlertType.NONE,
+            alert_offset="",
+            icon_type="",
+        )
+        self._edit_entry(EntryType.SCHEDULE, new_entry)
 
     def _on_alert_box_closed(self, box: AlertToast) -> None:
         if box in self._active_alert_boxes:

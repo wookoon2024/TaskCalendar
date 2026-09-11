@@ -7121,7 +7121,7 @@ class WelcomeFeatureIntroDialog(QDialog):
     def __init__(self, parent=None, is_dismissed: bool = False) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
-        self.setWindowTitle("TaskCalendar 기능 안내 & 팁")
+        self.setWindowTitle("K캘린더 기능 안내 & 팁")
         self.setWindowIcon(_dialog_icon())
         self.setModal(False)
         self.setWindowModality(Qt.WindowModality.NonModal)
@@ -7139,7 +7139,7 @@ class WelcomeFeatureIntroDialog(QDialog):
         h_layout = QVBoxLayout(header)
         h_layout.setContentsMargins(12, 10, 12, 10)
         h_layout.setSpacing(4)
-        h_title = QLabel("💡 TaskCalendar 기능 소개 & 안내")
+        h_title = QLabel("💡 K캘린더 기능 소개 & 안내")
         h_title.setObjectName("headerTitle")
         h_sub = QLabel("환경설정에서 업무 스타일에 맞춰 다양한 기능을 자유롭게 On/Off 할 수 있습니다.")
         h_sub.setObjectName("headerSubtitle")
