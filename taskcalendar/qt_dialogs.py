@@ -4260,10 +4260,26 @@ class FloatingGroupDialog(QDialog):
         self.refresh_memos()
 
     def _on_card_clicked(self, entry: CalendarEntry) -> None:
-        self._open_memo(entry)
+        self._on_card_toggle_open(entry)
 
     def _on_card_double_clicked(self, entry: CalendarEntry) -> None:
-        self._open_memo(entry)
+        parent = self._owner_window
+        if not parent or not hasattr(parent, "_active_memo_dialogs"):
+            return
+        key = int(entry.entry_id) if entry.entry_id is not None else None
+        dlg = None
+        if key is not None and key in parent._active_memo_dialogs:
+            dlg = parent._active_memo_dialogs.get(key)
+        elif entry.entry_id is not None and str(entry.entry_id) in parent._active_memo_dialogs:
+            dlg = parent._active_memo_dialogs.get(str(entry.entry_id))
+
+        if dlg and dlg.isVisible():
+            dlg.show()
+            dlg.raise_()
+            dlg.activateWindow()
+        else:
+            self._open_memo(entry)
+        self.update_open_statuses()
 
     def _open_memo(self, entry: CalendarEntry) -> None:
         if self._owner_window and hasattr(self._owner_window, "_edit_entry"):
@@ -4275,12 +4291,14 @@ class FloatingGroupDialog(QDialog):
         if not parent or not hasattr(parent, "_active_memo_dialogs"):
             return
         key = int(entry.entry_id) if entry.entry_id is not None else None
-        if key in parent._active_memo_dialogs:
+        dlg = None
+        if key is not None and key in parent._active_memo_dialogs:
             dlg = parent._active_memo_dialogs.get(key)
-            if dlg and dlg.isVisible():
-                dlg.close()
-            else:
-                self._open_memo(entry)
+        elif entry.entry_id is not None and str(entry.entry_id) in parent._active_memo_dialogs:
+            dlg = parent._active_memo_dialogs.get(str(entry.entry_id))
+
+        if dlg and dlg.isVisible():
+            dlg.close()
         else:
             self._open_memo(entry)
         self.update_open_statuses()
