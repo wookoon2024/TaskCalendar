@@ -256,12 +256,37 @@ def app_stylesheet(p: dict[str, str]) -> str:
         border-radius: 6px;
         padding: 5px 10px;
     }}
+    QPushButton#topbarButton:checked {{
+        background: {p['accent_soft']};
+        border: 1px solid {p['accent']};
+    }}
     QPushButton#primary {{
         background: {p['accent']};
         color: #fff;
         border: 1px solid {p['accent']};
         border-radius: 6px;
         padding: 5px 10px;
+    }}
+    QLabel#topbarMuted {{
+        color: {p['muted']};
+        font-size: 11px;
+        background: transparent;
+    }}
+    QSlider#topbarSlider::groove:horizontal {{
+        height: 4px;
+        background: {p['line']};
+        border-radius: 2px;
+    }}
+    QSlider#topbarSlider::sub-page:horizontal {{
+        background: {p['accent']};
+        border-radius: 2px;
+    }}
+    QSlider#topbarSlider::handle:horizontal {{
+        background: {p['accent']};
+        width: 10px;
+        height: 10px;
+        margin: -4px 0px;
+        border-radius: 5px;
     }}
     QPushButton:focus, QToolButton:focus {{
         outline: none;
@@ -825,6 +850,7 @@ class AlertToast(QWidget):
     def __init__(self, palette: dict[str, str], title: str, detail: str) -> None:
         super().__init__(None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_DeleteOnClose, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setFixedSize(ALERT_BOX_WIDTH, ALERT_BOX_HEIGHT)
 
         root = QVBoxLayout(self)
@@ -909,6 +935,12 @@ class MainWindow(QMainWindow):
         self.memo_title_only = self.repository.get_setting("memo_title_only", "1") == "1"
         self._sidebar_visible = self.repository.get_setting("sidebar_visible", "1") == "1"
         self._topbar_visible = self.repository.get_setting("topbar_visible", "1") == "1"
+        try:
+            self._window_opacity_pct = int(self.repository.get_setting("window_opacity", "100") or "100")
+        except (TypeError, ValueError):
+            self._window_opacity_pct = 100
+        self._window_opacity_pct = max(30, min(100, self._window_opacity_pct))
+        self._always_on_top = self.repository.get_setting("always_on_top", "0") == "1"
         self.search_query = ""
         self.search_results: list[CalendarEntry] = []
         self._memo_card_widgets: dict[int, QWidget] = {}
@@ -956,6 +988,7 @@ class MainWindow(QMainWindow):
         self._apply_initial_window_state()
 
         self._build()
+        self._apply_window_prefs()
         QApplication.instance().installEventFilter(self)
         self._setup_calendar_navigation_shortcuts()
         self._setup_sticker_nudge_shortcuts()
@@ -1102,6 +1135,32 @@ class MainWindow(QMainWindow):
         right.addWidget(settings_button)
 
 
+
+        self._opacity_label = QLabel("투명도")
+        self._opacity_label.setObjectName("topbarMuted")
+        right.addWidget(self._opacity_label)
+
+        self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self._opacity_slider.setObjectName("topbarSlider")
+        self._opacity_slider.setRange(30, 100)
+        self._opacity_slider.setFixedWidth(70)
+        self._opacity_slider.setValue(int(self._window_opacity_pct))
+        self._opacity_slider.setToolTip("창 투명도 조절")
+        self._opacity_slider.valueChanged.connect(self._on_window_opacity_changed)
+        right.addWidget(self._opacity_slider)
+
+        self._opacity_val_label = QLabel(f"{int(self._window_opacity_pct)}%")
+        self._opacity_val_label.setObjectName("topbarMuted")
+        self._opacity_val_label.setFixedWidth(32)
+        right.addWidget(self._opacity_val_label)
+
+        self._pin_btn = self._top_button("", 28)
+        self._pin_btn.setCheckable(True)
+        self._pin_btn.setChecked(bool(self._always_on_top))
+        self._pin_btn.setIconSize(QSize(14, 14))
+        self._pin_btn.clicked.connect(self._on_pin_toggled)
+        right.addWidget(self._pin_btn)
+        self._update_pin_btn()
 
         self.topbar_collapse_btn = self._top_button("", 28)
         self.topbar_collapse_btn.setIcon(QIcon(str(asset_path("chevron_up.svg"))))
@@ -1487,6 +1546,84 @@ class MainWindow(QMainWindow):
         if width is not None:
             button.setFixedWidth(width)
         return button
+
+    def _set_topmost_native(self, topmost: bool) -> None:
+        try:
+            hwnd = int(self.winId())
+            user32 = ctypes.windll.user32
+            user32.SetWindowPos.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_uint,
+            ]
+            HWND_TOPMOST = ctypes.c_void_p(-1)
+            HWND_NOTOPMOST = ctypes.c_void_p(-2)
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            user32.SetWindowPos(
+                ctypes.c_void_p(hwnd),
+                HWND_TOPMOST if topmost else HWND_NOTOPMOST,
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        except Exception:
+            pass
+
+    def _update_pin_btn(self) -> None:
+        btn = getattr(self, "_pin_btn", None)
+        if btn is None:
+            return
+        if getattr(self, "_always_on_top", False):
+            btn.setIcon(QIcon(str(asset_path("pin_active.svg"))))
+            btn.setToolTip("항상 위에 고정 해제")
+        else:
+            btn.setIcon(QIcon(str(asset_path("pin_inactive.svg"))))
+            btn.setToolTip("항상 위에 고정")
+
+    def _on_pin_toggled(self, checked: bool) -> None:
+        self._always_on_top = bool(checked)
+        self._set_topmost_native(self._always_on_top)
+        self._update_pin_btn()
+        self._persist_window_prefs()
+
+    def _on_window_opacity_changed(self, value: int) -> None:
+        self._window_opacity_pct = max(30, min(100, int(value)))
+        self._apply_window_opacity(self._window_opacity_pct)
+        if hasattr(self, "_opacity_val_label"):
+            self._opacity_val_label.setText(f"{self._window_opacity_pct}%")
+        self._persist_window_prefs()
+
+    def _apply_window_opacity(self, percent: int) -> None:
+        try:
+            self.setWindowOpacity(max(0.3, min(1.0, percent / 100.0)))
+        except Exception:
+            pass
+
+    def _persist_window_prefs(self) -> None:
+        try:
+            self.repository.set_setting("window_opacity", str(int(getattr(self, "_window_opacity_pct", 100))))
+            self.repository.set_setting("always_on_top", "1" if getattr(self, "_always_on_top", False) else "0")
+            self.repository.save()
+        except Exception:
+            pass
+
+    def _apply_window_prefs(self) -> None:
+        if hasattr(self, "_opacity_slider"):
+            self._opacity_slider.blockSignals(True)
+            self._opacity_slider.setValue(int(getattr(self, "_window_opacity_pct", 100)))
+            self._opacity_slider.blockSignals(False)
+        if hasattr(self, "_opacity_val_label"):
+            self._opacity_val_label.setText(f"{int(getattr(self, '_window_opacity_pct', 100))}%")
+        if hasattr(self, "_pin_btn"):
+            self._pin_btn.setChecked(bool(getattr(self, "_always_on_top", False)))
+        self._apply_window_opacity(int(getattr(self, "_window_opacity_pct", 100)))
+        self._set_topmost_native(bool(getattr(self, "_always_on_top", False)))
+        self._update_pin_btn()
 
     def _setup_tray_icon(self) -> None:
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -4530,6 +4667,8 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("show_solar_terms", "1" if getattr(self, "show_solar_terms", True) else "0")
             self.repository.set_setting("sticker_animation_enabled", "1" if getattr(self, "_sticker_animation_enabled", True) else "0")
             self.repository.set_setting("memo_title_only", "1" if getattr(self, "memo_title_only", True) else "0")
+            self.repository.set_setting("window_opacity", str(int(getattr(self, "_window_opacity_pct", 100))))
+            self.repository.set_setting("always_on_top", "1" if getattr(self, "_always_on_top", False) else "0")
             self._remember_window_state()
             self._persist_window_state()
             if getattr(self, "_memos_restored", False):
@@ -4568,6 +4707,15 @@ class MainWindow(QMainWindow):
         self._topbar_visible = self.repository.get_setting("topbar_visible", "1") == "1"
         self._apply_sidebar_visibility(self._sidebar_visible, save=False)
         self._apply_topbar_visibility(self._topbar_visible, save=False)
+
+        # 3b. Window opacity & always-on-top
+        try:
+            self._window_opacity_pct = int(self.repository.get_setting("window_opacity", "100") or "100")
+        except (TypeError, ValueError):
+            self._window_opacity_pct = 100
+        self._window_opacity_pct = max(30, min(100, self._window_opacity_pct))
+        self._always_on_top = self.repository.get_setting("always_on_top", "0") == "1"
+        self._apply_window_prefs()
 
         # 4. Stickers
         self._sticker_store = self._load_sticker_store()
@@ -5516,6 +5664,8 @@ class MainWindow(QMainWindow):
             self._sync_open_group_ids(persist=True)
             self.repository.set_setting("sidebar_visible", "1" if getattr(self, "_sidebar_visible", True) else "0")
             self.repository.set_setting("topbar_visible", "1" if getattr(self, "_topbar_visible", True) else "0")
+            self.repository.set_setting("window_opacity", str(int(getattr(self, "_window_opacity_pct", 100))))
+            self.repository.set_setting("always_on_top", "1" if getattr(self, "_always_on_top", False) else "0")
             for k, dlg in list(self._active_memo_dialogs.items()):
                 try:
                     dlg.close()
@@ -5541,6 +5691,8 @@ class MainWindow(QMainWindow):
             self._sync_open_group_ids(persist=True)
             self.repository.set_setting("sidebar_visible", "1" if getattr(self, "_sidebar_visible", True) else "0")
             self.repository.set_setting("topbar_visible", "1" if getattr(self, "_topbar_visible", True) else "0")
+            self.repository.set_setting("window_opacity", str(int(getattr(self, "_window_opacity_pct", 100))))
+            self.repository.set_setting("always_on_top", "1" if getattr(self, "_always_on_top", False) else "0")
             self.repository.save()
             self.hide()
             event.ignore()
