@@ -104,6 +104,12 @@ def _strip_html_to_plain_text(text: str) -> str:
     return "\n".join(line.strip() for line in clean.splitlines() if line.strip())
 
 
+def _safe_excel_cell(val: object) -> object:
+    if isinstance(val, str) and val.startswith(("=", "+", "-", "@")):
+        return "'" + val
+    return val
+
+
 def export_entries_to_excel(
     file_path: Path,
     entries: list[CalendarEntry],
@@ -119,15 +125,15 @@ def export_entries_to_excel(
         ws.append(
             [
                 entry.entry_type.value,
-                entry.title,
-                _strip_html_to_plain_text(entry.description),
+                _safe_excel_cell(entry.title),
+                _safe_excel_cell(_strip_html_to_plain_text(entry.description)),
                 _iso_date(entry.day),
                 _iso_date(entry.start_date),
                 _iso_date(entry.end_date),
                 entry.start_time,
                 entry.end_time,
                 int(entry.all_day),
-                entry.assignee,
+                _safe_excel_cell(entry.assignee),
                 entry.status,
                 json.dumps(entry.attachments, ensure_ascii=False),
                 int(entry.recurrence_enabled),

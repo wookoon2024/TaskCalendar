@@ -2897,6 +2897,21 @@ class EntryDialog(QDialog):
         if not target or not target.exists():
             QMessageBox.warning(self, "오류", "첨부파일 원본을 찾을 수 없습니다.")
             return
+
+        dangerous_exts = {".exe", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".scr", ".com", ".hta", ".cpl", ".msi", ".wsf", ".reg"}
+        if target.suffix.lower() in dangerous_exts:
+            ret = QMessageBox.warning(
+                self,
+                "보안 확인",
+                f"선택한 첨부파일({target.name})은 실행 가능한 스크립트/프로그램 파일입니다.\n"
+                "신뢰할 수 없는 파일인 경우 악성 코드가 실행될 수 있습니다.\n\n"
+                "정말 이 파일을 실행하시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+
         try:
             import os
             os.startfile(str(target.resolve()))

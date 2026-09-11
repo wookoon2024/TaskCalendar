@@ -55,7 +55,7 @@ def run() -> None:
 
     _set_windows_app_id()
     app = ensure_qt_application()
-    app.setApplicationName("캘린더")
+    app.setApplicationName("K캘린더")
     icon = app_icon()
     if not icon.isNull():
         app.setWindowIcon(icon)

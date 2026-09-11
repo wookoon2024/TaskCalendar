@@ -42,8 +42,12 @@ def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -
 
     extracted_settings: dict[str, str] | None = None
     with tempfile.TemporaryDirectory() as tmpdir:
-        tmp_path = Path(tmpdir)
+        tmp_path = Path(tmpdir).resolve()
         with zipfile.ZipFile(zip_filepath, "r") as zipf:
+            for member in zipf.infolist():
+                dest_path = (tmp_path / member.filename).resolve()
+                if not str(dest_path).startswith(str(tmp_path)):
+                    raise ValueError(f"보안 위험 감지: 비정상적인 백업 파일 경로({member.filename})입니다.")
             zipf.extractall(tmp_path)
 
         extracted_enc = tmp_path / "taskcalendar.db.enc"
