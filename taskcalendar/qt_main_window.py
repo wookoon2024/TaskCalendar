@@ -1248,21 +1248,6 @@ class MainWindow(QMainWindow):
         self.prev_button.setIcon(QIcon(str(asset_path("chevron_left.svg"))))
         self.prev_button.setIconSize(QSize(14, 14))
         self.prev_button.setToolTip("이전 달")
-        self.prev_button.setStyleSheet("""
-            QPushButton {
-                font-size: 12px;
-                font-weight: bold;
-                color: #1e293b;
-                background: #f8fafc;
-                border: 1px solid #94a3b8;
-                border-radius: 6px;
-            }
-            QPushButton:hover {
-                background: #e2e8f0;
-                border-color: #0284c7;
-                color: #0284c7;
-            }
-        """)
         self.prev_button.clicked.connect(lambda: self._change_month(-1))
         left.addWidget(self.prev_button)
 
@@ -1281,21 +1266,6 @@ class MainWindow(QMainWindow):
         self.next_button.setIcon(QIcon(str(asset_path("chevron_right.svg"))))
         self.next_button.setIconSize(QSize(14, 14))
         self.next_button.setToolTip("다음 달")
-        self.next_button.setStyleSheet("""
-            QPushButton {
-                font-size: 12px;
-                font-weight: bold;
-                color: #1e293b;
-                background: #f8fafc;
-                border: 1px solid #94a3b8;
-                border-radius: 6px;
-            }
-            QPushButton:hover {
-                background: #e2e8f0;
-                border-color: #0284c7;
-                color: #0284c7;
-            }
-        """)
         self.next_button.clicked.connect(lambda: self._change_month(1))
         left.addWidget(self.next_button)
         topbar_layout.addStretch(1)
