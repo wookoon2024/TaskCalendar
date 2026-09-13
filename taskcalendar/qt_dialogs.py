@@ -2588,11 +2588,22 @@ class EntryDialog(QDialog):
                 self._geo_save_timer.stop()
             if hasattr(self, "_save_timer") and self._save_timer.isActive():
                 self._save_timer.stop()
-            self.hide()
-            from PySide6.QtWidgets import QApplication
-            QApplication.processEvents()
 
             parent = getattr(self, "_owner_window", None) or self.parent()
+
+            # Seamlessly transfer focus to the next memo before hiding this one
+            # to prevent Windows from falling back to the main calendar and causing flicker
+            if parent and hasattr(parent, "_active_memo_dialogs"):
+                remaining = [
+                    d for d in parent._active_memo_dialogs.values()
+                    if d is not None and d is not self and d.isVisible()
+                ]
+                if remaining:
+                    remaining[-1].raise_()
+                    remaining[-1].activateWindow()
+
+            self.hide()
+
             if self.entry and self.entry.entry_id and parent and hasattr(parent, "repository"):
                 target_id = self.entry.entry_id
                 parent.repository.delete_entry(target_id)
@@ -2615,21 +2626,6 @@ class EntryDialog(QDialog):
                         parent._refresh_all_group_dialogs()
                     except Exception:
                         pass
-            if parent and hasattr(parent, "_raise_memos_above_calendar"):
-                try:
-                    parent._raise_memos_above_calendar()
-                    from PySide6.QtCore import QTimer
-                    QTimer.singleShot(0, parent._raise_memos_above_calendar)
-                    QTimer.singleShot(60, parent._raise_memos_above_calendar)
-                except Exception:
-                    pass
-            if parent and hasattr(parent, "_active_memo_dialogs"):
-                remaining = [
-                    d for d in parent._active_memo_dialogs.values()
-                    if d is not None and d is not self and d.isVisible()
-                ]
-                if remaining:
-                    remaining[-1].activateWindow()
             self.close()
 
     def _on_theme_selected(self, key: str) -> None:
@@ -3360,9 +3356,21 @@ class EntryDialog(QDialog):
         if getattr(self, "_closing", False):
             return
         self._closing = True
+
+        parent = getattr(self, "_owner_window", None) or self.parent()
+
+        # Seamlessly transfer focus to the next memo before hiding this one
+        if parent and hasattr(parent, "_active_memo_dialogs"):
+            remaining = [
+                d for d in parent._active_memo_dialogs.values()
+                if d is not None and d is not self and d.isVisible()
+            ]
+            if remaining:
+                remaining[-1].raise_()
+                remaining[-1].activateWindow()
+
         self.hide()
         if self.entry_type == EntryType.MEMO:
-            parent = getattr(self, "_owner_window", None) or self.parent()
             if parent and getattr(parent, "_is_app_quitting", False):
                 self.close()
                 return
@@ -3388,21 +3396,6 @@ class EntryDialog(QDialog):
                         parent._refresh_all_group_dialogs(status_only=True)
                     except Exception:
                         pass
-                if parent and hasattr(parent, "_raise_memos_above_calendar"):
-                    try:
-                        parent._raise_memos_above_calendar()
-                        from PySide6.QtCore import QTimer
-                        QTimer.singleShot(0, parent._raise_memos_above_calendar)
-                        QTimer.singleShot(60, parent._raise_memos_above_calendar)
-                    except Exception:
-                        pass
-                if parent and hasattr(parent, "_active_memo_dialogs"):
-                    remaining = [
-                        d for d in parent._active_memo_dialogs.values()
-                        if d is not None and d is not self and d.isVisible()
-                    ]
-                    if remaining:
-                        remaining[-1].activateWindow()
         self.close()
 
     def closeEvent(self, event) -> None:
