@@ -6205,7 +6205,10 @@ class MainWindow(QMainWindow):
                 setattr(self, "_batch_updating_memos", False)
             self._sync_open_memo_ids(persist=False)
         self.repository.save()
-        self.refresh()
+        if entry.entry_type == EntryType.MEMO:
+            self._render_sidebar()
+        else:
+            self.refresh()
         if hasattr(self, "_refresh_all_group_dialogs"):
             try:
                 self._refresh_all_group_dialogs()

@@ -2568,6 +2568,12 @@ class EntryDialog(QDialog):
             self._is_deleted = True
             if hasattr(self, "_geo_save_timer") and self._geo_save_timer.isActive():
                 self._geo_save_timer.stop()
+            if hasattr(self, "_save_timer") and self._save_timer.isActive():
+                self._save_timer.stop()
+            self.hide()
+            from PySide6.QtWidgets import QApplication
+            QApplication.processEvents()
+
             parent = getattr(self, "_owner_window", None) or self.parent()
             if self.entry and self.entry.entry_id and parent and hasattr(parent, "repository"):
                 target_id = self.entry.entry_id
@@ -2581,9 +2587,9 @@ class EntryDialog(QDialog):
                 if hasattr(parent, "_sync_open_memo_ids"):
                     parent._sync_open_memo_ids(persist=False)
                 parent.repository.save()
-                if hasattr(parent, "refresh"):
+                if hasattr(parent, "_render_sidebar"):
                     try:
-                        parent.refresh()
+                        parent._render_sidebar()
                     except Exception:
                         pass
                 if hasattr(parent, "_refresh_all_group_dialogs"):
@@ -2591,7 +2597,6 @@ class EntryDialog(QDialog):
                         parent._refresh_all_group_dialogs()
                     except Exception:
                         pass
-            self._save_timer.stop()
             self.close()
 
     def _on_theme_selected(self, key: str) -> None:
@@ -4432,14 +4437,16 @@ class FloatingGroupDialog(QDialog):
                     parent._sync_open_memo_ids(persist=False)
                 parent.repository.save()
                 self.refresh_memos()
-                if hasattr(parent, "refresh"):
+                if hasattr(parent, "_render_sidebar"):
                     try:
-                        parent.refresh()
+                        parent._render_sidebar()
                     except Exception:
                         pass
-                if hasattr(parent, "_refresh_all_group_dialogs"):
+                if hasattr(parent, "_active_group_dialogs"):
                     try:
-                        parent._refresh_all_group_dialogs()
+                        for gid, gdlg in list(parent._active_group_dialogs.items()):
+                            if gdlg and gdlg != self and gdlg.isVisible() and hasattr(gdlg, "refresh_memos"):
+                                gdlg.refresh_memos()
                     except Exception:
                         pass
 
