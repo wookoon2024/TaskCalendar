@@ -2615,6 +2615,21 @@ class EntryDialog(QDialog):
                         parent._refresh_all_group_dialogs()
                     except Exception:
                         pass
+            if parent and hasattr(parent, "_raise_memos_above_calendar"):
+                try:
+                    parent._raise_memos_above_calendar()
+                    from PySide6.QtCore import QTimer
+                    QTimer.singleShot(0, parent._raise_memos_above_calendar)
+                    QTimer.singleShot(60, parent._raise_memos_above_calendar)
+                except Exception:
+                    pass
+            if parent and hasattr(parent, "_active_memo_dialogs"):
+                remaining = [
+                    d for d in parent._active_memo_dialogs.values()
+                    if d is not None and d is not self and d.isVisible()
+                ]
+                if remaining:
+                    remaining[-1].activateWindow()
             self.close()
 
     def _on_theme_selected(self, key: str) -> None:
@@ -3373,6 +3388,21 @@ class EntryDialog(QDialog):
                         parent._refresh_all_group_dialogs(status_only=True)
                     except Exception:
                         pass
+                if parent and hasattr(parent, "_raise_memos_above_calendar"):
+                    try:
+                        parent._raise_memos_above_calendar()
+                        from PySide6.QtCore import QTimer
+                        QTimer.singleShot(0, parent._raise_memos_above_calendar)
+                        QTimer.singleShot(60, parent._raise_memos_above_calendar)
+                    except Exception:
+                        pass
+                if parent and hasattr(parent, "_active_memo_dialogs"):
+                    remaining = [
+                        d for d in parent._active_memo_dialogs.values()
+                        if d is not None and d is not self and d.isVisible()
+                    ]
+                    if remaining:
+                        remaining[-1].activateWindow()
         self.close()
 
     def closeEvent(self, event) -> None:
