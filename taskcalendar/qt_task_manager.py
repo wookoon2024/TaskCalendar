@@ -1533,6 +1533,8 @@ class TaskManagerDialog(QDialog):
             vp_pos = self.table.viewport().mapFromGlobal(QCursor.pos())
             if not self.table.viewport().rect().contains(vp_pos):
                 self._set_hovered_row(-1)
+        elif obj == self.table.viewport() and event.type() == QEvent.Resize:
+            self._adjust_columns_to_fill_width()
         return super().eventFilter(obj, event)
 
     def apply_palette(self, palette: dict[str, str]) -> None:
@@ -1845,6 +1847,21 @@ class TaskManagerDialog(QDialog):
         """사용자가 헤더를 좌우로 드래그하여 컬럼 크기를 조절할 때 호출 (디바운스 저장)"""
         if getattr(self, "_restoring_columns", False):
             return
+
+        viewport_w = self.table.viewport().width()
+        total_w = sum(self.table.columnWidth(i) for i in range(self.table.columnCount()))
+
+        # 사용자가 컬럼을 줄여서 오른쪽에 빈 공간이 생길 경우(total_w < viewport_w),
+        # 비고(col 5) 또는 제목(col 2)이 빈 공간을 채워 100% 가로 너비를 항상 유지
+        if total_w < viewport_w:
+            gap = viewport_w - total_w
+            target_col = 5 if logicalIndex != 5 else 2
+            self._restoring_columns = True
+            try:
+                self.table.setColumnWidth(target_col, self.table.columnWidth(target_col) + gap)
+            finally:
+                self._restoring_columns = False
+
         if hasattr(self, "_save_columns_timer"):
             self._save_columns_timer.start()
 
@@ -1857,8 +1874,42 @@ class TaskManagerDialog(QDialog):
         except Exception:
             pass
 
+    def _adjust_columns_to_fill_width(self) -> None:
+        """테이블이 가로 너비(100%)를 빈틈없이 꽉 채우도록 여유 공간을 유연 컬럼(제목, 비고)에 배분"""
+        if not hasattr(self, "table") or self.table is None:
+            return
+        viewport_w = self.table.viewport().width()
+        if viewport_w <= 150:
+            return
+
+        total_w = sum(self.table.columnWidth(i) for i in range(self.table.columnCount()))
+        diff = viewport_w - total_w
+
+        if diff != 0:
+            col2_w = self.table.columnWidth(2)
+            col5_w = self.table.columnWidth(5)
+
+            add_col2 = int(diff * 0.4)
+            add_col5 = diff - add_col2
+
+            new_col2 = max(160, col2_w + add_col2)
+            new_col5 = max(120, col5_w + add_col5)
+
+            self._restoring_columns = True
+            try:
+                self.table.setColumnWidth(2, new_col2)
+                self.table.setColumnWidth(5, new_col5)
+
+                current_total = sum(self.table.columnWidth(i) for i in range(self.table.columnCount()))
+                remaining = viewport_w - current_total
+                if remaining != 0:
+                    final_col5 = max(100, self.table.columnWidth(5) + remaining)
+                    self.table.setColumnWidth(5, final_col5)
+            finally:
+                self._restoring_columns = False
+
     def _restore_column_widths(self) -> None:
-        """저장소에 저장된 사용자 정의 컬럼 너비 복원"""
+        """저장소에 저장된 사용자 정의 컬럼 너비 복원 후 100% 가로 너비 자동 맞춤"""
         self._restoring_columns = True
         try:
             raw = self.repository.get_setting("task_table_column_widths")
@@ -1879,6 +1930,15 @@ class TaskManagerDialog(QDialog):
                 self.table.setColumnWidth(i, w)
         finally:
             self._restoring_columns = False
+            self._adjust_columns_to_fill_width()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        QTimer.singleShot(0, self._adjust_columns_to_fill_width)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._adjust_columns_to_fill_width()
 
     def closeEvent(self, event) -> None:
         self._save_column_widths()

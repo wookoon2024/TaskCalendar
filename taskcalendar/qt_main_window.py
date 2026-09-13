@@ -1152,6 +1152,7 @@ class MainWindow(QMainWindow):
         self._action_icons: dict[str, QIcon] = self._load_action_icons()
         self._holidays_fixed, self._holidays_yearly = self._load_holidays()
         self.memo_title_only = self.repository.get_setting("memo_title_only", "1") == "1"
+        self.calendar_sidebar_title_only = self.repository.get_setting("calendar_sidebar_title_only", "0") == "1"
         self._sidebar_visible = self.repository.get_setting("sidebar_visible", "1") == "1"
         self._topbar_visible = self.repository.get_setting("topbar_visible", "1") == "1"
         try:
@@ -4331,6 +4332,7 @@ class MainWindow(QMainWindow):
             item = self.sidebar_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
                 widget.deleteLater()
         self._memo_card_widgets.clear()
         self.info_title.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {self.palette['text']}; background: transparent; border: none;")
@@ -4444,6 +4446,8 @@ class MainWindow(QMainWindow):
     def _sidebar_card(self, entry: CalendarEntry) -> QWidget:
         is_completed = self._is_entry_completed_on_day(entry, self.selected_day)
         hide_memo_body = (entry.entry_type == EntryType.MEMO and getattr(self, "memo_title_only", True))
+        hide_cal_body = (entry.entry_type != EntryType.MEMO and getattr(self, "calendar_sidebar_title_only", False))
+        hide_body = hide_memo_body or hide_cal_body
         card: QFrame
         is_memo = (self.sidebar_mode == "memo" and entry.entry_type == EntryType.MEMO)
         is_day_entry = (self.sidebar_mode == "day" and entry.entry_type != EntryType.MEMO)
@@ -4531,14 +4535,23 @@ class MainWindow(QMainWindow):
 
             meta_layout.addWidget(left_col, 1)
         else:
-            left_text = "  ".join([part for part in [lead, *details] if part]).strip()
+            if hide_cal_body:
+                lead_parts = [part for part in [lead, entry.title, *details] if part]
+                left_text = "  ".join(lead_parts).strip() or entry.title or "일정"
+            else:
+                left_text = "  ".join([part for part in [lead, *details] if part]).strip()
             left_label = ClickableLabel(left_text)
             left_label.clicked.connect(lambda e=entry: self._open_entry_view(e))
-            left_label.setObjectName("muted")
-            left_label.setStyleSheet(f"color: {self.palette['muted']}; background: transparent; border: none;")
+            left_label.setObjectName("muted" if not hide_cal_body else "")
+            left_label.setStyleSheet(
+                f"color: {self.palette['text'] if hide_cal_body else self.palette['muted']}; "
+                f"font-size: 13px; font-weight: {'500' if hide_cal_body else 'normal'}; "
+                "background: transparent; border: none;"
+            )
             left_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             left_label.setMinimumWidth(0)
             meta_layout.addWidget(left_label, 1)
+
 
         actions_wrap = QWidget()
         actions_wrap.setStyleSheet("background: transparent;")
@@ -4610,7 +4623,7 @@ class MainWindow(QMainWindow):
         meta_layout.addWidget(actions_wrap, 0, Qt.AlignVCenter | Qt.AlignRight)
         layout.addWidget(meta_row)
 
-        if entry.description and not hide_memo_body:
+        if entry.description and not hide_body:
             desc = ClickableTextEdit()
             desc.setReadOnly(True)
             if entry.description.strip().startswith("<"):
@@ -4634,7 +4647,7 @@ class MainWindow(QMainWindow):
                 desc.clicked.connect(lambda e=entry: self._open_entry_view(e))
             layout.addWidget(desc)
 
-        if entry.attachments and not hide_memo_body:
+        if entry.attachments and not hide_body:
             attach_block = QWidget()
             attach_block.setStyleSheet("background: transparent; border: none;")
             attach_block_layout = QVBoxLayout(attach_block)
@@ -4687,8 +4700,9 @@ class MainWindow(QMainWindow):
 
             layout.addWidget(attach_block)
 
-        if (entry.entry_type == EntryType.MEMO and hide_memo_body) or (not entry.description and not entry.attachments):
+        if hide_body or (not entry.description and not entry.attachments):
             card.setFixedHeight(38)
+
 
         return card
 
@@ -5842,6 +5856,7 @@ class MainWindow(QMainWindow):
             memo_expand_anchor=self.repository.get_setting("memo_expand_anchor", "left"),
             show_window_controls=getattr(self, "_window_controls_visible", True),
             show_task_count_on_calendar=getattr(self, "show_task_count_on_calendar", True),
+            calendar_sidebar_title_only=getattr(self, "calendar_sidebar_title_only", False),
         )
         if dialog.exec() and dialog.result is not None:
             action = str(dialog.result.get("action", "apply"))
@@ -5889,6 +5904,12 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("lunar_display_frequency", self.lunar_display_frequency)
             self.show_solar_terms = bool(dialog.result.get("show_solar_terms", True))
             self.repository.set_setting("show_solar_terms", "1" if self.show_solar_terms else "0")
+            new_cal_title_only = bool(dialog.result.get("calendar_sidebar_title_only", False))
+            self.repository.set_setting("calendar_sidebar_title_only", "1" if new_cal_title_only else "0")
+            if getattr(self, "calendar_sidebar_title_only", False) != new_cal_title_only:
+                self.calendar_sidebar_title_only = new_cal_title_only
+                if hasattr(self, "_render_sidebar") and getattr(self, "sidebar_mode", "") == "day":
+                    self._render_sidebar()
             
             # Memo Settings
             self.repository.set_setting("memo_default_color", str(dialog.result.get("memo_default_color", "yellow")))

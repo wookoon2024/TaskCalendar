@@ -11,31 +11,96 @@
       --light-purple: #F3F0FF;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    /* 전체 창 외부 스크롤 완벽 제거 (Flex 레이아웃 고정) */
+    html, body {
+      height: 100%;
+      max-height: 100%;
+      overflow: hidden;
+      margin: 0;
+      padding: 0;
+    }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Segoe UI", Roboto, sans-serif;
       background: #F8F9FA;
       color: #333;
-      padding: 12px;
+      padding: 10px 12px;
       font-size: 12px;
+      user-select: none;
+      display: flex;
+      flex-direction: column;
     }
-    .header {
-      font-size: 14px;
+
+    /* 상단 헤더 영역 (등록 화면에서만 표시) */
+    .header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      flex-shrink: 0;
+    }
+    .header-title {
+      font-size: 13px;
       font-weight: bold;
-      margin-bottom: 10px;
       color: var(--primary);
+      display: flex;
+      align-items: center;
+      gap: 5px;
     }
+    .btn-config-toggle {
+      background: #EDE9FE;
+      color: var(--primary);
+      border: 1px solid #DDD6FE;
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+    }
+    .btn-config-toggle:hover {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
+    /* 사이트 맞춤 규칙 적용 안내 배지 */
+    .site-rule-badge {
+      background: #F0FDF4;
+      border: 1px solid #BBF7D0;
+      color: #166534;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      flex-shrink: 0;
+    }
+    .domain-label {
+      font-size: 10px;
+      color: #4D7C0F;
+      font-family: monospace;
+    }
+
+    /* 탭 헤더 */
     .tabs-header {
       display: flex;
       background: #EDF2F7;
       border-radius: 8px;
       padding: 3px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
       border: 1px solid var(--border);
       gap: 2px;
+      flex-shrink: 0;
     }
     .tab-btn {
       flex: 1;
-      padding: 7px 0;
+      padding: 6px 0;
       text-align: center;
       font-size: 12px;
       font-weight: 500;
@@ -45,7 +110,6 @@
       border-radius: 6px;
       cursor: pointer;
       transition: all 0.15s ease;
-      user-select: none;
     }
     .tab-btn:hover {
       color: #1E293B;
@@ -56,12 +120,23 @@
       font-weight: bold;
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
     }
-    .fields {
+
+    /* 등록 폼 뷰 */
+    #view-register {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+    }
+    #view-register .fields {
       background: white;
       border: 1px solid var(--border);
       border-radius: 6px;
       padding: 8px 10px;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
     }
     .field-row {
       display: flex;
@@ -71,6 +146,7 @@
     }
     .field-row.field-desc-row {
       align-items: flex-start;
+      flex: 1;
     }
     .field-row.field-desc-row .field-label {
       padding-top: 5px;
@@ -100,6 +176,7 @@
       color: #333;
       background: #fafafa;
       min-width: 0;
+      user-select: text;
     }
     .field-input:focus {
       outline: none;
@@ -116,11 +193,14 @@
       box-sizing: border-box;
       transition: height 0.15s ease;
     }
-    .actions {
+
+    /* 하단 액션 버튼 (공통) */
+    .actions, .config-actions {
       display: flex;
-      gap: 8px;
+      gap: 6px;
+      flex-shrink: 0;
     }
-    .actions button {
+    .actions button, .config-actions button {
       flex: 1;
       padding: 9px;
       border-radius: 6px;
@@ -133,86 +213,616 @@
     .btn-submit:hover { background: var(--primary-hover); }
     .btn-cancel { background: #E2E8F0; color: #4A5568; }
     .btn-cancel:hover { background: #CBD5E0; }
+
+    /* ========== 사이트 맞춤 설정 뷰 ========== */
+    #view-config {
+      display: none;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden; /* 겉 스크롤 방지 */
+    }
+    .config-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+      flex-shrink: 0;
+    }
+    .config-title {
+      font-size: 13px;
+      font-weight: bold;
+      color: #1E293B;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .config-domain-badge {
+      font-size: 10px;
+      background: #EDE9FE;
+      color: var(--primary);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      max-width: 170px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .config-guide {
+      font-size: 11px;
+      color: #64748B;
+      background: #F1F5F9;
+      border-radius: 6px;
+      padding: 6px 8px;
+      margin-bottom: 8px;
+      line-height: 1.4;
+      flex-shrink: 0;
+    }
+    /* 카드 리스트 내부 스크롤만 동작 */
+    .config-scroll-area {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding-right: 3px;
+      margin-bottom: 8px;
+    }
+    .config-scroll-area::-webkit-scrollbar {
+      width: 6px;
+    }
+    .config-scroll-area::-webkit-scrollbar-track {
+      background: #F1F5F9;
+      border-radius: 3px;
+    }
+    .config-scroll-area::-webkit-scrollbar-thumb {
+      background: #CBD5E1;
+      border-radius: 3px;
+    }
+    .config-scroll-area::-webkit-scrollbar-thumb:hover {
+      background: #94A3B8;
+    }
+
+    .cfg-card {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 8px;
+      margin-bottom: 6px;
+    }
+    .cfg-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+    .cfg-card-label {
+      font-weight: 600;
+      font-size: 11px;
+      color: #334155;
+    }
+    .cfg-status-pill {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      font-weight: 500;
+    }
+    .pill-empty {
+      background: #F1F5F9;
+      color: #64748B;
+    }
+    .pill-matched {
+      background: #DCFCE7;
+      color: #15803D;
+    }
+    .pill-fail {
+      background: #FEE2E2;
+      color: #B91C1C;
+    }
+    .pill-none {
+      background: #F1F5F9;
+      color: #475569;
+      border: 1px solid #CBD5E1;
+    }
+    .pill-custom {
+      background: #F3F0FF;
+      color: var(--primary);
+      border: 1px solid #DDD6FE;
+      font-weight: bold;
+    }
+    .cfg-input-group {
+      display: flex;
+      gap: 3px;
+    }
+    .cfg-input {
+      flex: 1;
+      padding: 4px 6px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 11px;
+      background: #FAFAFA;
+      min-width: 0;
+      user-select: text;
+    }
+    .cfg-input:focus {
+      outline: none;
+      border-color: var(--primary);
+      background: white;
+    }
+    .cfg-input:disabled {
+      background: #F1F5F9;
+      color: #94A3B8;
+    }
+    .btn-cfg-search {
+      padding: 4px 7px;
+      background: var(--primary);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.15s ease;
+    }
+    .btn-cfg-search:hover {
+      background: var(--primary-hover);
+    }
+    .btn-cfg-none {
+      padding: 4px 7px;
+      background: #F1F5F9;
+      color: #475569;
+      border: 1px solid #CBD5E1;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+    .btn-cfg-none:hover {
+      background: #E2E8F0;
+      color: #1E293B;
+      border-color: #94A3B8;
+    }
+    .btn-cfg-none.active {
+      background: #64748B;
+      color: white;
+      border-color: #64748B;
+    }
+    .btn-cfg-custom {
+      padding: 4px 7px;
+      background: #F3F0FF;
+      color: var(--primary);
+      border: 1px solid #DDD6FE;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+    .btn-cfg-custom:hover {
+      background: #EDE9FE;
+    }
+    .btn-cfg-custom.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
+    /* 사용자정의 서식(Template) 패널 */
+    .cfg-template-panel {
+      margin-top: 5px;
+      padding: 6px 7px;
+      background: #F8FAFC;
+      border: 1px solid #E2E8F0;
+      border-radius: 5px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .cfg-tpl-input {
+      width: 100%;
+      padding: 4px 6px;
+      border: 1px solid #CBD5E1;
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: inherit;
+      color: #1E293B;
+      background: white;
+      user-select: text;
+    }
+    textarea.cfg-tpl-input {
+      resize: vertical;
+      min-height: 48px;
+      line-height: 1.4;
+    }
+    .cfg-tpl-input:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 1px var(--primary);
+    }
+    .cfg-chips-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 3px;
+    }
+    .cfg-chip-label {
+      font-size: 10px;
+      color: #64748B;
+      font-weight: 600;
+      margin-right: 2px;
+    }
+    .cfg-chip {
+      padding: 2px 5px;
+      background: #FFFFFF;
+      border: 1px solid #CBD5E1;
+      border-radius: 3px;
+      font-size: 10px;
+      color: var(--primary);
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.1s ease;
+    }
+    .cfg-chip:hover {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
+    .cfg-preview-box {
+      margin-top: 5px;
+      padding: 4px 6px;
+      background: #F8FAFC;
+      border: 1px dashed #CBD5E1;
+      border-radius: 4px;
+      font-size: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .cfg-prev-text {
+      color: #1E293B;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .cfg-prev-sel {
+      color: var(--primary);
+      font-family: monospace;
+      font-size: 9px;
+    }
+    .btn-danger {
+      background: #FEE2E2;
+      color: #B91C1C;
+      border: 1px solid #FECACA;
+    }
+    .btn-danger:hover {
+      background: #FCA5A5;
+    }
   </style>
 </head>
 <body>
-  <div class="header">TaskCalendar에 등록</div>
 
-  <div class="tabs-header">
-    <button type="button" class="tab-btn active" id="btn-schedule" data-type="schedule">일정</button>
-    <button type="button" class="tab-btn" id="btn-task" data-type="task">업무</button>
-    <button type="button" class="tab-btn" id="btn-memo" data-type="memo">메모</button>
+  <!-- 상단 헤더 (등록 뷰에서만 표시) -->
+  <div class="header-row" id="header-row">
+    <div class="header-title">TaskCalendar에 등록</div>
+    <button type="button" id="btn-toggle-config" class="btn-config-toggle" title="이 사이트 맞춤 규칙 설정">
+      ⚙️ 사이트 맞춤
+    </button>
   </div>
 
-  <div class="fields">
-    <div class="field-row">
-      <input type="checkbox" id="chk-title" checked>
-      <span class="field-label">제목</span>
-      <input type="text" class="field-input" id="val-title" placeholder="제목">
+  <!-- 사이트 맞춤 규칙 적용 중 안내 배지 -->
+  <div id="site-rule-badge" class="site-rule-badge" style="display: none;">
+    <span>✨ 사이트 맞춤 규칙 적용 중</span>
+    <span id="site-domain-label" class="domain-label"></span>
+  </div>
+
+  <!-- 1. 등록 폼 뷰 (기본) -->
+  <div id="view-register">
+    <div class="tabs-header">
+      <button type="button" class="tab-btn active" id="btn-schedule" data-type="schedule">일정</button>
+      <button type="button" class="tab-btn" id="btn-task" data-type="task">업무</button>
+      <button type="button" class="tab-btn" id="btn-memo" data-type="memo">메모</button>
     </div>
 
-    <!-- 업무 분류 필드 (업무 탭) -->
-    <div class="field-row" id="item-category" style="display: none;">
-      <input type="checkbox" id="chk-category" checked>
-      <span class="field-label">분류</span>
-      <input type="text" class="field-input" id="val-category" list="category-options" placeholder="일반, 공문, 보고, 기안 등">
-      <datalist id="category-options">
-        <option value="일반">
-        <option value="공문">
-        <option value="보고">
-        <option value="기안">
-        <option value="결재">
-        <option value="민원">
-        <option value="예산">
-        <option value="기타">
-      </datalist>
+    <div class="fields">
+      <!-- 제목 -->
+      <div class="field-row">
+        <input type="checkbox" id="chk-title" checked>
+        <span class="field-label">제목</span>
+        <input type="text" class="field-input" id="val-title" placeholder="제목">
+      </div>
+
+      <!-- 업무 분류 필드 (업무 탭) -->
+      <div class="field-row" id="item-category" style="display: none;">
+        <input type="checkbox" id="chk-category" checked>
+        <span class="field-label">분류</span>
+        <input type="text" class="field-input" id="val-category" list="category-options" placeholder="일반, 공문, 보고, 기안 등">
+        <datalist id="category-options">
+          <option value="일반">
+          <option value="공문">
+          <option value="보고">
+          <option value="기안">
+          <option value="결재">
+          <option value="민원">
+          <option value="예산">
+          <option value="기타">
+        </datalist>
+      </div>
+
+      <!-- 기안자 / 작성자 (업무 탭) -->
+      <div class="field-row" id="item-author" style="display: none;">
+        <input type="checkbox" id="chk-author" checked>
+        <span class="field-label">기안자</span>
+        <input type="text" class="field-input" id="val-author" placeholder="기안자 성명/부서">
+      </div>
+
+      <!-- 처리 상태 (업무 탭) -->
+      <div class="field-row" id="item-status" style="display: none;">
+        <input type="checkbox" id="chk-status" checked>
+        <span class="field-label">상태</span>
+        <select class="field-input" id="val-status">
+          <option value="등록" selected>등록</option>
+          <option value="진행중">진행중</option>
+          <option value="완료">완료</option>
+          <option value="보류">보류</option>
+          <option value="취소">취소</option>
+        </select>
+      </div>
+
+      <!-- 날짜 (일정/업무 탭) -->
+      <div class="field-row" id="item-date">
+        <input type="checkbox" id="chk-date" checked>
+        <span class="field-label">날짜</span>
+        <input type="date" class="field-input" id="val-date">
+      </div>
+
+      <!-- 비고 / 세부내용 -->
+      <div class="field-row field-desc-row">
+        <input type="checkbox" id="chk-desc" checked>
+        <span class="field-label">내용</span>
+        <textarea class="field-input" id="val-desc" placeholder="세부내용 또는 메타정보"></textarea>
+      </div>
+
+      <!-- 출처 URL -->
+      <div class="field-row">
+        <input type="checkbox" id="chk-url" checked>
+        <span class="field-label">출처</span>
+        <input type="text" class="field-input" id="val-url" placeholder="URL">
+      </div>
     </div>
 
-    <!-- 기안자 / 작성자 (업무 탭) -->
-    <div class="field-row" id="item-author" style="display: none;">
-      <input type="checkbox" id="chk-author" checked>
-      <span class="field-label">기안자</span>
-      <input type="text" class="field-input" id="val-author" placeholder="기안자 성명/부서">
-    </div>
-
-    <!-- 처리 상태 (업무 탭) -->
-    <div class="field-row" id="item-status" style="display: none;">
-      <input type="checkbox" id="chk-status" checked>
-      <span class="field-label">상태</span>
-      <select class="field-input" id="val-status">
-        <option value="등록" selected>등록</option>
-        <option value="진행중">진행중</option>
-        <option value="완료">완료</option>
-        <option value="보류">보류</option>
-        <option value="취소">취소</option>
-      </select>
-    </div>
-
-    <!-- 날짜 (일정/업무 탭) -->
-    <div class="field-row" id="item-date">
-      <input type="checkbox" id="chk-date" checked>
-      <span class="field-label">날짜</span>
-      <input type="date" class="field-input" id="val-date">
-    </div>
-
-    <!-- 비고 / 세부내용 -->
-    <div class="field-row field-desc-row">
-      <input type="checkbox" id="chk-desc" checked>
-      <span class="field-label">내용</span>
-      <textarea class="field-input" id="val-desc" placeholder="세부내용 또는 메타정보"></textarea>
-    </div>
-
-    <!-- 출처 URL -->
-    <div class="field-row">
-      <input type="checkbox" id="chk-url" checked>
-      <span class="field-label">출처</span>
-      <input type="text" class="field-input" id="val-url" placeholder="URL">
+    <div class="actions">
+      <button class="btn-cancel" id="btn-cancel-action">취소</button>
+      <button class="btn-submit" id="btn-submit-action">등록</button>
     </div>
   </div>
 
-  <div class="actions">
-    <button class="btn-cancel" id="btn-cancel-action">취소</button>
-    <button class="btn-submit" id="btn-submit-action">등록</button>
+  <!-- 2. 사이트 맞춤 설정 뷰 (토글) -->
+  <div id="view-config">
+    <div class="config-title-row">
+      <div class="config-title">⚙️ 사이트 맞춤 추출 설정</div>
+      <span class="config-domain-badge" id="cfg-domain-badge">사이트 도메인</span>
+    </div>
+
+    <div class="config-guide">
+      <b>[검색]</b>으로 요소를 자동 매칭하거나, <b>[사용자정의]</b>를 눌러 <code>{제목}</code>, <code>{분류}</code> 등의 치환 서식을 조합할 수 있습니다.
+    </div>
+
+    <div class="config-scroll-area">
+      <!-- 1. 제목 -->
+      <div class="cfg-card" data-field="title">
+        <div class="cfg-card-header">
+          <span class="cfg-card-label">제목</span>
+          <span class="cfg-status-pill pill-empty" id="cfg-status-title">미설정</span>
+        </div>
+        <div class="cfg-input-group">
+          <input type="text" class="cfg-input" id="cfg-sample-title" placeholder="예: [11번가] 주문서비스기획 담당자 모집">
+          <button type="button" class="btn-cfg-search" data-field="title">검색</button>
+          <button type="button" class="btn-cfg-none" data-field="title">없음</button>
+          <button type="button" class="btn-cfg-custom" data-field="title">사용자정의</button>
+        </div>
+        <!-- 사용자정의 서식 패널 -->
+        <div class="cfg-template-panel" id="cfg-tpl-panel-title" style="display: none;">
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-title" placeholder="치환 서식 입력 (예: [{분류}] {제목})">
+          <div class="cfg-chips-row">
+            <span class="cfg-chip-label">치환 태그:</span>
+            <button type="button" class="cfg-chip" data-field="title" data-tag="{제목}">{제목}</button>
+            <button type="button" class="cfg-chip" data-field="title" data-tag="{분류}">{분류}</button>
+            <button type="button" class="cfg-chip" data-field="title" data-tag="{기안자}">{기안자}</button>
+            <button type="button" class="cfg-chip" data-field="title" data-tag="{상태}">{상태}</button>
+            <button type="button" class="cfg-chip" data-field="title" data-tag="{날짜}">{날짜}</button>
+            <button type="button" class="cfg-chip" data-field="title" data-tag="{내용}">{내용}</button>
+            <button type="button" class="cfg-chip" data-field="title" data-tag="{출처}">{출처}</button>
+          </div>
+        </div>
+        <div class="cfg-preview-box" id="cfg-prev-title" style="display: none;">
+          <span class="cfg-prev-text" id="cfg-prev-text-title"></span>
+          <span class="cfg-prev-sel" id="cfg-prev-sel-title"></span>
+        </div>
+      </div>
+
+      <!-- 2. 분류 -->
+      <div class="cfg-card" data-field="category">
+        <div class="cfg-card-header">
+          <span class="cfg-card-label">분류</span>
+          <span class="cfg-status-pill pill-empty" id="cfg-status-category">미설정</span>
+        </div>
+        <div class="cfg-input-group">
+          <input type="text" class="cfg-input" id="cfg-sample-category" placeholder="예: BIZ, 기획, 공문 등">
+          <button type="button" class="btn-cfg-search" data-field="category">검색</button>
+          <button type="button" class="btn-cfg-none" data-field="category">없음</button>
+          <button type="button" class="btn-cfg-custom" data-field="category">사용자정의</button>
+        </div>
+        <!-- 사용자정의 서식 패널 -->
+        <div class="cfg-template-panel" id="cfg-tpl-panel-category" style="display: none;">
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-category" placeholder="치환 서식 입력 (예: 채용-{분류})">
+          <div class="cfg-chips-row">
+            <span class="cfg-chip-label">치환 태그:</span>
+            <button type="button" class="cfg-chip" data-field="category" data-tag="{제목}">{제목}</button>
+            <button type="button" class="cfg-chip" data-field="category" data-tag="{분류}">{분류}</button>
+            <button type="button" class="cfg-chip" data-field="category" data-tag="{기안자}">{기안자}</button>
+            <button type="button" class="cfg-chip" data-field="category" data-tag="{상태}">{상태}</button>
+            <button type="button" class="cfg-chip" data-field="category" data-tag="{날짜}">{날짜}</button>
+            <button type="button" class="cfg-chip" data-field="category" data-tag="{출처}">{출처}</button>
+          </div>
+        </div>
+        <div class="cfg-preview-box" id="cfg-prev-category" style="display: none;">
+          <span class="cfg-prev-text" id="cfg-prev-text-category"></span>
+          <span class="cfg-prev-sel" id="cfg-prev-sel-category"></span>
+        </div>
+      </div>
+
+      <!-- 3. 기안자 / 작성자 -->
+      <div class="cfg-card" data-field="author">
+        <div class="cfg-card-header">
+          <span class="cfg-card-label">기안자 / 작성자</span>
+          <span class="cfg-status-pill pill-empty" id="cfg-status-author">미설정</span>
+        </div>
+        <div class="cfg-input-group">
+          <input type="text" class="cfg-input" id="cfg-sample-author" placeholder="예: 홍길동, 인사팀, 작성자명 등">
+          <button type="button" class="btn-cfg-search" data-field="author">검색</button>
+          <button type="button" class="btn-cfg-none" data-field="author">없음</button>
+          <button type="button" class="btn-cfg-custom" data-field="author">사용자정의</button>
+        </div>
+        <!-- 사용자정의 서식 패널 -->
+        <div class="cfg-template-panel" id="cfg-tpl-panel-author" style="display: none;">
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-author" placeholder="치환 서식 입력 (예: {기안자})">
+          <div class="cfg-chips-row">
+            <span class="cfg-chip-label">치환 태그:</span>
+            <button type="button" class="cfg-chip" data-field="author" data-tag="{기안자}">{기안자}</button>
+            <button type="button" class="cfg-chip" data-field="author" data-tag="{분류}">{분류}</button>
+            <button type="button" class="cfg-chip" data-field="author" data-tag="{제목}">{제목}</button>
+          </div>
+        </div>
+        <div class="cfg-preview-box" id="cfg-prev-author" style="display: none;">
+          <span class="cfg-prev-text" id="cfg-prev-text-author"></span>
+          <span class="cfg-prev-sel" id="cfg-prev-sel-author"></span>
+        </div>
+      </div>
+
+      <!-- 4. 상태 -->
+      <div class="cfg-card" data-field="status">
+        <div class="cfg-card-header">
+          <span class="cfg-card-label">상태</span>
+          <span class="cfg-status-pill pill-empty" id="cfg-status-status">미설정</span>
+        </div>
+        <div class="cfg-input-group">
+          <input type="text" class="cfg-input" id="cfg-sample-status" placeholder="예: 모집중, 진행중, 접수, 완료 등">
+          <button type="button" class="btn-cfg-search" data-field="status">검색</button>
+          <button type="button" class="btn-cfg-none" data-field="status">없음</button>
+          <button type="button" class="btn-cfg-custom" data-field="status">사용자정의</button>
+        </div>
+        <!-- 사용자정의 서식 패널 -->
+        <div class="cfg-template-panel" id="cfg-tpl-panel-status" style="display: none;">
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-status" placeholder="치환 서식 입력 (예: {상태})">
+          <div class="cfg-chips-row">
+            <span class="cfg-chip-label">치환 태그:</span>
+            <button type="button" class="cfg-chip" data-field="status" data-tag="{상태}">{상태}</button>
+            <button type="button" class="cfg-chip" data-field="status" data-tag="{분류}">{분류}</button>
+          </div>
+        </div>
+        <div class="cfg-preview-box" id="cfg-prev-status" style="display: none;">
+          <span class="cfg-prev-text" id="cfg-prev-text-status"></span>
+          <span class="cfg-prev-sel" id="cfg-prev-sel-status"></span>
+        </div>
+      </div>
+
+      <!-- 5. 날짜 -->
+      <div class="cfg-card" data-field="date">
+        <div class="cfg-card-header">
+          <span class="cfg-card-label">날짜</span>
+          <span class="cfg-status-pill pill-empty" id="cfg-status-date">미설정</span>
+        </div>
+        <div class="cfg-input-group">
+          <input type="text" class="cfg-input" id="cfg-sample-date" placeholder="예: 2026.09.13, 26-09-13, 09/13 등">
+          <button type="button" class="btn-cfg-search" data-field="date">검색</button>
+          <button type="button" class="btn-cfg-none" data-field="date">없음</button>
+          <button type="button" class="btn-cfg-custom" data-field="date">사용자정의</button>
+        </div>
+        <!-- 사용자정의 서식 패널 -->
+        <div class="cfg-template-panel" id="cfg-tpl-panel-date" style="display: none;">
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-date" placeholder="치환 서식 입력 (예: {날짜})">
+          <div class="cfg-chips-row">
+            <span class="cfg-chip-label">치환 태그:</span>
+            <button type="button" class="cfg-chip" data-field="date" data-tag="{날짜}">{날짜}</button>
+          </div>
+        </div>
+        <div class="cfg-preview-box" id="cfg-prev-date" style="display: none;">
+          <span class="cfg-prev-text" id="cfg-prev-text-date"></span>
+          <span class="cfg-prev-sel" id="cfg-prev-sel-date"></span>
+        </div>
+      </div>
+
+      <!-- 6. 내용 -->
+      <div class="cfg-card" data-field="desc">
+        <div class="cfg-card-header">
+          <span class="cfg-card-label">내용</span>
+          <span class="cfg-status-pill pill-empty" id="cfg-status-desc">미설정</span>
+        </div>
+        <div class="cfg-input-group">
+          <input type="text" class="cfg-input" id="cfg-sample-desc" placeholder="예: 담당업무 세부 내용 등">
+          <button type="button" class="btn-cfg-search" data-field="desc">검색</button>
+          <button type="button" class="btn-cfg-none" data-field="desc">없음</button>
+          <button type="button" class="btn-cfg-custom" data-field="desc">사용자정의</button>
+        </div>
+        <!-- 사용자정의 서식 패널 (내용은 멀티라인 textarea) -->
+        <div class="cfg-template-panel" id="cfg-tpl-panel-desc" style="display: none;">
+          <textarea class="cfg-tpl-input" id="cfg-tpl-desc" rows="3" placeholder="예:&#10;제목: {제목}&#10;분류: {분류}&#10;출처: {출처}"></textarea>
+          <div class="cfg-chips-row">
+            <span class="cfg-chip-label">치환 태그:</span>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{제목}">{제목}</button>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{분류}">{분류}</button>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{기안자}">{기안자}</button>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{상태}">{상태}</button>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{날짜}">{날짜}</button>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{내용}">{내용}</button>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{출처}">{출처}</button>
+          </div>
+        </div>
+        <div class="cfg-preview-box" id="cfg-prev-desc" style="display: none;">
+          <span class="cfg-prev-text" id="cfg-prev-text-desc"></span>
+          <span class="cfg-prev-sel" id="cfg-prev-sel-desc"></span>
+        </div>
+      </div>
+
+      <!-- 7. 출처 -->
+      <div class="cfg-card" data-field="url">
+        <div class="cfg-card-header">
+          <span class="cfg-card-label">출처 URL</span>
+          <span class="cfg-status-pill pill-empty" id="cfg-status-url">미설정</span>
+        </div>
+        <div class="cfg-input-group">
+          <input type="text" class="cfg-input" id="cfg-sample-url" placeholder="예: 링크 텍스트 또는 URL 일부">
+          <button type="button" class="btn-cfg-search" data-field="url">검색</button>
+          <button type="button" class="btn-cfg-none" data-field="url">없음</button>
+          <button type="button" class="btn-cfg-custom" data-field="url">사용자정의</button>
+        </div>
+        <!-- 사용자정의 서식 패널 -->
+        <div class="cfg-template-panel" id="cfg-tpl-panel-url" style="display: none;">
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-url" placeholder="치환 서식 입력 (예: {출처})">
+          <div class="cfg-chips-row">
+            <span class="cfg-chip-label">치환 태그:</span>
+            <button type="button" class="cfg-chip" data-field="url" data-tag="{출처}">{출처}</button>
+          </div>
+        </div>
+        <div class="cfg-preview-box" id="cfg-prev-url" style="display: none;">
+          <span class="cfg-prev-text" id="cfg-prev-text-url"></span>
+          <span class="cfg-prev-sel" id="cfg-prev-sel-url"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 설정 하단 버튼 -->
+    <div class="config-actions">
+      <button type="button" class="btn-cancel" id="btn-cfg-cancel" style="flex: 1;">돌아가기</button>
+      <button type="button" class="btn-danger" id="btn-cfg-reset">규칙 초기화</button>
+      <button type="button" class="btn-submit" id="btn-cfg-save" style="flex: 1.5;">규칙 저장 및 적용</button>
+    </div>
   </div>
 
   <script src="popup.js"></script>

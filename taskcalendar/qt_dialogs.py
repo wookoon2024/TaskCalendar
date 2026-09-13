@@ -5512,6 +5512,7 @@ class SettingsDialog(QDialog):
         memo_expand_anchor: str = "left",
         show_window_controls: bool = True,
         show_task_count_on_calendar: bool = True,
+        calendar_sidebar_title_only: bool = False,
     ) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
@@ -5545,7 +5546,7 @@ class SettingsDialog(QDialog):
         title_row.addWidget(ver_badge)
         title_row.addStretch(1)
         title_box.addLayout(title_row)
-        subtitle = QLabel("기본, 스킨, 단축키, 데이터 설정을 여기에서 관리합니다.")
+        subtitle = QLabel("기본, 캘린더, 스킨, 메모, 단축키, 데이터 설정을 여기에서 관리합니다.")
         subtitle.setObjectName("subtitle")
         title_box.addWidget(subtitle)
         root.addLayout(title_box)
@@ -5559,10 +5560,11 @@ class SettingsDialog(QDialog):
         
         items = [
             ("⚙️ 기본", 0),
-            ("🎨 스킨", 1),
-            ("📝 메모", 2),
-            ("⌨️ 단축키", 3),
-            ("💾 데이터", 4),
+            ("📅 캘린더", 1),
+            ("🎨 스킨", 2),
+            ("📝 메모", 3),
+            ("⌨️ 단축키", 4),
+            ("💾 데이터", 5),
         ]
         for label, idx in items:
             item = QListWidgetItem(label)
@@ -5573,6 +5575,9 @@ class SettingsDialog(QDialog):
 
         self.pages = QStackedWidget()
 
+        # ----------------------------------------------------
+        # Page 0: 기본 (General)
+        # ----------------------------------------------------
         page_general = QWidget()
         pg_gen_layout = QVBoxLayout(page_general)
         pg_gen_layout.setContentsMargins(0, 0, 0, 0)
@@ -5583,26 +5588,77 @@ class SettingsDialog(QDialog):
         behavior_layout = QVBoxLayout(behavior_card)
         behavior_layout.setContentsMargins(14, 12, 14, 12)
         behavior_layout.setSpacing(8)
-        behavior_title = QLabel("실행 옵션")
+        behavior_title = QLabel("실행 및 화면 옵션")
         behavior_title.setObjectName("sectionTitle")
         behavior_layout.addWidget(behavior_title)
+
         self.auto_start_check = QCheckBox("윈도우 시작 시 자동 시작")
         self.auto_start_check.setChecked(auto_start_enabled)
         behavior_layout.addWidget(self.auto_start_check)
-        self.sticker_animation_check = QCheckBox("스티커 움직임 사용")
-        self.sticker_animation_check.setChecked(sticker_animation_enabled)
-        behavior_layout.addWidget(self.sticker_animation_check)
-        self.hide_completed_on_calendar_check = QCheckBox("달력에서 완료 일정 숨기기")
-        self.hide_completed_on_calendar_check.setChecked(hide_completed_on_calendar)
-        behavior_layout.addWidget(self.hide_completed_on_calendar_check)
-        self.show_task_count_on_calendar_check = QCheckBox("캘린더에 업무 건수 표시")
-        self.show_task_count_on_calendar_check.setChecked(show_task_count_on_calendar)
-        self.show_task_count_on_calendar_check.setToolTip("체크 시 캘린더 날짜 칸에 해당 날짜의 업무를 '업무 N건' 형태로 요약 표시합니다.")
-        behavior_layout.addWidget(self.show_task_count_on_calendar_check)
+
         self.window_controls_check = QCheckBox("상단바에 창 투명도 조절 · 항상 위 고정 표시")
         self.window_controls_check.setChecked(show_window_controls)
         self.window_controls_check.setToolTip("체크 해제 시 상단바의 투명도 슬라이더와 항상 위 고정 버튼을 숨깁니다.")
         behavior_layout.addWidget(self.window_controls_check)
+
+        intro_btn = QPushButton("💡 기능 안내 팝업 다시 보기")
+        intro_btn.setStyleSheet(f"padding: 5px 10px; font-size: 12px; margin-top: 4px; background: {self.palette['panel']}; border: 1px solid {self.palette['line']}; border-radius: 4px;")
+        intro_btn.setCursor(Qt.PointingHandCursor)
+        intro_btn.clicked.connect(self._show_intro_guide)
+        behavior_layout.addWidget(intro_btn)
+
+        pg_gen_layout.addWidget(behavior_card)
+
+        info_card = QFrame()
+        info_card.setObjectName("card")
+        info_layout = QFormLayout(info_card)
+        info_layout.setContentsMargins(14, 12, 14, 12)
+        info_layout.setSpacing(8)
+        info_title = QLabel("개발자 정보")
+        info_title.setObjectName("sectionTitle")
+        info_layout.addRow(info_title)
+        email_label = QLabel("이메일")
+        email_label.setObjectName("muted")
+        email_value = QLabel("westock@korea.kr")
+        email_value.setObjectName("value")
+        info_layout.addRow(email_label, email_value)
+        pg_gen_layout.addWidget(info_card)
+        pg_gen_layout.addStretch(1)
+
+        self.pages.addWidget(page_general)
+
+        # ----------------------------------------------------
+        # Page 1: 캘린더 (Calendar)
+        # ----------------------------------------------------
+        page_calendar = QWidget()
+        pg_cal_layout = QVBoxLayout(page_calendar)
+        pg_cal_layout.setContentsMargins(0, 0, 0, 0)
+        pg_cal_layout.setSpacing(10)
+
+        # 1. 캘린더 화면 표시 카드
+        cal_view_card = QFrame()
+        cal_view_card.setObjectName("card")
+        cal_view_layout = QVBoxLayout(cal_view_card)
+        cal_view_layout.setContentsMargins(14, 12, 14, 12)
+        cal_view_layout.setSpacing(8)
+
+        cal_view_title = QLabel("캘린더 화면 표시")
+        cal_view_title.setObjectName("sectionTitle")
+        cal_view_layout.addWidget(cal_view_title)
+
+        self.hide_completed_on_calendar_check = QCheckBox("달력에서 완료 일정 숨기기")
+        self.hide_completed_on_calendar_check.setChecked(hide_completed_on_calendar)
+        cal_view_layout.addWidget(self.hide_completed_on_calendar_check)
+
+        self.show_task_count_on_calendar_check = QCheckBox("캘린더에 업무 건수 표시")
+        self.show_task_count_on_calendar_check.setChecked(show_task_count_on_calendar)
+        self.show_task_count_on_calendar_check.setToolTip("체크 시 캘린더 날짜 칸에 해당 날짜의 업무를 '업무 N건' 형태로 요약 표시합니다.")
+        cal_view_layout.addWidget(self.show_task_count_on_calendar_check)
+
+        self.sticker_animation_check = QCheckBox("스티커 움직임 사용")
+        self.sticker_animation_check.setChecked(sticker_animation_enabled)
+        cal_view_layout.addWidget(self.sticker_animation_check)
+
         lunar_row = QHBoxLayout()
         lunar_row.setContentsMargins(0, 0, 0, 0)
         lunar_row.setSpacing(10)
@@ -5638,36 +5694,38 @@ class SettingsDialog(QDialog):
         self.lunar_freq_combo.setFixedWidth(190)
         lunar_row.addWidget(self.lunar_freq_combo)
         lunar_row.addStretch(1)
-        behavior_layout.addLayout(lunar_row)
+        cal_view_layout.addLayout(lunar_row)
+
         self.show_solar_terms_check = QCheckBox("캘린더에 24절기 표시")
         self.show_solar_terms_check.setChecked(show_solar_terms)
-        behavior_layout.addWidget(self.show_solar_terms_check)
+        cal_view_layout.addWidget(self.show_solar_terms_check)
 
-        intro_btn = QPushButton("💡 기능 안내 팝업 다시 보기")
-        intro_btn.setStyleSheet(f"padding: 5px 10px; font-size: 12px; margin-top: 4px; background: {self.palette['panel']}; border: 1px solid {self.palette['line']}; border-radius: 4px;")
-        intro_btn.setCursor(Qt.PointingHandCursor)
-        intro_btn.clicked.connect(self._show_intro_guide)
-        behavior_layout.addWidget(intro_btn)
+        pg_cal_layout.addWidget(cal_view_card)
 
-        pg_gen_layout.addWidget(behavior_card)
+        # 2. 캘린더 사이드바 표시 카드
+        cal_sidebar_card = QFrame()
+        cal_sidebar_card.setObjectName("card")
+        cal_sidebar_layout = QVBoxLayout(cal_sidebar_card)
+        cal_sidebar_layout.setContentsMargins(14, 12, 14, 12)
+        cal_sidebar_layout.setSpacing(8)
 
-        info_card = QFrame()
-        info_card.setObjectName("card")
-        info_layout = QFormLayout(info_card)
-        info_layout.setContentsMargins(14, 12, 14, 12)
-        info_layout.setSpacing(8)
-        info_title = QLabel("개발자 정보")
-        info_title.setObjectName("sectionTitle")
-        info_layout.addRow(info_title)
-        email_label = QLabel("이메일")
-        email_label.setObjectName("muted")
-        email_value = QLabel("westock@korea.kr")
-        email_value.setObjectName("value")
-        info_layout.addRow(email_label, email_value)
-        pg_gen_layout.addWidget(info_card)
-        pg_gen_layout.addStretch(1)
+        cal_sidebar_title = QLabel("캘린더 사이드바 표시")
+        cal_sidebar_title.setObjectName("sectionTitle")
+        cal_sidebar_layout.addWidget(cal_sidebar_title)
 
-        self.pages.addWidget(page_general)
+        self.calendar_sidebar_title_only_check = QCheckBox("사이드바 일정 목록: 제목만 1줄로 표시")
+        self.calendar_sidebar_title_only_check.setChecked(calendar_sidebar_title_only)
+        self.calendar_sidebar_title_only_check.setToolTip(
+            "우측 사이드바의 일정 카드에서 본문 내용을 숨기고 제목만 1줄로 콤팩트하게 표시합니다.\n"
+            "체크 해제 시 일정 본문 내용이 함께 표시됩니다."
+        )
+        cal_sidebar_layout.addWidget(self.calendar_sidebar_title_only_check)
+
+        pg_cal_layout.addWidget(cal_sidebar_card)
+        pg_cal_layout.addStretch(1)
+
+        self.pages.addWidget(page_calendar)
+
 
         page_skin = QWidget()
         pg_skin_layout = QVBoxLayout(page_skin)
@@ -6097,14 +6155,16 @@ class SettingsDialog(QDialog):
 
         self.nav_list.currentRowChanged.connect(self.pages.setCurrentIndex)
         
-        if initial_tab == "memo":
-            self.nav_list.setCurrentRow(2)
-        elif initial_tab == "shortcuts":
-            self.nav_list.setCurrentRow(3)
-        elif initial_tab == "data":
-            self.nav_list.setCurrentRow(4)
-        elif initial_tab == "skin":
+        if initial_tab == "calendar":
             self.nav_list.setCurrentRow(1)
+        elif initial_tab == "skin":
+            self.nav_list.setCurrentRow(2)
+        elif initial_tab == "memo":
+            self.nav_list.setCurrentRow(3)
+        elif initial_tab == "shortcuts":
+            self.nav_list.setCurrentRow(4)
+        elif initial_tab == "data":
+            self.nav_list.setCurrentRow(5)
         else:
             self.nav_list.setCurrentRow(0)
 
@@ -6156,14 +6216,14 @@ class SettingsDialog(QDialog):
         cal_key_token = str(self.shortcut_key_combo.currentData())
         if not cal_modifiers and not (cal_key_token.startswith("F") and cal_key_token[1:].isdigit()):
             QMessageBox.warning(self, "입력 오류", "캘린더 단독 키는 F1~F12만 설정할 수 있습니다.")
-            self.nav_list.setCurrentRow(3)
+            self.nav_list.setCurrentRow(4)
             return
         cal_shortcut = "+".join(cal_modifiers + [cal_key_token]) if cal_modifiers else cal_key_token
         cal_available, cal_message = self._check_shortcut_availability(cal_shortcut, is_memo=False)
         if not cal_available:
             self.shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
             self.shortcut_status_label.setText(cal_message)
-            self.nav_list.setCurrentRow(3)
+            self.nav_list.setCurrentRow(4)
             QMessageBox.warning(self, "단축키 오류", f"캘린더 단축키 오류: {cal_message}")
             return
 
@@ -6177,20 +6237,20 @@ class SettingsDialog(QDialog):
         memo_key_token = str(self.memo_shortcut_key_combo.currentData())
         if not memo_modifiers and not (memo_key_token.startswith("F") and memo_key_token[1:].isdigit()):
             QMessageBox.warning(self, "입력 오류", "메모 단독 키는 F1~F12만 설정할 수 있습니다.")
-            self.nav_list.setCurrentRow(3)
+            self.nav_list.setCurrentRow(4)
             return
         memo_shortcut = "+".join(memo_modifiers + [memo_key_token]) if memo_modifiers else memo_key_token
         
         if normalize_shortcut(cal_shortcut) == normalize_shortcut(memo_shortcut):
             QMessageBox.warning(self, "단축키 중복", "캘린더 단축키와 메모 단축키는 서로 달라야 합니다.")
-            self.nav_list.setCurrentRow(3)
+            self.nav_list.setCurrentRow(4)
             return
 
         memo_available, memo_message = self._check_shortcut_availability(memo_shortcut, is_memo=True)
         if not memo_available:
             self.memo_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
             self.memo_shortcut_status_label.setText(memo_message)
-            self.nav_list.setCurrentRow(3)
+            self.nav_list.setCurrentRow(4)
             QMessageBox.warning(self, "단축키 오류", f"메모 단축키 오류: {memo_message}")
             return
 
@@ -6200,6 +6260,7 @@ class SettingsDialog(QDialog):
             "shortcut": cal_shortcut,
             "memo_shortcut": memo_shortcut,
             "auto_start": self.auto_start_check.isChecked(),
+            "calendar_sidebar_title_only": self.calendar_sidebar_title_only_check.isChecked(),
             "sticker_animation_enabled": self.sticker_animation_check.isChecked(),
             "hide_completed_on_calendar": self.hide_completed_on_calendar_check.isChecked(),
             "show_task_count_on_calendar": self.show_task_count_on_calendar_check.isChecked(),
@@ -6220,6 +6281,7 @@ class SettingsDialog(QDialog):
             "show_window_controls": self.window_controls_check.isChecked(),
         }
         self.accept()
+
 
     def _show_intro_guide(self) -> None:
         dlg = WelcomeFeatureIntroDialog(self, is_dismissed=False)
