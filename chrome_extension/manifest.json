@@ -5,7 +5,7 @@
   "description": "웹 페이지에서 K캘린더로 일정/업무/메모를 바로 등록합니다",
   "permissions": ["contextMenus", "activeTab", "scripting", "storage", "tabs"],
   "action": {
-    "default_title": "TaskCalendar에 등록 (Alt+Shift+C)",
+    "default_title": "TaskCalendar에 등록 (Ctrl+Shift+K)",
     "default_icon": {
       "16": "icon16.png",
       "48": "icon48.png",
@@ -15,10 +15,10 @@
   "commands": {
     "open-taskcalendar-add": {
       "suggested_key": {
-        "default": "Alt+Shift+C",
-        "mac": "Alt+Shift+C"
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
       },
-      "description": "현재 페이지를 TaskCalendar에 등록"
+      "description": "마우스 위치 항목을 TaskCalendar에 등록"
     }
   },
   "background": { "service_worker": "background.js" },
