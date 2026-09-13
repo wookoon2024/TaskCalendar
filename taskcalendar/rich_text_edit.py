@@ -12,6 +12,7 @@ from PySide6.QtGui import (
     QAbstractTextDocumentLayout,
     QColor,
     QTextCharFormat,
+    QInputMethodEvent,
 )
 
 class RichTextEdit(QTextEdit):
@@ -29,6 +30,27 @@ class RichTextEdit(QTextEdit):
         self.horizontalScrollBar().valueChanged.connect(lambda _: self.viewport().update())
         self.textChanged.connect(self._on_text_changed)
         self.cursorPositionChanged.connect(self._on_cursor_changed)
+
+    def inputMethodEvent(self, event: QInputMethodEvent) -> None:
+        """Fix Windows Korean IME preedit formatting where composing characters get an inverted black background."""
+        if event.preeditString():
+            new_attrs = []
+            for attr in event.attributes():
+                if attr.type == QInputMethodEvent.AttributeType.TextFormat:
+                    fmt = QTextCharFormat(attr.value) if isinstance(attr.value, QTextCharFormat) else QTextCharFormat()
+                    fmt.clearBackground()
+                    fmt.clearForeground()
+                    fmt.setFontUnderline(True)
+                    fmt.setUnderlineStyle(QTextCharFormat.UnderlineStyle.SingleUnderline)
+                    new_attrs.append(QInputMethodEvent.Attribute(QInputMethodEvent.AttributeType.TextFormat, attr.start, attr.length, fmt))
+                else:
+                    new_attrs.append(attr)
+            new_event = QInputMethodEvent(event.preeditString(), new_attrs)
+            new_event.setCommitString(event.commitString(), event.replacementStart(), event.replacementLength())
+            super().inputMethodEvent(new_event)
+            event.accept()
+            return
+        super().inputMethodEvent(event)
 
     def _is_valid_image_cursor(self, cursor: QTextCursor | None) -> bool:
         if not cursor:

@@ -18,9 +18,13 @@ from PySide6.QtGui import QAction, QColor, QDrag, QGuiApplication, QIcon, QKeySe
 from PySide6.QtPrintSupport import QPrintPreviewDialog, QPrintPreviewWidget, QPrinter
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QAbstractItemView,
+    QAbstractSpinBox,
     QApplication,
     QCheckBox,
     QComboBox,
+    QDateEdit,
+    QDateTimeEdit,
     QDialog,
     QFileDialog,
     QFrame,
@@ -32,6 +36,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QSlider,
     QSplitter,
@@ -54,6 +59,7 @@ from taskcalendar.desktop_services import (
     WM_HOTKEY,
     _parse_hotkey,
     default_shortcut,
+    default_memo_shortcut,
     is_startup_enabled,
     normalize_shortcut,
     set_startup_enabled,
@@ -76,7 +82,7 @@ from taskcalendar.qt_dialogs import (
 )
 from taskcalendar.storage import EncryptedRepository
 from taskcalendar.themes import THEMES
-from taskcalendar.qt_styles import dialog_stylesheet
+from taskcalendar.qt_styles import dialog_stylesheet, _shade
 from taskcalendar.lunar import get_lunar_date, get_solar_term
 
 logger = logging.getLogger(__name__)
@@ -321,10 +327,13 @@ def app_stylesheet(p: dict[str, str]) -> str:
         outline: none;
     }}
     QToolTip {{
-        background-color: #202428;
-        color: #ffffff;
-        border: 1px solid #4b5563;
-        padding: 4px 6px;
+        background-color: {p['panel']};
+        color: {p['text']};
+        border: 1px solid {p['line']};
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-family: 'Malgun Gothic', 'Segoe UI', sans-serif;
+        font-size: 12px;
     }}
     QScrollBar:vertical {{
         background: transparent;
@@ -711,10 +720,44 @@ class ClickableLabel(QLabel):
     clicked = Signal()
     doubleClicked = Signal()
 
-    def __init__(self, text: str = "", parent=None) -> None:
-        super().__init__(text, parent)
+    def __init__(self, text: str = "", parent=None, is_elided: bool = True) -> None:
+        super().__init__(parent)
         self.setCursor(Qt.PointingHandCursor)
         self._press_pos: QPoint | None = None
+        self._is_elided = is_elided
+        self._full_text = ""
+        self.setWordWrap(False)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumWidth(0)
+        if text:
+            self.setText(text)
+
+    def setText(self, text: str) -> None:
+        self._full_text = str(text or "")
+        if self._is_elided and not ("<" in self._full_text and ">" in self._full_text):
+            self.setToolTip(self._full_text)
+            self._apply_elide()
+        else:
+            super().setText(self._full_text)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        if self._is_elided:
+            return QSize(20, super().minimumSizeHint().height())
+        return super().minimumSizeHint()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self._is_elided and not ("<" in self._full_text and ">" in self._full_text):
+            self._apply_elide()
+
+    def _apply_elide(self) -> None:
+        width = max(0, self.contentsRect().width())
+        if width <= 8:
+            elided = ""
+        else:
+            elided = self.fontMetrics().elidedText(self._full_text, Qt.ElideRight, width)
+        if elided != self.text():
+            super().setText(elided)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
@@ -1102,6 +1145,7 @@ class MainWindow(QMainWindow):
         self._sticker_anim_timer: QTimer | None = None
         self._sticker_animation_enabled = self.repository.get_setting("sticker_animation_enabled", "1") == "1"
         self.hide_completed_on_calendar = self.repository.get_setting("hide_completed_on_calendar", "1") == "1"
+        self.show_task_count_on_calendar = self.repository.get_setting("show_task_count_on_calendar", "1") == "1"
         self.show_lunar_calendar = self.repository.get_setting("show_lunar_calendar", "1") == "1"
         self.lunar_display_frequency = self.repository.get_setting("lunar_display_frequency", "all")
         self.show_solar_terms = self.repository.get_setting("show_solar_terms", "1") == "1"
@@ -1319,21 +1363,46 @@ class MainWindow(QMainWindow):
         self.memo_button.clicked.connect(lambda: self._set_sidebar_mode("memo"))
         tac_layout.addWidget(self.memo_button)
 
+        self.task_button = self._top_button("업무")
+        self.task_button.setToolTip("업무 (온나라/웹 업무 목록, 완료 체크, 엑셀 내보내기)")
+        self.task_button.clicked.connect(self._open_task_manager)
+        tac_layout.addWidget(self.task_button)
+
         # 민원계산기 버튼 (추후 보완 후 재오픈 예정)
         # self.complaint_button = self._top_button("민원계산기")
         # self.complaint_button.setToolTip("민원 처리기한 모의계산기 (법정 공휴일/근무시간 자동 산정)")
         # self.complaint_button.clicked.connect(self._open_complaint_calculator)
         # tac_layout.addWidget(self.complaint_button)
 
-        self.alarm_button = self._top_button("알람")
-        self.alarm_button.setToolTip("알람 목록 및 소리/팝업 설정")
-        self.alarm_button.clicked.connect(self._open_alarm_settings)
-        tac_layout.addWidget(self.alarm_button)
+        self.service_button = self._top_button("부가 기능")
+        self.service_button.setToolTip("부가 기능 (알람 설정, 날짜 계산기 등)")
+        self.service_menu = QMenu(self)
+        self.service_menu.setStyleSheet("""
+            QMenu {
+                background-color: #FFFFFF;
+                border: 1px solid #CBD5E0;
+                border-radius: 6px;
+                padding: 4px;
+                font-size: 12px;
+            }
+            QMenu::item {
+                padding: 6px 18px 6px 12px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #F3F0FF;
+                color: #6C5CE7;
+                font-weight: bold;
+            }
+        """)
+        action_alarm = self.service_menu.addAction("알람 설정")
+        action_alarm.triggered.connect(self._open_alarm_settings)
 
-        self.date_calc_button = self._top_button("날짜계산기")
-        self.date_calc_button.setToolTip("날짜 계산기 (D-Day, 기념일, 영업일/근무일, 나이/근속기간 계산 및 일정 등록)")
-        self.date_calc_button.clicked.connect(self._open_date_calculator)
-        tac_layout.addWidget(self.date_calc_button)
+        action_date_calc = self.service_menu.addAction("날짜 계산기")
+        action_date_calc.triggered.connect(self._open_date_calculator)
+
+        self.service_button.clicked.connect(self._show_service_menu)
+        tac_layout.addWidget(self.service_button)
 
         settings_button = self._top_button("환경설정")
         settings_button.clicked.connect(self._open_settings)
@@ -1535,8 +1604,9 @@ class MainWindow(QMainWindow):
         self._rebuild_sticker_palette_buttons()
 
         self.calendar_grid_widget = QWidget()
+        self.calendar_grid_widget.setObjectName("calendarGridWidget")
         self.calendar_grid_widget.setAttribute(Qt.WA_StyledBackground, True)
-        self.calendar_grid_widget.setStyleSheet("background: transparent;")
+        self.calendar_grid_widget.setStyleSheet("QWidget#calendarGridWidget { background: transparent; }")
         self.calendar_grid_widget.installEventFilter(self)
         self.calendar_grid = QGridLayout(self.calendar_grid_widget)
         self.calendar_grid.setContentsMargins(0, 0, 0, 0)
@@ -1559,9 +1629,10 @@ class MainWindow(QMainWindow):
                 self.day_cells.append(cell)
                 self.calendar_grid.addWidget(cell, row + 1, col)
         self.sticker_overlay = QWidget(self.calendar_grid_widget)
+        self.sticker_overlay.setObjectName("stickerOverlay")
         self.sticker_overlay.setAttribute(Qt.WA_StyledBackground, True)
         self.sticker_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.sticker_overlay.setStyleSheet("background: transparent;")
+        self.sticker_overlay.setStyleSheet("QWidget#stickerOverlay { background: transparent; }")
         self.sticker_toolbar.setParent(self.root_widget)
         self.sticker_toolbar.setAttribute(Qt.WA_StyledBackground, True)
         self.sticker_toolbar.setStyleSheet(
@@ -1677,12 +1748,28 @@ class MainWindow(QMainWindow):
 
     def _apply_tooltip_palette(self) -> None:
         palette = QToolTip.palette()
+        bg_col = QColor(self.palette.get("panel", "#FFFFFF"))
+        text_col = QColor(self.palette.get("text", "#1F2328"))
         for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
-            palette.setColor(group, QPalette.ToolTipBase, QColor("#202428"))
-            palette.setColor(group, QPalette.ToolTipText, QColor("#ffffff"))
-            palette.setColor(group, QPalette.Window, QColor("#202428"))
-            palette.setColor(group, QPalette.WindowText, QColor("#ffffff"))
+            palette.setColor(group, QPalette.ToolTipBase, bg_col)
+            palette.setColor(group, QPalette.ToolTipText, text_col)
+            palette.setColor(group, QPalette.Window, bg_col)
+            palette.setColor(group, QPalette.WindowText, text_col)
         QToolTip.setPalette(palette)
+        app = QApplication.instance()
+        if app:
+            p = self.palette
+            app.setStyleSheet(
+                f"QToolTip {{ "
+                f"background-color: {p.get('panel', '#FFFFFF')}; "
+                f"color: {p.get('text', '#1F2328')}; "
+                f"border: 1px solid {p.get('line', '#CBD5E1')}; "
+                f"border-radius: 6px; "
+                f"padding: 6px 10px; "
+                f"font-family: 'Malgun Gothic', 'Segoe UI', sans-serif; "
+                f"font-size: 12px; "
+                f"}}"
+            )
 
     def _setup_sticker_nudge_shortcuts(self) -> None:
         bindings = [
@@ -1701,8 +1788,10 @@ class MainWindow(QMainWindow):
         bindings = [
             ("Left", lambda: self._change_month(-1)),
             ("Right", lambda: self._change_month(1)),
-            ("Up", lambda: self._change_year(1)),
-            ("Down", lambda: self._change_year(-1)),
+            ("Ctrl+Up", lambda: self._change_year(1)),
+            ("Ctrl+Down", lambda: self._change_year(-1)),
+            ("PageUp", lambda: self._change_month(-1)),
+            ("PageDown", lambda: self._change_month(1)),
         ]
         for key, callback in bindings:
             shortcut = QShortcut(QKeySequence(key), self)
@@ -1714,7 +1803,7 @@ class MainWindow(QMainWindow):
         if self._sticker_edit_mode and self._selected_sticker_id:
             return
         focus_widget = QApplication.focusWidget()
-        if isinstance(focus_widget, (QLineEdit, QTextEdit, QComboBox)):
+        if isinstance(focus_widget, (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QAbstractSpinBox, QDateEdit, QDateTimeEdit, QAbstractItemView)):
             return
         if callable(callback):
             callback()
@@ -1725,22 +1814,34 @@ class MainWindow(QMainWindow):
         if self._sticker_edit_mode and self._selected_sticker_id:
             return False
         focus_widget = QApplication.focusWidget()
-        if isinstance(focus_widget, (QLineEdit, QTextEdit, QComboBox)):
+        if isinstance(focus_widget, (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QAbstractSpinBox, QDateEdit, QDateTimeEdit, QAbstractItemView)):
             return False
-        if event.modifiers() != Qt.KeyboardModifier.NoModifier:
-            return False
-        if event.key() == Qt.Key_Left:
-            self._change_month(-1)
-            return True
-        if event.key() == Qt.Key_Right:
-            self._change_month(1)
-            return True
-        if event.key() == Qt.Key_Up:
-            self._change_year(1)
-            return True
-        if event.key() == Qt.Key_Down:
-            self._change_year(-1)
-            return True
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            if event.key() == Qt.Key_Up:
+                self._change_year(1)
+                return True
+            if event.key() == Qt.Key_Down:
+                self._change_year(-1)
+                return True
+        elif event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            if event.key() == Qt.Key_Left:
+                self._change_month(-1)
+                return True
+            if event.key() == Qt.Key_Right:
+                self._change_month(1)
+                return True
+            if event.key() == Qt.Key_Up:
+                self._select_day_by_date(self.selected_day - timedelta(days=7))
+                return True
+            if event.key() == Qt.Key_Down:
+                self._select_day_by_date(self.selected_day + timedelta(days=7))
+                return True
+            if event.key() == Qt.Key_PageUp:
+                self._change_month(-1)
+                return True
+            if event.key() == Qt.Key_PageDown:
+                self._change_month(1)
+                return True
         return False
 
     def _top_button(self, text: str, width: int | None = None) -> QPushButton:
@@ -2153,60 +2254,82 @@ class MainWindow(QMainWindow):
             offset += height + gap
 
     def _setup_global_hotkey(self) -> None:
-        fallback = "Ctrl+Alt+S"
-        stored_raw = self.repository.get_setting("toggle_shortcut", "").strip()
-        stored_norm = normalize_shortcut(stored_raw) if stored_raw else ""
-        migrated = self.repository.get_setting("toggle_shortcut_migrated_v1", "0") == "1"
-        default_norm = normalize_shortcut(default_shortcut())
-        fallback_norm = normalize_shortcut(fallback)
+        cal_fallback = "Ctrl+Alt+S"
+        memo_fallback = "Ctrl+Alt+M"
+        default_cal = default_shortcut()
+        default_memo = default_memo_shortcut()
 
-        # One-time migration: legacy default Ctrl+Alt+S -> new default F3.
-        if stored_raw and stored_norm == fallback_norm and not migrated:
-            candidates = [default_norm, fallback_norm]
-        elif stored_raw:
-            candidates = [stored_norm, fallback_norm]
+        migrated_v2 = self.repository.get_setting("hotkey_migrated_v2", "0") == "1"
+
+        stored_cal = self.repository.get_setting("toggle_shortcut", "").strip()
+        stored_cal_norm = normalize_shortcut(stored_cal) if stored_cal else ""
+
+        stored_memo = self.repository.get_setting("memo_toggle_shortcut", "").strip()
+        stored_memo_norm = normalize_shortcut(stored_memo) if stored_memo else ""
+
+        legacy_cal_defaults = {normalize_shortcut(cal_fallback), "CTRL+SHIFT+C", "CTRL+ALT+S", ""}
+        legacy_memo_defaults = {normalize_shortcut(memo_fallback), "CTRL+SHIFT+M", "CTRL+ALT+M", ""}
+
+        # If not yet migrated to F3/F4 and user is on legacy defaults:
+        if not migrated_v2 and stored_cal_norm in legacy_cal_defaults:
+            cal_candidates = [default_cal, cal_fallback]
+        elif stored_cal_norm:
+            cal_candidates = [stored_cal_norm, default_cal, cal_fallback]
         else:
-            candidates = [default_norm, fallback_norm]
+            cal_candidates = [default_cal, cal_fallback]
 
+        applied_cal: str | None = None
         try:
-            self.hotkey_manager = QtGlobalHotkeyManager(fallback, self._toggle_window_visibility)
-            applied: str | None = None
-            for candidate in candidates:
+            self.hotkey_manager = QtGlobalHotkeyManager(cal_fallback, self._toggle_window_visibility)
+            for candidate in cal_candidates:
                 if self.hotkey_manager.update_shortcut(candidate):
-                    applied = candidate
+                    applied_cal = candidate
                     break
-            if applied is None:
-                applied = fallback_norm
+            if applied_cal is None:
+                applied_cal = normalize_shortcut(cal_fallback)
 
-            if stored_raw != applied:
-                self.repository.set_setting("toggle_shortcut", applied)
-            if not migrated:
-                self.repository.set_setting("toggle_shortcut_migrated_v1", "1")
-            if stored_raw != applied or not migrated:
-                self.repository.save()
+            if stored_cal != applied_cal:
+                self.repository.set_setting("toggle_shortcut", applied_cal)
         except Exception:  # pragma: no cover
             logger.exception("failed to initialize global hotkey")
             self.hotkey_manager = None
+            applied_cal = default_cal
 
-        # Setup memo toggle global hotkey (default F4)
-        memo_fallback = "Ctrl+Alt+M"
-        memo_stored_raw = self.repository.get_setting("memo_toggle_shortcut", "F4").strip()
-        memo_candidates = [normalize_shortcut(memo_stored_raw), "F4", normalize_shortcut(memo_fallback)]
+        # Determine memo candidates (must not duplicate applied_cal)
+        if not migrated_v2 and stored_memo_norm in legacy_memo_defaults:
+            raw_memo_candidates = [default_memo, memo_fallback]
+        elif stored_memo_norm:
+            raw_memo_candidates = [stored_memo_norm, default_memo, memo_fallback]
+        else:
+            raw_memo_candidates = [default_memo, memo_fallback]
+
+        norm_applied_cal = normalize_shortcut(applied_cal) if applied_cal else ""
+        memo_candidates = [
+            c for c in raw_memo_candidates
+            if normalize_shortcut(c) != norm_applied_cal
+        ]
+        if not memo_candidates:
+            memo_candidates = [memo_fallback]
+
+        applied_memo: str | None = None
         try:
             self.memo_hotkey_manager = QtGlobalHotkeyManager(memo_fallback, self._toggle_memos_visibility)
-            applied_memo: str | None = None
             for candidate in memo_candidates:
                 if self.memo_hotkey_manager.update_shortcut(candidate):
                     applied_memo = candidate
                     break
             if applied_memo is None:
                 applied_memo = normalize_shortcut(memo_fallback)
-            if memo_stored_raw != applied_memo:
+
+            if stored_memo != applied_memo:
                 self.repository.set_setting("memo_toggle_shortcut", applied_memo)
-                self.repository.save()
         except Exception:
             logger.exception("failed to initialize memo global hotkey")
             self.memo_hotkey_manager = None
+
+        if not migrated_v2:
+            self.repository.set_setting("hotkey_migrated_v2", "1")
+        self.repository.save()
 
     def _toggle_window_visibility(self) -> None:
         if self.isVisible() and not self.isMinimized():
@@ -3814,6 +3937,9 @@ class MainWindow(QMainWindow):
         if self.sidebar_mode == "search" and self.search_query:
             self.search_results = self.repository.search_entries(self.search_query)
         self.setStyleSheet(app_stylesheet(self.palette))
+        self._apply_tooltip_palette()
+        if getattr(self, "_task_manager_dialog", None) is not None and self._task_manager_dialog.isVisible():
+            self._task_manager_dialog.apply_palette(self.palette)
         self.sticker_toolbar.setStyleSheet(
             """
             QFrame#stickerToolbar {
@@ -3920,7 +4046,7 @@ class MainWindow(QMainWindow):
             f"QScrollArea > QWidget > QWidget {{ background: {self.palette['panel']}; }}"
         )
         self.sidebar_content.setStyleSheet(f"background: {self.palette['panel']};")
-        self.calendar_grid_widget.setStyleSheet("background: transparent;")
+        self.calendar_grid_widget.setStyleSheet("QWidget#calendarGridWidget { background: transparent; }")
         if hasattr(self, "info_title"):
             self.info_title.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {self.palette['text']}; background: transparent; border: none;")
         if hasattr(self, "info_add_button"):
@@ -3957,6 +4083,89 @@ class MainWindow(QMainWindow):
         self._sync_sticker_overlay()
         self._render_stickers()
         self._apply_clickable_cursor()
+
+    def _create_task_count_badge(self, target_day: date, tasks: list[CalendarEntry]) -> QWidget:
+        count = len(tasks)
+        badge = ClickableLabel(f"업무 {count}건", is_elided=False)
+        badge.setCursor(Qt.PointingHandCursor)
+
+        is_dark = self.theme_name == "dark"
+        if is_dark:
+            bg_col = "#1E293B"
+            text_col = "#93C5FD"
+            border_col = "#3B82F6"
+            hover_bg = "#2563EB"
+            hover_border = "#60A5FA"
+            hover_text = "#FFFFFF"
+        else:
+            bg_col = "#EFF6FF"
+            text_col = "#1D4ED8"
+            border_col = "#3B82F6"
+            hover_bg = "#DBEAFE"
+            hover_border = "#1E40AF"
+            hover_text = "#1E40AF"
+
+        panel_col = self.palette.get("panel", "#FFFFFF")
+        text_main = self.palette.get("text", "#1F2328")
+        text_muted = self.palette.get("muted", "#667085")
+        accent_col = "#2563EB" if not is_dark else "#60A5FA"
+        line_col = self.palette.get("line", "#CBD5E1")
+
+        badge.setStyleSheet(f"""
+            QLabel {{
+                background-color: {bg_col};
+                color: {text_col};
+                border: 1px solid {border_col};
+                border-radius: 4px;
+                padding: 1px 5px;
+                font-size: 8.5pt;
+                font-weight: bold;
+            }}
+            QLabel:hover {{
+                background-color: {hover_bg};
+                border: 1px solid {hover_border};
+                color: {hover_text};
+            }}
+            QToolTip {{
+                background-color: {panel_col};
+                color: {text_main};
+                border: 1px solid {line_col};
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-family: 'Malgun Gothic', 'Segoe UI', sans-serif;
+                font-size: 12px;
+            }}
+        """)
+
+        html_lines = [
+            f"<div style=\"font-family: 'Malgun Gothic', 'Segoe UI', sans-serif; font-size: 12px; color: {text_main}; white-space: nowrap;\">",
+            f"<div style=\"font-weight: bold; font-size: 12px; margin-bottom: 4px; white-space: nowrap;\"><nobr>📋 {target_day.strftime('%Y-%m-%d')} 업무 총 {count}건:</nobr></div>",
+            f"<hr style=\"border: none; border-top: 1px solid {line_col}; margin: 4px 0 6px 0;\">",
+            f"<div style=\"font-size: 11.5px; line-height: 150%; white-space: nowrap;\">",
+        ]
+        for t in tasks[:10]:
+            clean_title = " ".join((t.title or "").split())
+            if len(clean_title) > 65:
+                clean_title = clean_title[:62] + "..."
+            cat_html = f"<b style=\"color: {accent_col};\">[{t.memo_group}]</b> " if t.memo_group else ""
+            author_html = f" <span style=\"color: {text_muted};\">({t.assignee})</span>" if t.assignee else ""
+            st_html = f" - <span style=\"font-weight: 600;\">{t.status}</span>" if t.status else ""
+            html_lines.append(f"<nobr>• {cat_html}{clean_title}{author_html}{st_html}</nobr><br>")
+        if count > 10:
+            html_lines.append(f"<nobr><span style=\"color: {text_muted};\">외 {count - 10}건...</span></nobr><br>")
+        html_lines.append("</div>")
+        html_lines.append(f"<div style=\"font-size: 10.5px; color: {text_muted}; margin-top: 6px; white-space: nowrap;\"><nobr>(클릭 시 해당 일자 선택 및 업무 리스트 열기)</nobr></div>")
+        html_lines.append("</div>")
+        badge.setToolTip("".join(html_lines))
+
+        def _on_badge_clicked(day=target_day):
+            self.selected_day = day
+            self.sidebar_mode = "day"
+            self._render_sidebar()
+            self._open_task_manager()
+
+        badge.clicked.connect(_on_badge_clicked)
+        return badge
 
     def _render_calendar(self) -> None:
         entries = self.repository.list_entries_for_month(self.current_year, self.current_month)
@@ -4068,6 +4277,11 @@ class MainWindow(QMainWindow):
                 cell.badge_label.hide()
 
             day_entries = grouped.get(current_day, [])
+            schedule_entries = [e for e in day_entries if e.entry_type != EntryType.TASK]
+            task_entries = [e for e in day_entries if e.entry_type == EntryType.TASK]
+
+            show_task_count = getattr(self, "show_task_count_on_calendar", True) and len(task_entries) > 0
+
             slots_for_entries = item_capacity
             entry_fg = self.palette.get("badge_selected_fg", self.palette.get("entry_text", self.palette["text"])) if is_selected else self.palette.get("entry_text", self.palette["text"])
             more_fg = self.palette.get("badge_selected_fg", self.palette.get("more_text", self.palette["muted"])) if is_selected else self.palette.get("more_text", self.palette["muted"])
@@ -4076,11 +4290,19 @@ class MainWindow(QMainWindow):
                 holiday_label.setStyleSheet(f"color: {self.palette['danger']}; font-size: 9pt; font-weight: bold; background: transparent; border: none;")
                 cell.items_layout.addWidget(holiday_label, 0, Qt.AlignLeft)
                 slots_for_entries = max(0, item_capacity - 1)
+
+            # 업무 건수 배지가 표시되면 슬롯 1개 차감하여 배치
+            available_schedule_slots = max(0, slots_for_entries - (1 if show_task_count else 0))
+
+            if show_task_count:
+                task_badge = self._create_task_count_badge(current_day, task_entries)
+                cell.items_layout.addWidget(task_badge, 0, Qt.AlignLeft)
+
             # Prefer showing one more real item instead of a lone "+1건" marker.
-            if len(day_entries) == slots_for_entries + 1:
-                slots_for_entries += 1
+            if len(schedule_entries) == available_schedule_slots + 1:
+                available_schedule_slots += 1
             on_reorder = lambda s_id, s_day, t_day, t_id, b: self._move_calendar_entry(s_id, s_day, t_day, t_id, b)
-            for entry in day_entries[:slots_for_entries]:
+            for entry in schedule_entries[:available_schedule_slots]:
                 edit_entry = lambda e=entry: self._edit_entry(e.entry_type, e)
                 completed_on_day = self._is_entry_completed_on_day(entry, current_day)
                 chip = DraggableCalendarEntryChip(
@@ -4097,8 +4319,8 @@ class MainWindow(QMainWindow):
                     on_reorder,
                 )
                 cell.items_layout.addWidget(chip, 0, Qt.AlignLeft)
-            if len(day_entries) > slots_for_entries:
-                more = QLabel(f"+{len(day_entries) - slots_for_entries}건")
+            if len(schedule_entries) > available_schedule_slots:
+                more = QLabel(f"+{len(schedule_entries) - available_schedule_slots}건")
                 more.setStyleSheet(
                     f"background: transparent; border: none; font-size: 9pt; font-weight: bold; color: {more_fg};"
                 )
@@ -4152,7 +4374,7 @@ class MainWindow(QMainWindow):
 
         self.info_title.setText(self.selected_day.strftime("%Y.%m.%d"))
         self.info_add_button.setText("일정 추가")
-        items = self.repository.list_entries_for_day(self.selected_day)
+        items = [e for e in self.repository.list_entries_for_day(self.selected_day) if e.entry_type != EntryType.TASK]
         if not items:
             self.sidebar_layout.insertWidget(0, self._empty_label("등록된 일정이 없습니다."))
             return
@@ -4314,6 +4536,8 @@ class MainWindow(QMainWindow):
             left_label.clicked.connect(lambda e=entry: self._open_entry_view(e))
             left_label.setObjectName("muted")
             left_label.setStyleSheet(f"color: {self.palette['muted']}; background: transparent; border: none;")
+            left_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            left_label.setMinimumWidth(0)
             meta_layout.addWidget(left_label, 1)
 
         actions_wrap = QWidget()
@@ -4321,7 +4545,7 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout(actions_wrap)
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(4)
-        actions.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        actions.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
         action_btn_style = (
             "QToolButton { background: transparent; border: none; padding: 0px; margin: 0px; border-radius: 10px; }"
             "QToolButton:hover { background: rgba(0, 0, 0, 0.06); }"
@@ -4376,6 +4600,13 @@ class MainWindow(QMainWindow):
             delete.setStyleSheet(action_btn_style)
         delete.clicked.connect(lambda _checked=False, e=entry: self._delete_entry(e))
         actions.addWidget(delete)
+
+        if entry.entry_type == EntryType.MEMO:
+            actions_wrap.setFixedSize(20, 20)
+        else:
+            actions_wrap.setFixedSize(48 * 3 + 4 * 2, 20)
+        actions_wrap.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
         meta_layout.addWidget(actions_wrap, 0, Qt.AlignVCenter | Qt.AlignRight)
         layout.addWidget(meta_row)
 
@@ -4395,6 +4626,7 @@ class MainWindow(QMainWindow):
             desc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             desc.setMaximumHeight(190)
             desc.setFixedHeight(target_h)
+            desc.setMinimumWidth(0)
             desc.setStyleSheet(text_editor_style(self.palette))
             if entry.entry_type == EntryType.MEMO:
                 desc.doubleClicked.connect(lambda e=entry: self._open_entry_view(e))
@@ -4543,9 +4775,9 @@ class MainWindow(QMainWindow):
             close_act.triggered.connect(lambda _=False, e=entry: self._close_memo_entry(e))
 
         menu.addSeparator()
-        open_all_act = menu.addAction("👁️ 모든 메모 열기")
+        open_all_act = menu.addAction("모든 메모 열기")
         open_all_act.triggered.connect(self._open_all_memos)
-        close_all_act = menu.addAction("📁 모든 메모 닫기")
+        close_all_act = menu.addAction("모든 메모 닫기")
         close_all_act.triggered.connect(self._close_all_memos)
 
         menu.addSeparator()
@@ -5010,6 +5242,7 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("sidebar_visible", "1" if getattr(self, "_sidebar_visible", True) else "0")
             self.repository.set_setting("topbar_visible", "1" if getattr(self, "_topbar_visible", True) else "0")
             self.repository.set_setting("hide_completed_on_calendar", "1" if getattr(self, "hide_completed_on_calendar", True) else "0")
+            self.repository.set_setting("show_task_count_on_calendar", "1" if getattr(self, "show_task_count_on_calendar", True) else "0")
             self.repository.set_setting("show_lunar_calendar", "1" if getattr(self, "show_lunar_calendar", True) else "0")
             self.repository.set_setting("lunar_display_frequency", getattr(self, "lunar_display_frequency", "all"))
             self.repository.set_setting("show_solar_terms", "1" if getattr(self, "show_solar_terms", True) else "0")
@@ -5042,9 +5275,13 @@ class MainWindow(QMainWindow):
             self.theme_name = stored_theme
             self.palette = THEMES[self.theme_name]
             self.setStyleSheet(app_stylesheet(self.palette))
+            self._apply_tooltip_palette()
+            if getattr(self, "_task_manager_dialog", None) is not None:
+                self._task_manager_dialog.apply_palette(self.palette)
 
         # 2. Lunar & Display preferences
         self.hide_completed_on_calendar = self.repository.get_setting("hide_completed_on_calendar", "1") == "1"
+        self.show_task_count_on_calendar = self.repository.get_setting("show_task_count_on_calendar", "1") == "1"
         self.show_lunar_calendar = self.repository.get_setting("show_lunar_calendar", "1") == "1"
         self.lunar_display_frequency = self.repository.get_setting("lunar_display_frequency", "all")
         self.show_solar_terms = self.repository.get_setting("show_solar_terms", "1") == "1"
@@ -5409,6 +5646,9 @@ class MainWindow(QMainWindow):
         if self.selected_day == selected_day and self.sidebar_mode == "day":
             return
         self.selected_day = selected_day
+        if self.selected_day.year != self.current_year or self.selected_day.month != self.current_month:
+            self.current_year = self.selected_day.year
+            self.current_month = self.selected_day.month
         self.sidebar_mode = "day"
         self.refresh()
 
@@ -5587,7 +5827,7 @@ class MainWindow(QMainWindow):
             int(self.repository.get_setting("auto_backup_interval_days", "1")),
             int(self.repository.get_setting("auto_backup_keep_count", "5")),
             self.repository.db_path,
-            current_memo_shortcut=self.repository.get_setting("memo_toggle_shortcut", "F4"),
+            current_memo_shortcut=self.repository.get_setting("memo_toggle_shortcut", default_memo_shortcut()),
             initial_tab=initial_tab,
             show_lunar_calendar=self.show_lunar_calendar,
             show_solar_terms=self.show_solar_terms,
@@ -5601,6 +5841,7 @@ class MainWindow(QMainWindow):
             memo_title_only=getattr(self, "memo_title_only", True),
             memo_expand_anchor=self.repository.get_setting("memo_expand_anchor", "left"),
             show_window_controls=getattr(self, "_window_controls_visible", True),
+            show_task_count_on_calendar=getattr(self, "show_task_count_on_calendar", True),
         )
         if dialog.exec() and dialog.result is not None:
             action = str(dialog.result.get("action", "apply"))
@@ -5624,7 +5865,7 @@ class MainWindow(QMainWindow):
             if self.hotkey_manager is not None and not self.hotkey_manager.update_shortcut(new_shortcut):
                 QMessageBox.warning(self, "단축키 오류", "해당 캘린더 단축키를 다른 프로그램에서 사용 중이오니, 다른 단축키로 변경해 주세요.")
                 return
-            new_memo_shortcut = str(dialog.result.get("memo_shortcut", "F4"))
+            new_memo_shortcut = str(dialog.result.get("memo_shortcut", default_memo_shortcut()))
             if self.memo_hotkey_manager is not None and not self.memo_hotkey_manager.update_shortcut(new_memo_shortcut):
                 QMessageBox.warning(self, "단축키 오류", "해당 메모 단축키를 다른 프로그램에서 사용 중이오니, 다른 단축키로 변경해 주세요.")
                 return
@@ -5640,6 +5881,8 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("sticker_animation_enabled", "1" if self._sticker_animation_enabled else "0")
             self.hide_completed_on_calendar = bool(dialog.result.get("hide_completed_on_calendar", True))
             self.repository.set_setting("hide_completed_on_calendar", "1" if self.hide_completed_on_calendar else "0")
+            self.show_task_count_on_calendar = bool(dialog.result.get("show_task_count_on_calendar", True))
+            self.repository.set_setting("show_task_count_on_calendar", "1" if self.show_task_count_on_calendar else "0")
             self.show_lunar_calendar = bool(dialog.result.get("show_lunar_calendar", True))
             self.repository.set_setting("show_lunar_calendar", "1" if self.show_lunar_calendar else "0")
             self.lunar_display_frequency = str(dialog.result.get("lunar_display_frequency", "all"))
@@ -5688,14 +5931,153 @@ class MainWindow(QMainWindow):
             self._holidays_fixed, self._holidays_yearly = self._load_holidays()
             self.refresh()
 
-    def _edit_entry(self, entry_type: EntryType, entry: CalendarEntry | None, restore_mode: bool = False) -> None:
+    def _show_service_menu(self) -> None:
+        """부가 기능 버튼 클릭 시 드롭다운 팝업 메뉴 표시"""
         try:
-            logger.info(f"[_edit_entry CALLED] entry_type={entry_type}, entry_id={entry.entry_id if entry else None}, title={entry.title if entry else None}, restore_mode={restore_mode}")
-            if entry_type == EntryType.TASK:
+            pos = self.service_button.mapToGlobal(QPoint(0, self.service_button.height() + 2))
+            self.service_menu.exec(pos)
+        except Exception:
+            logger.exception("Failed to show service menu")
+
+    def _open_task_manager(self) -> None:
+        """업무 관리 대시보드 창 열기"""
+        try:
+            from taskcalendar.qt_task_manager import TaskManagerDialog
+            if getattr(self, "_task_manager_dialog", None) is None or not self._task_manager_dialog.isVisible():
+                self._task_manager_dialog = TaskManagerDialog(self, self.repository, self)
+                self._task_manager_dialog.show()
+            else:
+                self._task_manager_dialog.apply_palette(self.palette)
+                self._task_manager_dialog.reload_tasks()
+                self._task_manager_dialog.show()
+                self._task_manager_dialog.raise_()
+                self._task_manager_dialog.activateWindow()
+        except Exception:
+            logger.exception("Failed to open TaskManagerDialog")
+
+    def receive_external_entry(self, data: dict) -> None:
+        """Handle data received from Chrome extension via IPC protocol."""
+        try:
+            from taskcalendar.desktop_services import force_window_to_foreground
+
+            logger.info(f"[receive_external_entry] Received: {data}")
+            action = data.get("action", "add")
+            if action != "add":
+                logger.warning(f"[receive_external_entry] Unknown action: {action}")
+                return
+
+            # Force bring the main window to the foreground immediately before opening dialogs
+            self.showNormal()
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            force_window_to_foreground(int(self.winId()))
+
+            entry_type_str = data.get("type", "schedule")
+            title = data.get("title", "").strip()
+            desc = data.get("desc", "").strip()
+            url = data.get("url", "").strip()
+            date_str = data.get("date", "").strip()
+            author = data.get("author", "").strip()
+            category = data.get("category", "").strip()
+
+            # Build description: numbered fields without emoji icons
+            desc_parts = []
+            idx = 1
+            if title:
+                desc_parts.append(f"{idx}. 제목: {title}")
+                idx += 1
+            if author:
+                desc_parts.append(f"{idx}. 기안자: {author}")
+                idx += 1
+            if category:
+                desc_parts.append(f"{idx}. 분류: {category}")
+                idx += 1
+            if desc:
+                desc_parts.append(f"{idx}. 내용:\n{desc}")
+                idx += 1
+            if url:
+                desc_parts.append(f"{idx}. 출처: {url}")
+                idx += 1
+            full_desc = "\n".join(desc_parts) if desc_parts else ""
+
+            if entry_type_str == "memo":
+                entry_type = EntryType.MEMO
+                entry = CalendarEntry(
+                    entry_type=entry_type,
+                    title=title or "크롬에서 등록",
+                    description=full_desc,
+                )
+                self._edit_entry(entry_type, entry, force_top=True)
+            elif entry_type_str == "task":
+                entry_type = EntryType.TASK
+                status = data.get("status", "").strip() or "등록"
+                target_day = self.selected_day
+                if date_str:
+                    try:
+                        from datetime import date as dt_date
+                        target_day = dt_date.fromisoformat(date_str)
+                    except ValueError:
+                        pass
+
+                task_desc = desc
+                if url:
+                    task_desc = f"{desc}\n\n출처: {url}".strip() if desc else f"출처: {url}"
+
+                task_entry = CalendarEntry(
+                    entry_type=entry_type,
+                    title=title or "온나라/웹 등록 업무",
+                    description=task_desc,
+                    day=target_day,
+                    start_date=target_day,
+                    assignee=author,
+                    memo_group=category or "일반",
+                    status=status,
+                )
+                self._edit_entry(entry_type, task_entry, force_top=True)
+            else:
                 entry_type = EntryType.SCHEDULE
+                target_day = self.selected_day
+                if date_str:
+                    try:
+                        from datetime import date as dt_date
+                        target_day = dt_date.fromisoformat(date_str)
+                    except ValueError:
+                        pass
+
+                entry = CalendarEntry(
+                    entry_type=entry_type,
+                    title=title or "크롬에서 등록",
+                    description=full_desc,
+                    day=target_day,
+                    start_date=target_day,
+                )
+                self._edit_entry(entry_type, entry, force_top=True)
+
+        except Exception:
+            logger.exception("[receive_external_entry] Failed to process external entry")
+
+    def _edit_entry(self, entry_type: EntryType, entry: CalendarEntry | None, restore_mode: bool = False, force_top: bool = False) -> None:
+        try:
+            logger.info(f"[_edit_entry CALLED] entry_type={entry_type}, entry_id={entry.entry_id if entry else None}, title={entry.title if entry else None}, restore_mode={restore_mode}, force_top={force_top}")
             edit_entry = entry
             if entry and entry.source_entry_id and entry.source_entry_id != entry.entry_id:
-                edit_entry = self.repository.get_entry(entry.source_entry_id)
+                edit_entry = self.repository.get_entry(entry.source_entry_id) or entry
+
+            if entry_type == EntryType.TASK or (edit_entry and edit_entry.entry_type == EntryType.TASK):
+                from taskcalendar.qt_task_manager import TaskEditDialog
+                all_tasks = [e for e in self.repository.list_all_entries() if e.entry_type == EntryType.TASK]
+                known_authors = [t.assignee for t in all_tasks if t.assignee]
+                dlg = TaskEditDialog(self, self.repository, edit_entry, known_authors)
+                if force_top:
+                    from taskcalendar.desktop_services import force_window_to_foreground
+                    QTimer.singleShot(50, lambda d=dlg: force_window_to_foreground(int(d.winId())))
+                if dlg.exec() == QDialog.Accepted:
+                    self.repository.save()
+                    self.refresh()
+                    if hasattr(self, "_task_manager_dialog") and self._task_manager_dialog and self._task_manager_dialog.isVisible():
+                        self._task_manager_dialog.reload_tasks()
+                return
             if entry_type == EntryType.MEMO:
                 if edit_entry and edit_entry.entry_id is not None:
                     key = int(edit_entry.entry_id)
@@ -5703,11 +6085,12 @@ class MainWindow(QMainWindow):
                         existing_dlg = self._active_memo_dialogs.get(key)
                         if existing_dlg is not None:
                             logger.info(f"[_edit_entry] Reusing existing memo dialog for key={key}")
-                            if not restore_mode and getattr(existing_dlg, "_is_collapsed", False):
-                                existing_dlg._toggle_collapse()
                             existing_dlg.show()
                             existing_dlg.raise_()
                             existing_dlg.activateWindow()
+                            if force_top:
+                                from taskcalendar.desktop_services import force_window_to_foreground
+                                QTimer.singleShot(50, lambda d=existing_dlg: force_window_to_foreground(int(d.winId())))
                             return
                         self._active_memo_dialogs.pop(key, None)
                 else:
@@ -5721,12 +6104,18 @@ class MainWindow(QMainWindow):
                 dialog.raise_()
                 if not restore_mode:
                     dialog.activateWindow()
+                if force_top:
+                    from taskcalendar.desktop_services import force_window_to_foreground
+                    QTimer.singleShot(50, lambda d=dialog: force_window_to_foreground(int(d.winId())))
                 if not getattr(self, "_batch_updating_memos", False):
                     self._sync_open_memo_ids(persist=True)
                     self._refresh_all_group_dialogs(status_only=True)
                 return
             logger.info(f"[_edit_entry] Creating modal EntryDialog for schedule/task: {edit_entry.entry_id if edit_entry else 'new'}")
             dialog = EntryDialog(self, entry_type, self.selected_day, edit_entry)
+            if force_top:
+                from taskcalendar.desktop_services import force_window_to_foreground
+                QTimer.singleShot(50, lambda d=dialog: force_window_to_foreground(int(d.winId())))
             if not dialog.exec() or dialog.result is None:
                 return
             if edit_entry and edit_entry.entry_id:
@@ -5753,6 +6142,9 @@ class MainWindow(QMainWindow):
                     view_entry = source
             if view_entry.entry_type == EntryType.MEMO:
                 self._edit_entry(EntryType.MEMO, view_entry)
+                return
+            if view_entry.entry_type == EntryType.TASK:
+                self._edit_entry(EntryType.TASK, view_entry)
                 return
             entry_type = EntryType.SCHEDULE if view_entry.entry_type == EntryType.TASK else view_entry.entry_type
             logger.info(f"[_open_entry_view] Opening modal EntryViewDialog for {view_entry.entry_id}")

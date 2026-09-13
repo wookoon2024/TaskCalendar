@@ -69,7 +69,7 @@ from taskcalendar.models import (
 from taskcalendar import APP_VERSION
 from taskcalendar.themes import THEME_LABELS
 from taskcalendar.qt_styles import dialog_stylesheet, resolve_palette
-from taskcalendar.desktop_services import _parse_hotkey, normalize_shortcut
+from taskcalendar.desktop_services import _parse_hotkey, default_shortcut, default_memo_shortcut, normalize_shortcut
 from taskcalendar.paths import asset_path, custom_stickers_path
 from taskcalendar.lunar import get_lunar_date
 
@@ -1024,7 +1024,7 @@ class EntryDialog(QDialog):
                         except Exception:
                             pass
                     collapsed_saved = repo.get_setting(f"memo_collapsed_{entry.entry_id}", "0") == "1"
-                    self._is_collapsed = (collapsed_saved if restore_mode else False)
+                    self._is_collapsed = collapsed_saved
                     col_w_saved = repo.get_setting(f"memo_collapsed_w_{entry.entry_id}", "")
                     if col_w_saved:
                         try:
@@ -2058,7 +2058,16 @@ class EntryDialog(QDialog):
             rec_leap = self.recurrence_month_end_check.isChecked()
 
         plain_content = self.description_input.toPlainText().strip()
-        default_title = plain_content.splitlines()[0].strip()[:40] if plain_content else "일정"
+        if self.entry and self.entry.title and self.entry.title not in ("일정", "크롬에서 등록"):
+            default_title = self.entry.title[:40]
+        else:
+            first_line = plain_content.splitlines()[0].strip() if plain_content else "일정"
+            import re
+            m = re.match(r"^(?:\d+[\.\)]\s*)?제목:\s*(.+)$", first_line)
+            if m:
+                default_title = m.group(1).strip()[:40]
+            else:
+                default_title = first_line[:40]
         html_content = self.description_input.toHtml()
         description_to_save = html_content if "<img" in html_content else plain_content
         self.result = CalendarEntry(
@@ -2367,7 +2376,17 @@ class EntryDialog(QDialog):
             grp_name = grp.get("title", "그룹") if grp else "소속 그룹"
             open_grp_act = menu.addAction(f"📂 소속 그룹 열기 ({grp_name})")
             open_grp_act.triggered.connect(lambda: parent._open_memo_group(curr_group_id) if parent and hasattr(parent, "_open_memo_group") else None)
+            open_grp_memos_act = menu.addAction(f"그룹 메모 모두 열기 ({grp_name})")
+            open_grp_memos_act.triggered.connect(lambda: self._open_group_memos(curr_group_id))
+            close_grp_memos_act = menu.addAction(f"그룹 메모 모두 닫기 ({grp_name})")
+            close_grp_memos_act.triggered.connect(lambda: self._close_group_memos(curr_group_id))
             menu.addSeparator()
+
+        open_all_act = menu.addAction("모든 메모 열기")
+        open_all_act.triggered.connect(self._open_all_memos)
+        close_all_act = menu.addAction("모든 메모 닫기")
+        close_all_act.triggered.connect(self._close_all_memos)
+        menu.addSeparator()
 
         group_menu = menu.addMenu("📁 그룹 지정 / 이동")
         group_menu.setStyleSheet(menu.styleSheet())
@@ -2476,6 +2495,60 @@ class EntryDialog(QDialog):
         parent = getattr(self, "_owner_window", None) or self.parent()
         if parent and hasattr(parent, "_edit_entry"):
             parent._edit_entry(EntryType.MEMO, None)
+
+    def _open_all_memos(self) -> None:
+        parent = getattr(self, "_owner_window", None) or self.parent()
+        if parent and hasattr(parent, "_open_all_memos"):
+            parent._open_all_memos()
+
+    def _close_all_memos(self) -> None:
+        parent = getattr(self, "_owner_window", None) or self.parent()
+        if parent and hasattr(parent, "_close_all_memos"):
+            parent._close_all_memos()
+
+    def _open_group_memos(self, group_id: str) -> None:
+        parent = getattr(self, "_owner_window", None) or self.parent()
+        if not parent or not hasattr(parent, "repository"):
+            return
+        memos = [m for m in parent.repository.list_memos() if getattr(m, "memo_group", "") == group_id]
+        if not memos:
+            return
+        setattr(parent, "_batch_updating_memos", True)
+        try:
+            for m in memos:
+                parent._edit_entry(EntryType.MEMO, m)
+        finally:
+            setattr(parent, "_batch_updating_memos", False)
+        if hasattr(parent, "_sync_open_memo_ids"):
+            parent._sync_open_memo_ids(persist=True)
+        if hasattr(parent, "_refresh_all_group_dialogs"):
+            parent._refresh_all_group_dialogs(status_only=True)
+        if hasattr(parent, "refresh"):
+            parent.refresh()
+
+    def _close_group_memos(self, group_id: str) -> None:
+        parent = getattr(self, "_owner_window", None) or self.parent()
+        if not parent or not hasattr(parent, "_active_memo_dialogs"):
+            return
+        memos = [m for m in parent.repository.list_memos() if getattr(m, "memo_group", "") == group_id]
+        if not memos:
+            return
+        setattr(parent, "_batch_updating_memos", True)
+        try:
+            for m in memos:
+                key = int(m.entry_id) if m.entry_id is not None else None
+                if key in parent._active_memo_dialogs:
+                    dlg = parent._active_memo_dialogs[key]
+                    if dlg and dlg.isVisible():
+                        dlg.close()
+        finally:
+            setattr(parent, "_batch_updating_memos", False)
+        if hasattr(parent, "_sync_open_memo_ids"):
+            parent._sync_open_memo_ids(persist=True)
+        if hasattr(parent, "_refresh_all_group_dialogs"):
+            parent._refresh_all_group_dialogs(status_only=True)
+        if hasattr(parent, "refresh"):
+            parent.refresh()
 
     def _open_hotkey_settings(self) -> None:
         parent = getattr(self, "_owner_window", None) or self.parent()
@@ -4996,9 +5069,9 @@ class FloatingGroupDialog(QDialog):
         add_act.triggered.connect(self._on_add_memo_clicked)
         menu.addSeparator()
 
-        open_act = menu.addAction("👁️ 모든 메모 열기")
+        open_act = menu.addAction("모든 메모 열기")
         open_act.triggered.connect(self._open_all_memos)
-        close_act = menu.addAction("📁 모든 메모 닫기")
+        close_act = menu.addAction("모든 메모 닫기")
         close_act.triggered.connect(self._close_all_memos)
         menu.addSeparator()
 
@@ -5059,6 +5132,7 @@ class EntryViewDialog(QDialog):
         self.entry_type = entry_type
         self.entry = entry
         self._on_download_attachment = on_download_attachment
+        self._on_edit_entry = on_edit_entry
         if entry_type != EntryType.MEMO:
             self.setWindowModality(Qt.WindowModality.WindowModal)
         else:
@@ -5288,11 +5362,13 @@ class EntryViewDialog(QDialog):
         self._on_download_attachment(stored_path)
 
     def _edit_entry(self) -> None:
-        if self._on_edit_entry is None:
+        callback = getattr(self, "_on_edit_entry", None)
+        if callback is None:
             QMessageBox.warning(self, "수정", "수정 기능을 사용할 수 없습니다.")
             return
+        entry_to_edit = self.entry
         self.accept()
-        self._on_edit_entry(self.entry)
+        QTimer.singleShot(50, lambda: callback(entry_to_edit))
 
     def _muted(self, text: str) -> QLabel:
         label = QLabel(text)
@@ -5435,6 +5511,7 @@ class SettingsDialog(QDialog):
         memo_title_only: bool = True,
         memo_expand_anchor: str = "left",
         show_window_controls: bool = True,
+        show_task_count_on_calendar: bool = True,
     ) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
@@ -5518,6 +5595,10 @@ class SettingsDialog(QDialog):
         self.hide_completed_on_calendar_check = QCheckBox("달력에서 완료 일정 숨기기")
         self.hide_completed_on_calendar_check.setChecked(hide_completed_on_calendar)
         behavior_layout.addWidget(self.hide_completed_on_calendar_check)
+        self.show_task_count_on_calendar_check = QCheckBox("캘린더에 업무 건수 표시")
+        self.show_task_count_on_calendar_check.setChecked(show_task_count_on_calendar)
+        self.show_task_count_on_calendar_check.setToolTip("체크 시 캘린더 날짜 칸에 해당 날짜의 업무를 '업무 N건' 형태로 요약 표시합니다.")
+        behavior_layout.addWidget(self.show_task_count_on_calendar_check)
         self.window_controls_check = QCheckBox("상단바에 창 투명도 조절 · 항상 위 고정 표시")
         self.window_controls_check.setChecked(show_window_controls)
         self.window_controls_check.setToolTip("체크 해제 시 상단바의 투명도 슬라이더와 항상 위 고정 버튼을 숨깁니다.")
@@ -5798,6 +5879,10 @@ class SettingsDialog(QDialog):
         self.shortcut_key_combo.setMinimumWidth(72)
         self.shortcut_key_combo.setMaximumWidth(88)
         cal_row.addWidget(self.shortcut_key_combo)
+        self.cal_default_btn = QPushButton("기본값(F3)")
+        self.cal_default_btn.setToolTip("캘린더 토글 단축키를 기본값인 F3으로 설정합니다.")
+        self.cal_default_btn.clicked.connect(self._set_cal_default)
+        cal_row.addWidget(self.cal_default_btn)
         cal_row.addStretch(1)
         sc_cal_layout.addLayout(cal_row)
 
@@ -5848,6 +5933,10 @@ class SettingsDialog(QDialog):
         self.memo_shortcut_key_combo.setMinimumWidth(72)
         self.memo_shortcut_key_combo.setMaximumWidth(88)
         memo_row.addWidget(self.memo_shortcut_key_combo)
+        self.memo_default_btn = QPushButton("기본값(F4)")
+        self.memo_default_btn.setToolTip("메모 토글 단축키를 기본값인 F4로 설정합니다.")
+        self.memo_default_btn.clicked.connect(self._set_memo_default)
+        memo_row.addWidget(self.memo_default_btn)
         memo_row.addStretch(1)
         sc_memo_layout.addLayout(memo_row)
 
@@ -5855,6 +5944,15 @@ class SettingsDialog(QDialog):
         self.memo_shortcut_status_label.setObjectName("subtitle")
         sc_memo_layout.addWidget(self.memo_shortcut_status_label)
         pg_sc_layout.addWidget(sc_memo_card)
+
+        reset_all_row = QHBoxLayout()
+        reset_all_btn = QPushButton("단축키 기본값 초기화 (캘린더: F3, 메모: F4)")
+        reset_all_btn.setToolTip("캘린더(F3) 및 메모(F4) 단축키를 기본값으로 일괄 재설정합니다.")
+        reset_all_btn.clicked.connect(self._reset_all_shortcuts_default)
+        reset_all_row.addWidget(reset_all_btn)
+        reset_all_row.addStretch(1)
+        pg_sc_layout.addLayout(reset_all_row)
+
         pg_sc_layout.addStretch(1)
 
         self.pages.addWidget(page_shortcuts)
@@ -6010,15 +6108,15 @@ class SettingsDialog(QDialog):
         else:
             self.nav_list.setCurrentRow(0)
 
-        self.shortcut_ctrl_check.toggled.connect(self._refresh_shortcut_status)
-        self.shortcut_shift_check.toggled.connect(self._refresh_shortcut_status)
-        self.shortcut_alt_check.toggled.connect(self._refresh_shortcut_status)
-        self.shortcut_key_combo.currentIndexChanged.connect(self._refresh_shortcut_status)
+        self.shortcut_ctrl_check.toggled.connect(self._on_cal_shortcut_changed)
+        self.shortcut_shift_check.toggled.connect(self._on_cal_shortcut_changed)
+        self.shortcut_alt_check.toggled.connect(self._on_cal_shortcut_changed)
+        self.shortcut_key_combo.currentIndexChanged.connect(self._on_cal_shortcut_changed)
 
-        self.memo_shortcut_ctrl_check.toggled.connect(self._refresh_memo_shortcut_status)
-        self.memo_shortcut_shift_check.toggled.connect(self._refresh_memo_shortcut_status)
-        self.memo_shortcut_alt_check.toggled.connect(self._refresh_memo_shortcut_status)
-        self.memo_shortcut_key_combo.currentIndexChanged.connect(self._refresh_memo_shortcut_status)
+        self.memo_shortcut_ctrl_check.toggled.connect(self._on_memo_shortcut_changed)
+        self.memo_shortcut_shift_check.toggled.connect(self._on_memo_shortcut_changed)
+        self.memo_shortcut_alt_check.toggled.connect(self._on_memo_shortcut_changed)
+        self.memo_shortcut_key_combo.currentIndexChanged.connect(self._on_memo_shortcut_changed)
 
         self._refresh_shortcut_status()
         self._refresh_memo_shortcut_status()
@@ -6104,6 +6202,7 @@ class SettingsDialog(QDialog):
             "auto_start": self.auto_start_check.isChecked(),
             "sticker_animation_enabled": self.sticker_animation_check.isChecked(),
             "hide_completed_on_calendar": self.hide_completed_on_calendar_check.isChecked(),
+            "show_task_count_on_calendar": self.show_task_count_on_calendar_check.isChecked(),
             "auto_backup_enabled": self.auto_backup_check.isChecked(),
             "auto_backup_interval_days": int(self.auto_backup_interval_combo.currentData() or 0),
             "auto_backup_keep_count": int(self.auto_backup_keep_combo.currentData() or 0),
@@ -6126,7 +6225,7 @@ class SettingsDialog(QDialog):
         dlg = WelcomeFeatureIntroDialog(self, is_dismissed=False)
         dlg.exec()
 
-    def _refresh_shortcut_status(self) -> None:
+    def _get_current_cal_shortcut_from_ui(self) -> str:
         modifiers: list[str] = []
         if self.shortcut_ctrl_check.isChecked():
             modifiers.append("Ctrl")
@@ -6135,16 +6234,9 @@ class SettingsDialog(QDialog):
         if self.shortcut_alt_check.isChecked():
             modifiers.append("Alt")
         key_token = str(self.shortcut_key_combo.currentData())
-        if not modifiers and not (key_token.startswith("F") and key_token[1:].isdigit()):
-            self.shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
-            self.shortcut_status_label.setText("단독 키는 F1~F12만 가능합니다.")
-            return
-        shortcut = "+".join(modifiers + [key_token]) if modifiers else key_token
-        available, message = self._check_shortcut_availability(shortcut, is_memo=False)
-        self.shortcut_status_label.setStyleSheet(f"color: {self.palette['accent']};" if available else f"color: {self.palette['danger']};")
-        self.shortcut_status_label.setText(message)
+        return "+".join(modifiers + [key_token]) if modifiers else key_token
 
-    def _refresh_memo_shortcut_status(self) -> None:
+    def _get_current_memo_shortcut_from_ui(self) -> str:
         modifiers: list[str] = []
         if self.memo_shortcut_ctrl_check.isChecked():
             modifiers.append("Ctrl")
@@ -6153,11 +6245,86 @@ class SettingsDialog(QDialog):
         if self.memo_shortcut_alt_check.isChecked():
             modifiers.append("Alt")
         key_token = str(self.memo_shortcut_key_combo.currentData())
+        return "+".join(modifiers + [key_token]) if modifiers else key_token
+
+    def _on_cal_shortcut_changed(self) -> None:
+        self._refresh_shortcut_status()
+        self._refresh_memo_shortcut_status()
+
+    def _on_memo_shortcut_changed(self) -> None:
+        self._refresh_memo_shortcut_status()
+        self._refresh_shortcut_status()
+
+    def _set_cal_default(self) -> None:
+        self.shortcut_ctrl_check.setChecked(False)
+        self.shortcut_shift_check.setChecked(False)
+        self.shortcut_alt_check.setChecked(False)
+        idx = self.shortcut_key_combo.findData("F3")
+        if idx >= 0:
+            self.shortcut_key_combo.setCurrentIndex(idx)
+        self._on_cal_shortcut_changed()
+
+    def _set_memo_default(self) -> None:
+        self.memo_shortcut_ctrl_check.setChecked(False)
+        self.memo_shortcut_shift_check.setChecked(False)
+        self.memo_shortcut_alt_check.setChecked(False)
+        idx = self.memo_shortcut_key_combo.findData("F4")
+        if idx >= 0:
+            self.memo_shortcut_key_combo.setCurrentIndex(idx)
+        self._on_memo_shortcut_changed()
+
+    def _reset_all_shortcuts_default(self) -> None:
+        self.shortcut_ctrl_check.setChecked(False)
+        self.shortcut_shift_check.setChecked(False)
+        self.shortcut_alt_check.setChecked(False)
+        idx_cal = self.shortcut_key_combo.findData("F3")
+        if idx_cal >= 0:
+            self.shortcut_key_combo.setCurrentIndex(idx_cal)
+
+        self.memo_shortcut_ctrl_check.setChecked(False)
+        self.memo_shortcut_shift_check.setChecked(False)
+        self.memo_shortcut_alt_check.setChecked(False)
+        idx_memo = self.memo_shortcut_key_combo.findData("F4")
+        if idx_memo >= 0:
+            self.memo_shortcut_key_combo.setCurrentIndex(idx_memo)
+
+        self._refresh_shortcut_status()
+        self._refresh_memo_shortcut_status()
+
+    def _refresh_shortcut_status(self) -> None:
+        shortcut = self._get_current_cal_shortcut_from_ui()
+        modifiers = [m for m in ["Ctrl", "Shift", "Alt"] if getattr(self, f"shortcut_{m.lower()}_check").isChecked()]
+        key_token = str(self.shortcut_key_combo.currentData())
+        if not modifiers and not (key_token.startswith("F") and key_token[1:].isdigit()):
+            self.shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
+            self.shortcut_status_label.setText("단독 키는 F1~F12만 가능합니다.")
+            return
+
+        memo_shortcut = self._get_current_memo_shortcut_from_ui()
+        if normalize_shortcut(shortcut) == normalize_shortcut(memo_shortcut):
+            self.shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
+            self.shortcut_status_label.setText("메모 단축키와 중복됩니다.")
+            return
+
+        available, message = self._check_shortcut_availability(shortcut, is_memo=False)
+        self.shortcut_status_label.setStyleSheet(f"color: {self.palette['accent']};" if available else f"color: {self.palette['danger']};")
+        self.shortcut_status_label.setText(message)
+
+    def _refresh_memo_shortcut_status(self) -> None:
+        shortcut = self._get_current_memo_shortcut_from_ui()
+        modifiers = [m for m in ["Ctrl", "Shift", "Alt"] if getattr(self, f"memo_shortcut_{m.lower()}_check").isChecked()]
+        key_token = str(self.memo_shortcut_key_combo.currentData())
         if not modifiers and not (key_token.startswith("F") and key_token[1:].isdigit()):
             self.memo_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
             self.memo_shortcut_status_label.setText("단독 키는 F1~F12만 가능합니다.")
             return
-        shortcut = "+".join(modifiers + [key_token]) if modifiers else key_token
+
+        cal_shortcut = self._get_current_cal_shortcut_from_ui()
+        if normalize_shortcut(shortcut) == normalize_shortcut(cal_shortcut):
+            self.memo_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
+            self.memo_shortcut_status_label.setText("캘린더 단축키와 중복됩니다.")
+            return
+
         available, message = self._check_shortcut_availability(shortcut, is_memo=True)
         self.memo_shortcut_status_label.setStyleSheet(f"color: {self.palette['accent']};" if available else f"color: {self.palette['danger']};")
         self.memo_shortcut_status_label.setText(message)
@@ -6167,6 +6334,11 @@ class SettingsDialog(QDialog):
         current = self._current_memo_shortcut if is_memo else self._current_shortcut
         if normalized == current:
             return True, "현재 사용 중인 단축키입니다. (사용 가능)"
+        other_current = self._current_shortcut if is_memo else self._current_memo_shortcut
+        if normalized == other_current:
+            other_ui = self._get_current_cal_shortcut_from_ui() if is_memo else self._get_current_memo_shortcut_from_ui()
+            if normalize_shortcut(other_ui) != other_current:
+                return True, "사용 가능한 단축키입니다."
         binding = _parse_hotkey(normalized)
         if binding is None:
             return False, "유효하지 않은 단축키 형식입니다."

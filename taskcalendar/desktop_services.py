@@ -112,6 +112,10 @@ def default_shortcut() -> str:
     return "F3"
 
 
+def default_memo_shortcut() -> str:
+    return "F4"
+
+
 def normalize_shortcut(shortcut: str) -> str:
     text = (shortcut or "").split(",")[0].strip().replace("Meta", "Win")
     if not text:
@@ -255,6 +259,121 @@ def set_startup_enabled(enabled: bool) -> bool:
     except OSError:
         logger.exception("failed to update startup startup-folder shortcut")
         return False
+
+
+def register_protocol_handler() -> bool:
+    """Register taskcalendar:// URL protocol handler in Windows registry (HKCU)."""
+    try:
+        exe_path = sys.executable if getattr(sys, "frozen", False) else None
+        if not exe_path:
+            # Dev mode: use python + main.py
+            main_path = Path(__file__).resolve().parent.parent / "main.py"
+            gui_python = Path(sys.executable).with_name("pythonw.exe")
+            executable = gui_python if gui_python.exists() else Path(sys.executable)
+            command = f'"{executable}" "{main_path}" "%1"'
+        else:
+            command = f'"{exe_path}" "%1"'
+
+        protocol_key = r"Software\Classes\taskcalendar"
+
+        # Check if already registered with the correct command
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, protocol_key + r"\shell\open\command", 0, winreg.KEY_READ) as key:
+                existing, _ = winreg.QueryValueEx(key, "")
+                if existing == command:
+                    return True  # Already up to date
+        except (FileNotFoundError, OSError):
+            pass
+
+        # Create/update protocol handler
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, protocol_key, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "URL:TaskCalendar Protocol")
+            winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
+
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, protocol_key + r"\shell\open\command", 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, command)
+
+        logger.info(f"[register_protocol_handler] Registered taskcalendar:// -> {command}")
+        return True
+    except Exception:
+        logger.exception("Failed to register taskcalendar:// protocol handler")
+        return False
+
+
+def unregister_protocol_handler() -> bool:
+    """Remove taskcalendar:// URL protocol handler from Windows registry."""
+    try:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\taskcalendar\shell\open\command")
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\taskcalendar\shell\open")
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\taskcalendar\shell")
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\taskcalendar")
+        logger.info("[unregister_protocol_handler] Removed taskcalendar:// protocol handler")
+        return True
+    except Exception:
+        logger.exception("Failed to unregister taskcalendar:// protocol handler")
+        return False
+
+
+def is_protocol_handler_registered() -> bool:
+    """Check if taskcalendar:// protocol handler is registered."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\taskcalendar\shell\open\command", 0, winreg.KEY_READ) as key:
+            winreg.QueryValueEx(key, "")
+            return True
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def force_window_to_foreground(hwnd: int) -> None:
+    """Force a window to the top and active foreground in Windows."""
+    if not hwnd:
+        return
+    try:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        # 1. Ensure window is not minimized
+        SW_RESTORE = 9
+        SW_SHOW = 5
+        if user32.IsIconic(hwnd):
+            user32.ShowWindow(hwnd, SW_RESTORE)
+        else:
+            user32.ShowWindow(hwnd, SW_SHOW)
+
+        # 2. AttachThreadInput bypass to steal focus legally
+        fg_hwnd = user32.GetForegroundWindow()
+        fg_thread_id = user32.GetWindowThreadProcessId(fg_hwnd, None)
+        cur_thread_id = kernel32.GetCurrentThreadId()
+
+        attached = False
+        if fg_thread_id and fg_thread_id != cur_thread_id:
+            attached = bool(user32.AttachThreadInput(cur_thread_id, fg_thread_id, True))
+
+        # 3. Simulate Alt key press to bypass foreground restrictions
+        user32.keybd_event(0x12, 0, 0, 0)
+        user32.keybd_event(0x12, 0, 2, 0)
+
+        # 4. Z-order toggle: Set HWND_TOPMOST then HWND_NOTOPMOST
+        HWND_TOPMOST = -1
+        HWND_NOTOPMOST = -2
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_SHOWWINDOW = 0x0040
+        flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+
+        user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
+        user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+
+        if attached:
+            user32.AttachThreadInput(cur_thread_id, fg_thread_id, False)
+
+        # 5. SwitchToThisWindow fallback
+        if hasattr(user32, "SwitchToThisWindow"):
+            user32.SwitchToThisWindow(hwnd, True)
+    except Exception:
+        logger.exception("force_window_to_foreground failed")
 
 
 class GlobalHotkeyManager:

@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>TaskCalendar 연동</title>
+  <style>
+    :root {
+      --primary: #6C5CE7;
+      --primary-hover: #5A4BCC;
+      --border: #E2E8F0;
+      --light-purple: #F3F0FF;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Segoe UI", Roboto, sans-serif;
+      background: #F8F9FA;
+      color: #333;
+      padding: 12px;
+      font-size: 12px;
+    }
+    .header {
+      font-size: 14px;
+      font-weight: bold;
+      margin-bottom: 10px;
+      color: var(--primary);
+    }
+    .tabs-header {
+      display: flex;
+      background: #EDF2F7;
+      border-radius: 8px;
+      padding: 3px;
+      margin-bottom: 10px;
+      border: 1px solid var(--border);
+      gap: 2px;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 7px 0;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 500;
+      color: #64748B;
+      background: transparent;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      user-select: none;
+    }
+    .tab-btn:hover {
+      color: #1E293B;
+    }
+    .tab-btn.active {
+      background: #FFFFFF;
+      color: var(--primary);
+      font-weight: bold;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+    }
+    .fields {
+      background: white;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+    }
+    .field-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 0;
+    }
+    .field-row.field-desc-row {
+      align-items: flex-start;
+    }
+    .field-row.field-desc-row .field-label {
+      padding-top: 5px;
+    }
+    .field-row.field-desc-row input[type="checkbox"] {
+      margin-top: 5px;
+    }
+    .field-row + .field-row { border-top: 1px solid #f0f0f0; }
+    .field-row input[type="checkbox"] {
+      accent-color: var(--primary);
+      flex-shrink: 0;
+    }
+    .field-label {
+      font-weight: 600;
+      font-size: 11px;
+      width: 44px;
+      flex-shrink: 0;
+      color: #555;
+    }
+    .field-input {
+      flex: 1;
+      padding: 4px 6px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: inherit;
+      color: #333;
+      background: #fafafa;
+      min-width: 0;
+    }
+    .field-input:focus {
+      outline: none;
+      border-color: var(--primary);
+      background: white;
+    }
+    .field-input:disabled {
+      background: #f0f0f0;
+      color: #aaa;
+    }
+    textarea.field-input {
+      resize: none;
+      line-height: 1.45;
+      box-sizing: border-box;
+      transition: height 0.15s ease;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+    }
+    .actions button {
+      flex: 1;
+      padding: 9px;
+      border-radius: 6px;
+      border: none;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .btn-submit { background: var(--primary); color: white; }
+    .btn-submit:hover { background: var(--primary-hover); }
+    .btn-cancel { background: #E2E8F0; color: #4A5568; }
+    .btn-cancel:hover { background: #CBD5E0; }
+  </style>
+</head>
+<body>
+  <div class="header">TaskCalendar에 등록</div>
+
+  <div class="tabs-header">
+    <button type="button" class="tab-btn active" id="btn-schedule" data-type="schedule">일정</button>
+    <button type="button" class="tab-btn" id="btn-task" data-type="task">업무</button>
+    <button type="button" class="tab-btn" id="btn-memo" data-type="memo">메모</button>
+  </div>
+
+  <div class="fields">
+    <div class="field-row">
+      <input type="checkbox" id="chk-title" checked>
+      <span class="field-label">제목</span>
+      <input type="text" class="field-input" id="val-title" placeholder="제목">
+    </div>
+
+    <!-- 업무 분류 필드 (업무 탭) -->
+    <div class="field-row" id="item-category" style="display: none;">
+      <input type="checkbox" id="chk-category" checked>
+      <span class="field-label">분류</span>
+      <input type="text" class="field-input" id="val-category" list="category-options" placeholder="일반, 공문, 보고, 기안 등">
+      <datalist id="category-options">
+        <option value="일반">
+        <option value="공문">
+        <option value="보고">
+        <option value="기안">
+        <option value="결재">
+        <option value="민원">
+        <option value="예산">
+        <option value="기타">
+      </datalist>
+    </div>
+
+    <!-- 기안자 / 작성자 (업무 탭) -->
+    <div class="field-row" id="item-author" style="display: none;">
+      <input type="checkbox" id="chk-author" checked>
+      <span class="field-label">기안자</span>
+      <input type="text" class="field-input" id="val-author" placeholder="기안자 성명/부서">
+    </div>
+
+    <!-- 처리 상태 (업무 탭) -->
+    <div class="field-row" id="item-status" style="display: none;">
+      <input type="checkbox" id="chk-status" checked>
+      <span class="field-label">상태</span>
+      <select class="field-input" id="val-status">
+        <option value="등록" selected>등록</option>
+        <option value="진행중">진행중</option>
+        <option value="완료">완료</option>
+        <option value="보류">보류</option>
+        <option value="취소">취소</option>
+      </select>
+    </div>
+
+    <!-- 날짜 (일정/업무 탭) -->
+    <div class="field-row" id="item-date">
+      <input type="checkbox" id="chk-date" checked>
+      <span class="field-label">날짜</span>
+      <input type="date" class="field-input" id="val-date">
+    </div>
+
+    <!-- 비고 / 세부내용 -->
+    <div class="field-row field-desc-row">
+      <input type="checkbox" id="chk-desc" checked>
+      <span class="field-label">내용</span>
+      <textarea class="field-input" id="val-desc" placeholder="세부내용 또는 메타정보"></textarea>
+    </div>
+
+    <!-- 출처 URL -->
+    <div class="field-row">
+      <input type="checkbox" id="chk-url" checked>
+      <span class="field-label">출처</span>
+      <input type="text" class="field-input" id="val-url" placeholder="URL">
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn-cancel" id="btn-cancel-action">취소</button>
+    <button class="btn-submit" id="btn-submit-action">등록</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

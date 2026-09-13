@@ -620,6 +620,7 @@ class EncryptedRepository:
             getattr(entry, "memo_group", "") or "",
         )
         if entry.entry_id is None:
+            created_at_val = entry.created_at.isoformat(timespec="seconds") if entry.created_at else now
             cursor = self.connection.execute(
                 """
                 INSERT INTO entries (
@@ -630,24 +631,39 @@ class EncryptedRepository:
                     created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                values + (now, now),
+                values + (created_at_val, now),
             )
             entry.entry_id = int(cursor.lastrowid)
         else:
-            self.connection.execute(
-                """
-                UPDATE entries
-                SET entry_type=?, title=?, description=?, day=?, start_date=?, end_date=?,
-                    start_time=?, end_time=?, all_day=?, assignee=?, status=?, attachments_json=?,
-                    recurrence_enabled=?, recurrence_type=?, recurrence_interval=?,
-                    recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, updated_at=?
-                WHERE id = ?
-                """,
-                values + (now, entry.entry_id),
-            )
+            if entry.created_at:
+                self.connection.execute(
+                    """
+                    UPDATE entries
+                    SET entry_type=?, title=?, description=?, day=?, start_date=?, end_date=?,
+                        start_time=?, end_time=?, all_day=?, assignee=?, status=?, attachments_json=?,
+                        recurrence_enabled=?, recurrence_type=?, recurrence_interval=?,
+                        recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, created_at=?, updated_at=?
+                    WHERE id = ?
+                    """,
+                    values + (entry.created_at.isoformat(timespec="seconds"), now, entry.entry_id),
+                )
+            else:
+                self.connection.execute(
+                    """
+                    UPDATE entries
+                    SET entry_type=?, title=?, description=?, day=?, start_date=?, end_date=?,
+                        start_time=?, end_time=?, all_day=?, assignee=?, status=?, attachments_json=?,
+                        recurrence_enabled=?, recurrence_type=?, recurrence_interval=?,
+                        recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, updated_at=?
+                    WHERE id = ?
+                    """,
+                    values + (now, entry.entry_id),
+                )
         self._cleanup_unused_attachments(previous_attachments, entry.entry_id, entry.attachments)
         self.connection.commit()
         return entry
+
+    save_entry = upsert_entry
 
     def delete_entry(self, entry_id: int) -> None:
         row = self.connection.execute("SELECT attachments_json FROM entries WHERE id = ?", (entry_id,)).fetchone()

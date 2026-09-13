@@ -184,10 +184,13 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         border-radius: 8px;
         color: {text};
         padding: 4px 8px;
+        selection-background-color: {accent_soft};
+        selection-color: {text};
     }}
     QPlainTextEdit, QTextEdit {{
         padding: 8px;
         selection-background-color: {accent_soft};
+        selection-color: {text};
     }}
     QCheckBox, QRadioButton {{
         color: {text};

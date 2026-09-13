@@ -167,6 +167,7 @@ class DateCalculatorDialog(QDialog):
         de = QDateEdit()
         de.setCalendarPopup(True)
         de.setDisplayFormat("yyyy-MM-dd")
+        de.wheelEvent = lambda event: event.ignore()
         if initial_date:
             de.setDate(QDate(initial_date.year, initial_date.month, initial_date.day))
         else:
