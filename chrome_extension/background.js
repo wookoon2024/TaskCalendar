@@ -1,17 +1,21 @@
 function setupContextMenu() {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: "taskcalendar-add",
-      title: "TaskCalendar에 등록",
-      contexts: ["page", "selection", "link", "image"]
+  try {
+    chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({
+        id: "taskcalendar-add",
+        title: "TaskCalendar에 등록",
+        contexts: ["page", "selection", "link", "image"]
+      });
     });
-  });
+  } catch(e) {}
 }
 
+// 초기화 및 이벤트 등록
+setupContextMenu();
 chrome.runtime.onInstalled.addListener(setupContextMenu);
 chrome.runtime.onStartup.addListener(setupContextMenu);
 
-// 스마트 추출 엔진 v2.0 (모든 유형의 게시판, 커뮤니티, 전자결재/온나라 및 상세페이지 자동 대응 + 사이트별 맞춤 규칙)
+// 스마트 추출 엔진 v2.1 (모든 유형의 게시판, 커뮤니티, 전자결재/온나라, 지메일 등 웹앱 자동 대응 + 사이트별 맞춤 규칙)
 function extractRowData(targetLinkUrl, targetSelection, customRule) {
   var result = {
     selectedText: targetSelection || (window.getSelection() ? window.getSelection().toString() : '') || '',
@@ -27,7 +31,50 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
     votes: ''
   };
 
+  // 대상 요소 스마트 해결 (명시적 타겟 > 드래그 텍스트 노드 > 체크된 행 > 마우스 호버 대상 > :hover 행)
   var target = document.__tcTarget;
+
+  if (!target) {
+    // 1. 화면에 드래그(블록 지정)된 텍스트가 있다면 해당 텍스트 노드의 부모
+    try {
+      var sel = window.getSelection ? window.getSelection() : null;
+      if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+        var selNode = sel.anchorNode;
+        var sEl = (selNode && selNode.nodeType === 3) ? selNode.parentElement : selNode;
+        if (sEl && document.contains(sEl)) {
+          target = sEl;
+        }
+      }
+    } catch(e) {}
+  }
+
+  if (!target) {
+    // 2. 체크박스가 체크되어 있거나 선택된(active/selected) 행 (지메일 tr.zA, 게시판 행)
+    try {
+      var checkedRow = document.querySelector('tr[aria-selected="true"], tr.zA:has([role="checkbox"][aria-checked="true"]), tr:has(input[type="checkbox"]:checked), tr.selected, tr.active, li.selected, li.active');
+      if (checkedRow) {
+        target = checkedRow;
+      }
+    } catch(e) {}
+  }
+
+  if (!target) {
+    // 3. 마우스 커서가 최근에 머물렀던(Hover) 대상
+    if (document.__tcHoverTarget && document.contains(document.__tcHoverTarget)) {
+      target = document.__tcHoverTarget;
+    }
+  }
+
+  if (!target) {
+    // 4. 현재 :hover 상태인 행
+    try {
+      var hRow = document.querySelector('tr.zA:hover, tr:hover, li:hover, article:hover');
+      if (hRow) {
+        target = hRow;
+      }
+    } catch(e) {}
+  }
+
   var linkEl = document.__tcLink;
 
   // 1. targetLinkUrl(우클릭한 링크 URL)이 넘어왔다면 정확한 <a> 태그 매칭
@@ -72,8 +119,8 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
 
   // 4. 컨테이너 탐색 (tr, li, article, div.bx 등)
   var startEl = linkEl || target;
-  var trContainer = startEl && startEl.closest ? startEl.closest('tr') : null;
-  var container = document.__tcContainer || trContainer || (startEl && startEl.closest ? startEl.closest('li, article, div.bx, div.total_wrap, div.news_wrap, div.view_wrap, div.list_item, div.ub-content, div.post, div.item, div.board_list') : null);
+  var trContainer = startEl && startEl.closest ? startEl.closest('tr, [role="row"]') : null;
+  var container = document.__tcContainer || document.__tcHoverContainer || trContainer || (startEl && startEl.closest ? startEl.closest('li, article, div.bx, div.total_wrap, div.news_wrap, div.view_wrap, div.list_item, div.ub-content, div.post, div.item, div.board_list') : null);
 
   if (!container && startEl) {
     var curr = startEl.parentElement;
@@ -84,6 +131,53 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
         break;
       }
       curr = curr.parentElement;
+    }
+  }
+
+  // [특화] 지메일(Gmail) 및 웹메일 전용 고속 스마트 필드 감지
+  var isGmail = (window.location.hostname || '').includes('mail.google.com') || (container && (container.classList.contains('zA') || container.querySelector('span.bog, span[email]')));
+  if (isGmail && (container || trContainer)) {
+    var gContainer = container || trContainer;
+    // 1. 보낸사람 (작성자)
+    if (!result.author) {
+      var gmSender = gContainer.querySelector('span[email], span.bA4 span, span[name], .yX span');
+      if (gmSender) {
+        var sText = gmSender.getAttribute('name') || gmSender.getAttribute('email') || gmSender.innerText || gmSender.textContent || '';
+        var cAuth = cleanAuthor(sText);
+        if (cAuth) result.author = cAuth;
+        else if (sText.trim()) result.author = sText.trim();
+      }
+    }
+    // 2. 제목
+    if (!result.linkText) {
+      var gmSubj = gContainer.querySelector('span.bog, .y6 span, [data-thread-id]');
+      if (gmSubj) {
+        result.linkText = (gmSubj.innerText || gmSubj.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
+      }
+    }
+    // 3. 날짜
+    if (!result.detectedDate) {
+      var gmDate = gContainer.querySelector('td.xW span[title], td.xW span, span.bi4');
+      if (gmDate) {
+        var dStr = gmDate.getAttribute('title') || gmDate.innerText || '';
+        result.detectedDate = normalizeDate(dStr);
+      }
+    }
+    // 4. 내용 (메일 본문 요약 스니펫)
+    if (!result.descOverride && !result.selectedText) {
+      var gmSnippet = gContainer.querySelector('span.y2');
+      if (gmSnippet) {
+        var snipText = (gmSnippet.innerText || gmSnippet.textContent || '').replace(/^[\s\-–—:]+/, '').trim();
+        if (snipText) {
+          result.descOverride = snipText;
+          result.selectedText = snipText;
+        }
+      }
+    }
+    // 5. 스레드 직접 링크 (data-legacy-thread-id 또는 data-thread-id)
+    var threadId = gContainer.getAttribute('data-legacy-thread-id') || gContainer.getAttribute('data-thread-id');
+    if (threadId && !targetLinkUrl) {
+      result.linkUrl = window.location.origin + window.location.pathname + '#inbox/' + threadId;
     }
   }
 
@@ -901,6 +995,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           if (t && t.id) chrome.tabs.remove(t.id).catch(() => {});
         }, 1500);
       });
+    }
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (request.action === "elementPickerCompleted") {
+    var pTab = sender.tab;
+    if (pTab) {
+      triggerCapture(pTab, request.linkUrl || "", "", pTab.url || "");
     }
     sendResponse({ success: true });
     return true;

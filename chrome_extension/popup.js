@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
     viewRegister: document.getElementById('view-register'),
     viewConfig: document.getElementById('view-config'),
     btnToggleConfig: document.getElementById('btn-toggle-config'),
+    btnPickElement: document.getElementById('btn-pick-element'),
     siteRuleBadge: document.getElementById('site-rule-badge'),
     siteDomainLabel: document.getElementById('site-domain-label'),
     cfgDomainBadge: document.getElementById('cfg-domain-badge'),
@@ -120,6 +121,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
   els.btnToggleConfig.addEventListener('click', () => switchView('config'));
   els.btnCfgCancel.addEventListener('click', () => switchView('register'));
+
+  // 🎯 화면에서 직접 찍기 (Element Picker) 실행
+  if (els.btnPickElement) {
+    els.btnPickElement.addEventListener('click', () => {
+      function startPickerOnTab(tabId) {
+        chrome.tabs.sendMessage(tabId, { action: "startElementPicker" }, (res) => {
+          if (chrome.runtime.lastError) {
+            // content.js 동적 주입 후 재시도
+            chrome.scripting.executeScript({
+              target: { tabId: tabId },
+              files: ["content.js"]
+            }, () => {
+              setTimeout(() => {
+                chrome.tabs.sendMessage(tabId, { action: "startElementPicker" });
+              }, 100);
+            });
+          }
+        });
+        window.close();
+      }
+
+      if (originTabId) {
+        startPickerOnTab(originTabId);
+      } else {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          if (tabs && tabs[0]) {
+            startPickerOnTab(tabs[0].id);
+          }
+        });
+      }
+    });
+  }
+
+  // 백그라운드로부터 새 데이터 전달 시 자동 갱신
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.action === "reloadTaskCalendarData") {
+      loadFormData();
+    }
+  });
 
   // ========== 서식 치환 헬퍼 (미리보기용) ==========
   function renderTemplatePreview(templateStr) {

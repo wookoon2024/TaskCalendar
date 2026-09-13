@@ -510,9 +510,14 @@
   <!-- 상단 헤더 (등록 뷰에서만 표시) -->
   <div class="header-row" id="header-row">
     <div class="header-title">TaskCalendar에 등록</div>
-    <button type="button" id="btn-toggle-config" class="btn-config-toggle" title="이 사이트 맞춤 규칙 설정">
-      ⚙️ 사이트 맞춤
-    </button>
+    <div style="display: flex; gap: 5px; align-items: center;">
+      <button type="button" id="btn-pick-element" class="btn-config-toggle" title="웹페이지에서 원하는 메일/게시글을 마우스로 직접 클릭하여 선택합니다">
+        🎯 항목 직접 찍기
+      </button>
+      <button type="button" id="btn-toggle-config" class="btn-config-toggle" title="이 사이트 맞춤 규칙 설정">
+        ⚙️ 사이트 맞춤
+      </button>
+    </div>
   </div>
 
   <!-- 사이트 맞춤 규칙 적용 중 안내 배지 -->
