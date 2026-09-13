@@ -907,25 +907,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== "taskcalendar-add") return;
-
-  var clickedLinkUrl = info.linkUrl || "";
-  var clickedSelection = info.selectionText || "";
-  var domain = getDomainFromUrl(tab.url || info.pageUrl || "");
+function triggerCapture(tab, clickedLinkUrl, clickedSelection, fallbackUrl) {
+  if (!tab) return;
+  var linkUrl = clickedLinkUrl || "";
+  var selection = clickedSelection || "";
+  var pageUrl = fallbackUrl || tab.url || "";
+  var domain = getDomainFromUrl(pageUrl);
 
   if (!tab.url || tab.url.startsWith("chrome://") || tab.url.startsWith("chrome-extension://")) {
     const data = {
-      selectedText: clickedSelection,
+      selectedText: selection,
       linkText: "",
-      linkUrl: clickedLinkUrl,
+      linkUrl: linkUrl,
       metaText: "",
       author: "",
       category: "",
       status: "등록",
       detectedDate: "",
       pageTitle: tab.title || "",
-      pageUrl: clickedLinkUrl || tab.url || "",
+      pageUrl: linkUrl || pageUrl,
       siteDomain: domain,
       hasCustomRule: false,
       originTabId: null
@@ -948,7 +948,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       {
         target: { tabId: tab.id },
         func: extractRowData,
-        args: [clickedLinkUrl, clickedSelection, ruleToUse]
+        args: [linkUrl, selection, ruleToUse]
       },
       (results) => {
         if (chrome.runtime.lastError) {
@@ -958,8 +958,8 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
         console.log('[TaskCalendar BG] captured:', JSON.stringify(captured));
 
         var finalLinkText = captured.linkText || "";
-        var finalLinkUrl = captured.linkUrl || clickedLinkUrl || "";
-        var finalSelectedText = captured.selectedText || clickedSelection || "";
+        var finalLinkUrl = captured.linkUrl || linkUrl || "";
+        var finalSelectedText = captured.selectedText || selection || "";
 
         if (!finalLinkText && finalSelectedText && finalSelectedText.length <= 150) {
           finalLinkText = finalSelectedText.trim();
@@ -975,7 +975,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
           status: captured.status || "등록",
           detectedDate: captured.detectedDate || "",
           pageTitle: tab.title || "",
-          pageUrl: finalLinkUrl || info.pageUrl || tab.url || "",
+          pageUrl: finalLinkUrl || pageUrl,
           siteDomain: domain,
           hasCustomRule: hasCustomRule,
           customRule: rawRule || {},
@@ -985,4 +985,30 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       }
     );
   });
+}
+
+// 1. 우클릭 컨텍스트 메뉴 클릭
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId !== "taskcalendar-add") return;
+  triggerCapture(tab, info.linkUrl || "", info.selectionText || "", info.pageUrl || "");
 });
+
+// 2. 확장 프로그램 툴바 아이콘 클릭 (Gmail 등 자체 우클릭 메뉴가 있는 사이트 대응)
+if (chrome.action && chrome.action.onClicked) {
+  chrome.action.onClicked.addListener((tab) => {
+    triggerCapture(tab, "", "", tab.url || "");
+  });
+}
+
+// 3. 단축키 실행 (Alt+Shift+C)
+if (chrome.commands && chrome.commands.onCommand) {
+  chrome.commands.onCommand.addListener((command) => {
+    if (command === "open-taskcalendar-add") {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs && tabs.length > 0) {
+          triggerCapture(tabs[0], "", "", tabs[0].url || "");
+        }
+      });
+    }
+  });
+}
