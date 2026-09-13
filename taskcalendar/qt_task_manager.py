@@ -1159,7 +1159,7 @@ class TaskManagerDialog(QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setShowGrid(True)
 
         self.HEADER_COLUMNS = ["등록일자", "분류", "업무 제목", "기안자 / 작성자", "상태", "비고 / 세부내용", "편집"]
@@ -1200,6 +1200,7 @@ class TaskManagerDialog(QDialog):
         self.table.setItemDelegate(self.hover_delegate)
         self.table.setMouseTracking(True)
         self.table.viewport().setMouseTracking(True)
+        self.table.installEventFilter(self)
         self.table.viewport().installEventFilter(self)
 
         # 테이블을 table_container에 추가하고 메인 레이아웃에 배치 (탭과의 줄간격 0)
@@ -1535,7 +1536,18 @@ class TaskManagerDialog(QDialog):
                 self._set_hovered_row(-1)
         elif obj == self.table.viewport() and event.type() == QEvent.Resize:
             self._adjust_columns_to_fill_width()
+        elif event.type() == QEvent.KeyPress and obj in (self.table, self.table.viewport()):
+            if event.key() == Qt.Key_Delete and self.table.state() != QTableWidget.EditingState:
+                self._on_delete_selected()
+                return True
         return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key_Delete and self.table.state() != QTableWidget.EditingState:
+            self._on_delete_selected()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def apply_palette(self, palette: dict[str, str]) -> None:
         """스킨/테마 변경 시 팔레트 갱신 및 모든 UI 요소 실시간 리스타일링"""
@@ -2281,7 +2293,7 @@ class TaskManagerDialog(QDialog):
                 cat_str,
                 badge_cat_cfg,
                 lambda btn, t=task: self._show_category_menu(t, btn),
-                on_context=lambda pos, t=task: self._show_context_menu_for_task(t, pos),
+                on_context=lambda pos, t=task, r=row_idx: self._show_context_menu_for_task(t, pos, r),
             )
             cat_widget.setProperty("row_idx", row_idx)
             cat_widget.btn.setProperty("row_idx", row_idx)
@@ -2314,7 +2326,7 @@ class TaskManagerDialog(QDialog):
                 status_str,
                 badge_status_cfg,
                 lambda btn, t=task, r=row_idx: self._show_status_menu(t, btn, r),
-                on_context=lambda pos, t=task: self._show_context_menu_for_task(t, pos),
+                on_context=lambda pos, t=task, r=row_idx: self._show_context_menu_for_task(t, pos, r),
             )
             status_widget.setProperty("row_idx", row_idx)
             status_widget.btn.setProperty("row_idx", row_idx)
@@ -2513,40 +2525,84 @@ class TaskManagerDialog(QDialog):
         self._update_stats_label()
         self._update_row_appearance(row_idx, task)
 
+    def _get_selected_tasks(self) -> list[CalendarEntry]:
+        """현재 테이블에서 선택된 업무 목록 반환"""
+        selected_indexes = self.table.selectionModel().selectedRows()
+        selected_rows = sorted({idx.row() for idx in selected_indexes})
+        return [
+            self._displayed_tasks[r]
+            for r in selected_rows
+            if 0 <= r < len(self._displayed_tasks)
+        ]
+
     def _show_context_menu(self, pos: QPoint) -> None:
         """테이블 우클릭 시 컨텍스트 메뉴 표시"""
         row = self.table.rowAt(pos.y())
         if row < 0 or row >= len(self._displayed_tasks):
             return
-        task = self._displayed_tasks[row]
-        global_pos = self.table.viewport().mapToGlobal(pos)
-        self._show_context_menu_for_task(task, global_pos)
 
-    def _show_context_menu_for_task(self, task: CalendarEntry, global_pos: QPoint) -> None:
-        """단일 업무에 대한 컨텍스트 메뉴(상세수정, 출처열기, 삭제 등) 팝업"""
+        selected_rows = {idx.row() for idx in self.table.selectionModel().selectedRows()}
+        if row not in selected_rows:
+            self.table.clearSelection()
+            self.table.selectRow(row)
+
+        tasks = self._get_selected_tasks()
+        if not tasks:
+            tasks = [self._displayed_tasks[row]]
+
+        global_pos = self.table.viewport().mapToGlobal(pos)
+        self._show_context_menu_for_tasks(tasks, global_pos)
+
+    def _show_context_menu_for_task(self, task: CalendarEntry, global_pos: QPoint, row_idx: int | None = None) -> None:
+        """단일 또는 다중 업무에 대한 컨텍스트 메뉴 팝업"""
+        selected_rows = {idx.row() for idx in self.table.selectionModel().selectedRows()}
+        if row_idx is not None and row_idx not in selected_rows:
+            self.table.clearSelection()
+            self.table.selectRow(row_idx)
+
+        tasks = self._get_selected_tasks()
+        if not tasks or task not in tasks:
+            tasks = [task]
+
+        self._show_context_menu_for_tasks(tasks, global_pos)
+
+    def _show_context_menu_for_tasks(self, tasks: list[CalendarEntry], global_pos: QPoint) -> None:
+        """단일 또는 다중 선택 업무 컨텍스트 메뉴 팝업"""
+        if not tasks:
+            return
+
         menu = QMenu(self)
         menu.setStyleSheet(self._menu_stylesheet())
 
-        act_edit = menu.addAction("✏️ 상세 수정 창 열기")
-        menu.addSeparator()
+        if len(tasks) == 1:
+            task = tasks[0]
+            act_edit = menu.addAction("✏️ 상세 수정 창 열기")
+            menu.addSeparator()
 
-        urls = re.findall(r'https?://[^\s<>"]+|www\.[^\s<>"]+', task.description or "")
-        act_url = None
-        if urls:
-            act_url = menu.addAction("🔗 출처 웹페이지 열기")
+            urls = re.findall(r'https?://[^\s<>"]+|www\.[^\s<>"]+', task.description or "")
+            act_url = None
+            if urls:
+                act_url = menu.addAction("🔗 출처 웹페이지 열기")
 
-        act_del = menu.addAction("🗑️ 업무 삭제")
+            act_del = menu.addAction("🗑️ 업무 삭제")
 
-        action = menu.exec(global_pos)
-        if action == act_edit:
-            self._edit_task(task)
-        elif act_url and action == act_url:
-            url_str = urls[0]
-            if not url_str.startswith("http"):
-                url_str = "https://" + url_str
-            QDesktopServices.openUrl(QUrl(url_str))
-        elif action == act_del:
-            self._delete_task(task)
+            action = menu.exec(global_pos)
+            if action == act_edit:
+                self._edit_task(task)
+            elif act_url and action == act_url:
+                url_str = urls[0]
+                if not url_str.startswith("http"):
+                    url_str = "https://" + url_str
+                QDesktopServices.openUrl(QUrl(url_str))
+            elif action == act_del:
+                self._delete_task(task)
+        else:
+            count = len(tasks)
+            act_del = menu.addAction(f"🗑️ 선택한 업무 일괄 삭제 ({count}개)")
+
+            action = menu.exec(global_pos)
+            if action == act_del:
+                self._delete_tasks(tasks)
 
     def _on_add_task(self) -> None:
         """새 업무 등록 (전용 TaskEditDialog 호출)"""
@@ -2580,15 +2636,43 @@ class TaskManagerDialog(QDialog):
                 self.main_window.refresh()
             self.reload_tasks()
 
+    def _delete_tasks(self, tasks: list[CalendarEntry]) -> None:
+        """단일 또는 복수 업무 삭제 확인 및 일괄 수행"""
+        if not tasks:
+            return
+        if len(tasks) == 1:
+            self._delete_task(tasks[0])
+            return
+
+        count = len(tasks)
+        reply = QMessageBox.question(
+            self,
+            "일괄 삭제 확인",
+            f"선택한 {count}개의 업무를 모두 삭제하시겠습니까?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            for task in tasks:
+                if task.entry_id:
+                    self.repository.delete_entry(task.entry_id)
+            self.repository.save()
+            if self.main_window and hasattr(self.main_window, "refresh"):
+                self.main_window.refresh()
+            self.reload_tasks()
+
     def _on_delete_selected(self) -> None:
-        """선택된 업무 삭제 버튼 핸들러"""
-        selected_row = self.table.currentRow()
-        if selected_row < 0 or selected_row >= len(self._filtered_tasks):
+        """선택된 업무 삭제 핸들러 (단일 및 다중 선택 지원)"""
+        tasks = self._get_selected_tasks()
+        if not tasks:
+            selected_row = self.table.currentRow()
+            if 0 <= selected_row < len(self._displayed_tasks):
+                tasks = [self._displayed_tasks[selected_row]]
+        if not tasks:
             QMessageBox.information(self, "안내", "삭제할 업무를 선택해 주세요.")
             return
 
-        task = self._filtered_tasks[selected_row]
-        self._delete_task(task)
+        self._delete_tasks(tasks)
 
     def _export_to_excel(self) -> None:
         """현재 필터링된 업무 목록을 깔끔한 서식의 엑셀 파일로 내보내기"""
