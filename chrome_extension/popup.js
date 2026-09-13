@@ -718,80 +718,35 @@ document.addEventListener('DOMContentLoaded', () => {
       url += `&url=${encodeURIComponent(els.valUrl.value.trim())}`;
     }
 
-    // 1. JSON 페이로드 및 프로토콜 URL 동시 조립
-    const payload = {
-      action: 'add',
-      type: type,
-      title: (els.chkTitle.checked && els.valTitle.value.trim()) || '',
-      category: (type === 'task' && els.chkCategory.checked && els.valCategory.value.trim()) || '',
-      author: (type === 'task' && els.chkAuthor.checked && els.valAuthor.value.trim()) || '',
-      status: (type === 'task' && els.chkStatus.checked && els.valStatus.value) || '',
-      desc: (els.chkDesc.checked && els.valDesc.value.trim()) || '',
-      date: (type !== 'memo' && els.chkDate.checked && els.valDate.value) || '',
-      url: (els.chkUrl.checked && els.valUrl.value.trim()) || ''
-    };
-
     els.btnSubmit.disabled = true;
     els.btnSubmit.textContent = '등록 중...';
 
-    async function dispatchRegistration() {
-      let sentViaHttp = false;
+    // 1. 백그라운드 서비스 워커를 통한 윈도우 프로토콜 URL 호출
+    chrome.runtime.sendMessage({
+      action: "openProtocolUrl",
+      url: url,
+      tabId: originTabId
+    }).catch(() => {});
 
-      // 1) 고속 로컬 HTTP API (127.0.0.1:23119) 우선 시도 - 브라우저 경고/팝업 차단 없이 즉각 0초 전송
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 600);
-        const res = await fetch('http://127.0.0.1:23119/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-        if (res.ok) {
-          sentViaHttp = true;
-        }
-      } catch (e) {
-        sentViaHttp = false;
-      }
-
-      if (sentViaHttp) {
-        els.btnSubmit.textContent = '✅ 등록 완료!';
-        els.btnSubmit.style.background = '#10B981';
-        setTimeout(() => window.close(), 350);
-        return;
-      }
-
-      // 2) 프로토콜 URL 폴백 (앱이 꺼져있을 때 앱 기동 포함)
-      // 백그라운드 서비스 워커를 통한 탭 업데이트 및 탭 생성 호출
-      chrome.runtime.sendMessage({
-        action: "openProtocolUrl",
-        url: url,
-        tabId: originTabId
+    // 2. 원본 탭 내 히든 아이프레임 주입으로 프로토콜 즉시 실행
+    if (originTabId) {
+      chrome.scripting.executeScript({
+        target: { tabId: originTabId },
+        func: (protocolUrl) => {
+          try {
+            const ifr = document.createElement('iframe');
+            ifr.style.display = 'none';
+            ifr.src = protocolUrl;
+            document.body.appendChild(ifr);
+            setTimeout(() => { ifr.remove(); }, 3000);
+          } catch (err) {}
+        },
+        args: [url]
       }).catch(() => {});
-
-      // 원본 탭 내 히든 아이프레임 주입 호출
-      if (originTabId) {
-        chrome.scripting.executeScript({
-          target: { tabId: originTabId },
-          func: (protocolUrl) => {
-            try {
-              const ifr = document.createElement('iframe');
-              ifr.style.display = 'none';
-              ifr.src = protocolUrl;
-              document.body.appendChild(ifr);
-              setTimeout(() => { ifr.remove(); }, 4000);
-            } catch (err) {}
-          },
-          args: [url]
-        }).catch(() => {});
-      }
-
-      els.btnSubmit.textContent = '✅ 등록 완료!';
-      els.btnSubmit.style.background = '#10B981';
-      setTimeout(() => window.close(), 600);
     }
 
-    dispatchRegistration();
+    els.btnSubmit.textContent = '✅ 등록 완료!';
+    els.btnSubmit.style.background = '#10B981';
+    setTimeout(() => window.close(), 450);
   });
 });

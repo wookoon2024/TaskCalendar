@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import ctypes
-import http.server
 import json
 import logging
 import sys
-import threading
 from urllib.parse import parse_qs, unquote, urlparse
 
-from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtNetwork import QHostAddress, QLocalServer, QLocalSocket, QTcpServer
+from PySide6.QtCore import QTimer
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 from taskcalendar.desktop_services import (
     default_shortcut,
@@ -156,58 +154,6 @@ def _start_local_server(window: MainWindow) -> QLocalServer:
     return server
 
 
-class _HttpSignalBridge(QObject):
-    entry_received = Signal(dict)
-
-
-def _start_http_server(window: MainWindow, port: int = 23119) -> http.server.ThreadingHTTPServer | None:
-    """Start lightweight local HTTP server for instant Chrome extension integration."""
-    bridge = _HttpSignalBridge(window)
-    bridge.entry_received.connect(window.receive_external_entry)
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_OPTIONS(self):
-            self.send_response(200)
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
-            self.end_headers()
-
-        def do_POST(self):
-            try:
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8")
-                payload = json.loads(body)
-                logger.info(f"[HTTP API] Received registration payload: {payload}")
-                bridge.entry_received.emit(payload)
-
-                resp = json.dumps({"success": True}).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(resp)))
-                self.end_headers()
-                self.wfile.write(resp)
-            except Exception as e:
-                logger.error(f"[HTTP API] Error handling request: {e}")
-                self.send_response(500)
-                self.end_headers()
-
-        def log_message(self, format, *args):
-            # Suppress default console log spam
-            pass
-
-    try:
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        logger.info(f"[HTTP API] Listening on http://127.0.0.1:{port}/")
-        return server
-    except Exception as e:
-        logger.warning(f"[HTTP API] Could not bind http://127.0.0.1:{port}/: {e}")
-        return None
-
-
 def run() -> None:
     url_data = _parse_protocol_url(sys.argv)
 
@@ -244,9 +190,8 @@ def run() -> None:
 
     window = MainWindow(repository)
 
-    # Start IPC server & local HTTP API for receiving data from Chrome extension
+    # Start IPC server for receiving data from Chrome extension
     ipc_server = _start_local_server(window)
-    http_server = _start_http_server(window)
 
     # Register protocol handler if not already registered
     from taskcalendar.desktop_services import register_protocol_handler
