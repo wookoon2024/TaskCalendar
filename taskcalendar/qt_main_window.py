@@ -1200,6 +1200,7 @@ class MainWindow(QMainWindow):
         self._calendar_rerender_pending = False
         self._window_state_dirty = False
         self._did_memo_restore = False
+        self._current_applied_theme: str | None = None
 
         self.setWindowTitle(f"K캘린더 {APP_VERSION}")
         self.setWindowIcon(app_icon())
@@ -3931,150 +3932,154 @@ class MainWindow(QMainWindow):
             self._sticker_widgets.pop(sticker_id, None)
             self._sticker_animation_state.pop(sticker_id, None)
 
-    def refresh(self) -> None:
+    def refresh(self, force_theme: bool = False) -> None:
         if self.theme_name not in THEMES:
             self.theme_name = "light"
         self.palette = THEMES[self.theme_name]
         if self.sidebar_mode == "search" and self.search_query:
             self.search_results = self.repository.search_entries(self.search_query)
-        self.setStyleSheet(app_stylesheet(self.palette))
-        self._apply_tooltip_palette()
-        if getattr(self, "_task_manager_dialog", None) is not None and self._task_manager_dialog.isVisible():
-            self._task_manager_dialog.apply_palette(self.palette)
-        self.sticker_toolbar.setStyleSheet(
-            """
-            QFrame#stickerToolbar {
-                background: #f8efc5;
-                border: 1px solid #d5c68a;
-                border-radius: 11px;
-            }
-            QLabel#stickerDragHandle {
-                color: #a6965b;
-                background: transparent;
-                font-weight: bold;
-                font-size: 13px;
-                padding: 0px;
-                margin-bottom: 2px;
-            }
-            QLabel#stickerToolbarLabel {
-                color: #6e5f2d;
-                background: transparent;
-                font-weight: 700;
-                padding: 0 2px;
-            }
-            QFrame#stickerDivider {
-                background: #dbcfa0;
-                border: none;
-                min-width: 1px;
-                max-width: 1px;
-                margin: 3px 4px;
-            }
-            QToolButton#stickerChip {
-                background: #f7edbf;
-                border: 1px solid #ddcc8e;
-                border-radius: 13px;
-                padding: 0px;
-            }
-            QToolButton#stickerChip:hover {
-                background: #fff4cd;
-                border-color: #ccb66d;
-            }
-            QPushButton#stickerLibraryButton {
-                background: #f6eab8;
-                color: #4f4422;
-                border: 1px solid #ccb874;
-                border-radius: 8px;
-                padding: 4px 10px;
-                font-weight: 700;
-            }
-            QPushButton#stickerLibraryButton:hover {
-                background: #fff1bf;
-            }
-            QSlider#stickerScaleSlider::groove:horizontal {
-                background: #c7b877;
-                height: 4px;
-                border-radius: 2px;
-            }
-            QSlider#stickerScaleSlider::sub-page:horizontal {
-                background: #86723a;
-                border-radius: 2px;
-            }
-            QSlider#stickerScaleSlider::handle:horizontal {
-                background: #fff8dd;
-                border: 1px solid #9e894b;
-                width: 14px;
-                margin: -6px 0;
-                border-radius: 7px;
-            }
-            QPushButton#stickerMiniButton {
-                background: #fff7d3;
-                color: #5b4f2b;
-                border: 1px solid #cfbe7f;
-                border-radius: 8px;
-                font-weight: 700;
-            }
-            QPushButton#stickerMiniButton:hover {
-                background: #fffbe8;
-            }
-            QPushButton#stickerDangerButton {
-                background: #fff2e0;
-                color: #8f402f;
-                border: 1px solid #dfb39b;
-                border-radius: 8px;
-                padding: 4px 10px;
-                font-weight: 700;
-            }
-            QPushButton#stickerDangerButton:hover {
-                background: #ffe8db;
-            }
-            QPushButton#stickerCloseButton {
-                background: transparent;
-                color: #8f7f4f;
-                border: none;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 0px;
-                border-radius: 4px;
-            }
-            QPushButton#stickerCloseButton:hover {
-                color: #c93b2b;
-                background: #ffebd2;
-            }
-            """
-        )
-        self.sidebar_scroll.setStyleSheet(
-            f"QScrollArea {{ background: {self.palette['panel']}; border: none; }}"
-            f"QScrollArea > QWidget > QWidget {{ background: {self.palette['panel']}; }}"
-        )
-        self.sidebar_content.setStyleSheet(f"background: {self.palette['panel']};")
-        self.calendar_grid_widget.setStyleSheet("QWidget#calendarGridWidget { background: transparent; }")
-        if hasattr(self, "info_title"):
-            self.info_title.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {self.palette['text']}; background: transparent; border: none;")
-        if hasattr(self, "info_add_button"):
-            self.info_add_button.setStyleSheet(f"background: {self.palette['accent']}; color: {self.palette['button_text']}; border: none; border-radius: 4px; padding: 1px 8px; font-size: 12px; font-weight: bold;")
-        if hasattr(self, "info_group_button"):
-            self.info_group_button.setStyleSheet(f"background: {self.palette['panel_alt']}; color: {self.palette['text']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 1px 6px; font-size: 12px;")
-        if hasattr(self, "info_export_button"):
-            self.info_export_button.setStyleSheet(f"background: {self.palette['panel_alt']}; color: {self.palette['text']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 1px 6px; font-size: 12px;")
-        if hasattr(self, "sidebar_close_btn"):
-            self.sidebar_close_btn.setStyleSheet(f"background: {self.palette['panel_alt']}; color: {self.palette['text']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 0px;")
-        if hasattr(self, "search_input"):
-            self.search_input.setStyleSheet(
-                f"background: {self.palette['panel_alt']}; color: {self.palette['text']};"
-                f"border: 1px solid {self.palette['line']}; border-radius: 6px; padding: 4px 8px; font-size: 12px;"
+
+        theme_changed = (self.theme_name != getattr(self, "_current_applied_theme", None)) or force_theme
+        if theme_changed:
+            self.setStyleSheet(app_stylesheet(self.palette))
+            self._apply_tooltip_palette()
+            if getattr(self, "_task_manager_dialog", None) is not None and self._task_manager_dialog.isVisible():
+                self._task_manager_dialog.apply_palette(self.palette)
+            self.sticker_toolbar.setStyleSheet(
+                """
+                QFrame#stickerToolbar {
+                    background: #f8efc5;
+                    border: 1px solid #d5c68a;
+                    border-radius: 11px;
+                }
+                QLabel#stickerDragHandle {
+                    color: #a6965b;
+                    background: transparent;
+                    font-weight: bold;
+                    font-size: 13px;
+                    padding: 0px;
+                    margin-bottom: 2px;
+                }
+                QLabel#stickerToolbarLabel {
+                    color: #6e5f2d;
+                    background: transparent;
+                    font-weight: 700;
+                    padding: 0 2px;
+                }
+                QFrame#stickerDivider {
+                    background: #dbcfa0;
+                    border: none;
+                    min-width: 1px;
+                    max-width: 1px;
+                    margin: 3px 4px;
+                }
+                QToolButton#stickerChip {
+                    background: #f7edbf;
+                    border: 1px solid #ddcc8e;
+                    border-radius: 13px;
+                    padding: 0px;
+                }
+                QToolButton#stickerChip:hover {
+                    background: #fff4cd;
+                    border-color: #ccb66d;
+                }
+                QPushButton#stickerLibraryButton {
+                    background: #f6eab8;
+                    color: #4f4422;
+                    border: 1px solid #ccb874;
+                    border-radius: 8px;
+                    padding: 4px 10px;
+                    font-weight: 700;
+                }
+                QPushButton#stickerLibraryButton:hover {
+                    background: #fff1bf;
+                }
+                QSlider#stickerScaleSlider::groove:horizontal {
+                    background: #c7b877;
+                    height: 4px;
+                    border-radius: 2px;
+                }
+                QSlider#stickerScaleSlider::sub-page:horizontal {
+                    background: #86723a;
+                    border-radius: 2px;
+                }
+                QSlider#stickerScaleSlider::handle:horizontal {
+                    background: #fff8dd;
+                    border: 1px solid #9e894b;
+                    width: 14px;
+                    margin: -6px 0;
+                    border-radius: 7px;
+                }
+                QPushButton#stickerMiniButton {
+                    background: #fff7d3;
+                    color: #5b4f2b;
+                    border: 1px solid #cfbe7f;
+                    border-radius: 8px;
+                    font-weight: 700;
+                }
+                QPushButton#stickerMiniButton:hover {
+                    background: #fffbe8;
+                }
+                QPushButton#stickerDangerButton {
+                    background: #fff2e0;
+                    color: #8f402f;
+                    border: 1px solid #dfb39b;
+                    border-radius: 8px;
+                    padding: 4px 10px;
+                    font-weight: 700;
+                }
+                QPushButton#stickerDangerButton:hover {
+                    background: #ffe8db;
+                }
+                QPushButton#stickerCloseButton {
+                    background: transparent;
+                    color: #8f7f4f;
+                    border: none;
+                    font-size: 14px;
+                    font-weight: bold;
+                    padding: 0px;
+                    border-radius: 4px;
+                }
+                QPushButton#stickerCloseButton:hover {
+                    color: #c93b2b;
+                    background: #ffebd2;
+                }
+                """
             )
-        for idx, label in enumerate(self.weekday_labels):
-            if idx == 0:
-                color = self.palette["danger"]
-            elif idx == 6:
-                color = self.palette["info"]
-            else:
-                color = self.palette["text"]
-            label.setStyleSheet(
-                f"background: {self.palette['panel_alt']}; color: {color};"
-                f"border: 1px solid {self.palette['line']}; padding: 4px 0 3px 0;"
-                f"font-size: 12px; font-weight: bold;"
+            self.sidebar_scroll.setStyleSheet(
+                f"QScrollArea {{ background: {self.palette['panel']}; border: none; }}"
+                f"QScrollArea > QWidget > QWidget {{ background: {self.palette['panel']}; }}"
             )
+            self.sidebar_content.setStyleSheet(f"background: {self.palette['panel']};")
+            self.calendar_grid_widget.setStyleSheet("QWidget#calendarGridWidget { background: transparent; }")
+            if hasattr(self, "info_title"):
+                self.info_title.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {self.palette['text']}; background: transparent; border: none;")
+            if hasattr(self, "info_add_button"):
+                self.info_add_button.setStyleSheet(f"background: {self.palette['accent']}; color: {self.palette['button_text']}; border: none; border-radius: 4px; padding: 1px 8px; font-size: 12px; font-weight: bold;")
+            if hasattr(self, "info_group_button"):
+                self.info_group_button.setStyleSheet(f"background: {self.palette['panel_alt']}; color: {self.palette['text']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 1px 6px; font-size: 12px;")
+            if hasattr(self, "info_export_button"):
+                self.info_export_button.setStyleSheet(f"background: {self.palette['panel_alt']}; color: {self.palette['text']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 1px 6px; font-size: 12px;")
+            if hasattr(self, "sidebar_close_btn"):
+                self.sidebar_close_btn.setStyleSheet(f"background: {self.palette['panel_alt']}; color: {self.palette['text']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 0px;")
+            if hasattr(self, "search_input"):
+                self.search_input.setStyleSheet(
+                    f"background: {self.palette['panel_alt']}; color: {self.palette['text']};"
+                    f"border: 1px solid {self.palette['line']}; border-radius: 6px; padding: 4px 8px; font-size: 12px;"
+                )
+            for idx, label in enumerate(self.weekday_labels):
+                if idx == 0:
+                    color = self.palette["danger"]
+                elif idx == 6:
+                    color = self.palette["info"]
+                else:
+                    color = self.palette["text"]
+                label.setStyleSheet(
+                    f"background: {self.palette['panel_alt']}; color: {color};"
+                    f"border: 1px solid {self.palette['line']}; padding: 4px 0 3px 0;"
+                    f"font-size: 12px; font-weight: bold;"
+                )
+            self._current_applied_theme = self.theme_name
         self.year_button.setText(f"{self.current_year}년")
         self.month_button.setText(f"{self.current_month}월")
         self.calendar_title.setText(f"{self.current_year}년 {self.current_month}월")
@@ -4194,19 +4199,25 @@ class MainWindow(QMainWindow):
             is_today = current_day == date.today()
             is_selected = current_day == self.selected_day
             holiday_name = self._holiday_name_for_day(current_day)
-            cell.setStyleSheet(day_cell_style(self.palette, in_month, is_today, is_selected))
+            cell_style = day_cell_style(self.palette, in_month, is_today, is_selected)
+            if getattr(cell, "_applied_style", None) != cell_style:
+                cell.setStyleSheet(cell_style)
+                cell._applied_style = cell_style
             cell.number_label.setText(str(current_day.day))
 
             if holiday_name:
-                cell.number_label.setStyleSheet(f"font-size: 11pt; font-weight: bold; color: {self.palette['danger']}; background: transparent; border: none;")
+                num_style = f"font-size: 11pt; font-weight: bold; color: {self.palette['danger']}; background: transparent; border: none;"
             elif current_day.weekday() == 6:
-                cell.number_label.setStyleSheet(f"font-size: 11pt; font-weight: bold; color: {self.palette['danger']}; background: transparent; border: none;")
+                num_style = f"font-size: 11pt; font-weight: bold; color: {self.palette['danger']}; background: transparent; border: none;"
             elif current_day.weekday() == 5:
-                cell.number_label.setStyleSheet(f"font-size: 11pt; font-weight: bold; color: {self.palette['info']}; background: transparent; border: none;")
+                num_style = f"font-size: 11pt; font-weight: bold; color: {self.palette['info']}; background: transparent; border: none;"
             else:
                 color = self.palette.get("badge_selected_fg", self.palette["text"]) if is_selected else (self.palette["text"] if in_month else self.palette["muted"])
                 weight = "bold" if in_month else "500"
-                cell.number_label.setStyleSheet(f"font-size: 11pt; font-weight: {weight}; color: {color}; background: transparent; border: none;")
+                num_style = f"font-size: 11pt; font-weight: {weight}; color: {color}; background: transparent; border: none;"
+            if getattr(cell.number_label, "_applied_style", None) != num_style:
+                cell.number_label.setStyleSheet(num_style)
+                cell.number_label._applied_style = num_style
 
             solar_term = get_solar_term(current_day) if getattr(self, "show_solar_terms", True) else ""
             show_lunar = getattr(self, "show_lunar_calendar", True)
@@ -4260,10 +4271,13 @@ class MainWindow(QMainWindow):
                 cell.lunar_label.setText(" ".join(label_parts))
                 if solar_term:
                     term_color = self.palette.get("accent", "#10b981") if self.theme_name == "dark" else self.palette.get("success", "#10b981")
-                    cell.lunar_label.setStyleSheet(f"font-size: 8pt; font-weight: bold; color: {term_color}; background: transparent; border: none;")
+                    lunar_style = f"font-size: 8pt; font-weight: bold; color: {term_color}; background: transparent; border: none;"
                 else:
                     lunar_color = self.palette.get("badge_selected_fg", self.palette["muted"]) if is_selected else self.palette["muted"]
-                    cell.lunar_label.setStyleSheet(f"font-size: 8pt; font-weight: 500; color: {lunar_color}; background: transparent; border: none;")
+                    lunar_style = f"font-size: 8pt; font-weight: 500; color: {lunar_color}; background: transparent; border: none;"
+                if getattr(cell.lunar_label, "_applied_style", None) != lunar_style:
+                    cell.lunar_label.setStyleSheet(lunar_style)
+                    cell.lunar_label._applied_style = lunar_style
                 cell.lunar_label.setToolTip(" / ".join(tooltip_parts))
                 cell.lunar_label.show()
             else:
@@ -4272,7 +4286,10 @@ class MainWindow(QMainWindow):
             badge_text = "오늘" if is_today else "선택" if is_selected else ""
             if badge_text:
                 cell.badge_label.setText(badge_text)
-                cell.badge_label.setStyleSheet(badge_style(self.palette, badge_text == "선택"))
+                b_style = badge_style(self.palette, badge_text == "선택")
+                if getattr(cell.badge_label, "_applied_style", None) != b_style:
+                    cell.badge_label.setStyleSheet(b_style)
+                    cell.badge_label._applied_style = b_style
                 cell.badge_label.show()
             else:
                 cell.badge_label.hide()

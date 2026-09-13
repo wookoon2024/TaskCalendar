@@ -2471,7 +2471,9 @@ class EntryDialog(QDialog):
         if parent and hasattr(parent, "repository"):
             self.entry = parent.repository.upsert_entry(self.entry)
             parent.repository.save()
-            if hasattr(parent, "refresh"):
+            if hasattr(parent, "sidebar_mode") and parent.sidebar_mode == "memo":
+                parent._render_sidebar()
+            elif hasattr(parent, "refresh"):
                 parent.refresh()
             if hasattr(parent, "_refresh_all_group_dialogs"):
                 parent._refresh_all_group_dialogs()
@@ -2486,7 +2488,9 @@ class EntryDialog(QDialog):
         assign_id = self.entry.entry_id if assign_current and self.entry and self.entry.entry_id else None
         if hasattr(parent, "_create_new_memo_group"):
             parent._create_new_memo_group(title=title.strip(), assign_memo_id=assign_id)
-        if hasattr(parent, "refresh"):
+        if hasattr(parent, "sidebar_mode") and parent.sidebar_mode == "memo":
+            parent._render_sidebar()
+        elif hasattr(parent, "refresh"):
             parent.refresh()
         if hasattr(parent, "_refresh_all_group_dialogs"):
             parent._refresh_all_group_dialogs()
@@ -3294,7 +3298,10 @@ class EntryDialog(QDialog):
             if persist_disk:
                 parent.repository.save()
             if refresh_parent:
-                parent.refresh()
+                if hasattr(parent, "sidebar_mode") and parent.sidebar_mode == "memo":
+                    parent._render_sidebar()
+                elif hasattr(parent, "refresh"):
+                    parent.refresh()
             if is_new and curr_memo_group:
                 if hasattr(parent, "_refresh_all_group_dialogs"):
                     parent._refresh_all_group_dialogs()

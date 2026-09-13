@@ -544,6 +544,26 @@ class EncryptedRepository:
         except Exception:
             return []
 
+    def get_day_orders_bulk(self, days: set[date]) -> dict[date, list[int]]:
+        valid_days = {d for d in days if d != date.min}
+        if not valid_days:
+            return {}
+        key_map = {f"day_order_{d.isoformat()}": d for d in valid_days}
+        placeholders = ",".join("?" for _ in key_map)
+        rows = self.connection.execute(
+            f"SELECT key, value FROM settings WHERE key IN ({placeholders})",
+            list(key_map.keys()),
+        ).fetchall()
+        result: dict[date, list[int]] = {}
+        for row in rows:
+            day = key_map.get(row["key"])
+            if day and row["value"]:
+                try:
+                    result[day] = [int(x) for x in json.loads(row["value"]) if int(x) > 0]
+                except Exception:
+                    pass
+        return result
+
     def set_day_order(self, day: date, ids: list[int]) -> None:
         key = f"day_order_{day.isoformat()}"
         clean: list[int] = []
@@ -620,20 +640,21 @@ class EncryptedRepository:
             getattr(entry, "memo_group", "") or "",
         )
         if entry.entry_id is None:
-            created_at_val = entry.created_at.isoformat(timespec="seconds") if entry.created_at else now
             cursor = self.connection.execute(
                 """
-                INSERT INTO entries (
+                INSERT INTO entries(
                     entry_type, title, description, day, start_date, end_date,
                     start_time, end_time, all_day, assignee, status, attachments_json,
                     recurrence_enabled, recurrence_type, recurrence_interval,
-                    recurrence_weekdays_json, recurrence_month_day, recurrence_month_week, recurrence_month_end, completed_dates_json, icon_type, bg_color, alert_type, alert_offset, memo_group,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    recurrence_weekdays_json, recurrence_month_day, recurrence_month_week, recurrence_month_end, completed_dates_json, icon_type, bg_color, alert_type, alert_offset, memo_group, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                values + (created_at_val, now),
+                values + (now, now),
             )
             entry.entry_id = int(cursor.lastrowid)
+            entry.created_at = datetime.fromisoformat(now)
+            entry.updated_at = datetime.fromisoformat(now)
         else:
             if entry.created_at:
                 self.connection.execute(
@@ -677,12 +698,12 @@ class EncryptedRepository:
         items: list[CalendarEntry] = []
         for row in rows:
             items.extend(self._expand_entry_for_month(self._row_to_entry(row), year, month))
-        day_orders: dict[date, dict[int, int]] = {}
-        for item in items:
-            d = item.day or date.min
-            if d not in day_orders:
-                order_list = self.get_day_order(d) if d != date.min else []
-                day_orders[d] = {eid: idx for idx, eid in enumerate(order_list)}
+        needed_days = {item.day for item in items if item.day and item.day != date.min}
+        bulk_orders = self.get_day_orders_bulk(needed_days)
+        day_orders: dict[date, dict[int, int]] = {
+            d: {eid: idx for idx, eid in enumerate(bulk_orders.get(d, []))}
+            for d in needed_days
+        }
         items.sort(
             key=lambda item: (
                 (item.day or date.min),
