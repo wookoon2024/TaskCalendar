@@ -9,7 +9,7 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QSize, QStringListModel, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QItemSelectionModel, QObject, QPoint, QSize, QStringListModel, Qt, QTimer, QUrl
 from PySide6.QtGui import QBrush, QColor, QCursor, QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -2573,22 +2573,52 @@ class TaskManagerDialog(QDialog):
 
         menu = QMenu(self)
         menu.setStyleSheet(self._menu_stylesheet())
+        is_dark = self.palette.get("bg", "").lower() in ("#0a0c10", "#171b22") or self.palette.get("text", "").lower() == "#f3f6fb"
+        badge_status_cfg = STATUS_CONFIG_DARK if is_dark else STATUS_CONFIG
 
         if len(tasks) == 1:
             task = tasks[0]
             act_edit = menu.addAction("✏️ 상세 수정 창 열기")
             menu.addSeparator()
 
+            # 단일 항목 분류 변경 서브메뉴
+            cats = get_task_categories(self.repository)
+            menu_cat = menu.addMenu("📁 분류 변경")
+            menu_cat.setStyleSheet(self._menu_stylesheet())
+            actions_cat = {}
+            for c in cats:
+                prefix = "✓ " if (task.memo_group or "일반") == c else "   "
+                act = menu_cat.addAction(f"{prefix}📁 {c}")
+                actions_cat[act] = c
+
+            # 단일 항목 상태 변경 서브메뉴
+            statuses = get_task_statuses(self.repository)
+            menu_stat = menu.addMenu("📌 상태 변경")
+            menu_stat.setStyleSheet(self._menu_stylesheet())
+            actions_stat = {}
+            for s in statuses:
+                icon = badge_status_cfg.get(s, {}).get("icon", "▫️")
+                prefix = "✓ " if (task.status or "등록") == s else "   "
+                act = menu_stat.addAction(f"{prefix}{icon} {s}")
+                actions_stat[act] = s
+
+            menu.addSeparator()
+
             urls = re.findall(r'https?://[^\s<>"]+|www\.[^\s<>"]+', task.description or "")
             act_url = None
             if urls:
                 act_url = menu.addAction("🔗 출처 웹페이지 열기")
+                menu.addSeparator()
 
             act_del = menu.addAction("🗑️ 업무 삭제")
 
             action = menu.exec(global_pos)
             if action == act_edit:
                 self._edit_task(task)
+            elif action in actions_cat:
+                self._change_tasks_category([task], actions_cat[action])
+            elif action in actions_stat:
+                self._change_tasks_status([task], actions_stat[action])
             elif act_url and action == act_url:
                 url_str = urls[0]
                 if not url_str.startswith("http"):
@@ -2598,11 +2628,83 @@ class TaskManagerDialog(QDialog):
                 self._delete_task(task)
         else:
             count = len(tasks)
+
+            # 다중 항목 분류 일괄 변경 서브메뉴
+            cats = get_task_categories(self.repository)
+            menu_cat = menu.addMenu(f"📁 선택한 업무 분류 일괄 변경 ({count}개)")
+            menu_cat.setStyleSheet(self._menu_stylesheet())
+            actions_cat = {}
+            for c in cats:
+                act = menu_cat.addAction(f"📁 {c}")
+                actions_cat[act] = c
+
+            # 다중 항목 상태 일괄 변경 서브메뉴
+            statuses = get_task_statuses(self.repository)
+            menu_stat = menu.addMenu(f"📌 선택한 업무 상태 일괄 변경 ({count}개)")
+            menu_stat.setStyleSheet(self._menu_stylesheet())
+            actions_stat = {}
+            for s in statuses:
+                icon = badge_status_cfg.get(s, {}).get("icon", "▫️")
+                act = menu_stat.addAction(f"{icon} {s}")
+                actions_stat[act] = s
+
+            menu.addSeparator()
             act_del = menu.addAction(f"🗑️ 선택한 업무 일괄 삭제 ({count}개)")
 
             action = menu.exec(global_pos)
-            if action == act_del:
+            if action in actions_cat:
+                self._change_tasks_category(tasks, actions_cat[action])
+            elif action in actions_stat:
+                self._change_tasks_status(tasks, actions_stat[action])
+            elif action == act_del:
                 self._delete_tasks(tasks)
+
+    def _change_tasks_category(self, tasks: list[CalendarEntry], new_cat: str) -> None:
+        """선택된 업무들의 분류를 일괄 변경 및 저장"""
+        if not tasks:
+            return
+        now = datetime.now()
+        selected_ids = {t.entry_id for t in tasks if t.entry_id}
+        for task in tasks:
+            task.memo_group = new_cat
+            task.updated_at = now
+            self.repository.upsert_entry(task)
+        self.repository.save()
+        if self.main_window and hasattr(self.main_window, "refresh"):
+            self.main_window.refresh()
+        self._refresh_filter_categories()
+        self.reload_tasks()
+        self._restore_selection_by_ids(selected_ids)
+
+    def _change_tasks_status(self, tasks: list[CalendarEntry], new_status: str) -> None:
+        """선택된 업무들의 상태를 일괄 변경 및 저장"""
+        if not tasks:
+            return
+        now = datetime.now()
+        selected_ids = {t.entry_id for t in tasks if t.entry_id}
+        for task in tasks:
+            task.status = new_status
+            task.updated_at = now
+            self.repository.upsert_entry(task)
+        self.repository.save()
+        if self.main_window and hasattr(self.main_window, "refresh"):
+            self.main_window.refresh()
+        self._refresh_filter_statuses()
+        self.reload_tasks()
+        self._restore_selection_by_ids(selected_ids)
+
+    def _restore_selection_by_ids(self, ids: set[str]) -> None:
+        """ID 집합에 해당하는 행들의 선택 상태 복원"""
+        if not ids:
+            return
+        self.table.clearSelection()
+        for r, t in enumerate(self._displayed_tasks):
+            if t.entry_id in ids:
+                self.table.selectionModel().select(
+                    self.table.model().index(r, 0),
+                    QItemSelectionModel.Select | QItemSelectionModel.Rows,
+                )
+
 
     def _on_add_task(self) -> None:
         """새 업무 등록 (전용 TaskEditDialog 호출)"""
