@@ -4814,14 +4814,22 @@ class MainWindow(QMainWindow):
         if not memos:
             return
         self._batch_updating_memos = True
+        last_dlg = None
         try:
             for memo in memos:
                 self._edit_entry(EntryType.MEMO, memo)
+                if memo.entry_id:
+                    dlg = self._active_memo_dialogs.get(int(memo.entry_id))
+                    if dlg:
+                        last_dlg = dlg
         finally:
             self._batch_updating_memos = False
+        if last_dlg:
+            last_dlg.activateWindow()
         self._sync_open_memo_ids(persist=True)
         self._refresh_all_group_dialogs(status_only=True)
-        self.refresh()
+        if hasattr(self, "_render_sidebar"):
+            self._render_sidebar()
 
     def _close_all_memos(self) -> None:
         if not self._active_memo_dialogs:
@@ -4830,12 +4838,14 @@ class MainWindow(QMainWindow):
         try:
             for dlg in list(self._active_memo_dialogs.values()):
                 if dlg is not None:
+                    dlg.hide()
                     dlg.close()
         finally:
             self._batch_updating_memos = False
         self._sync_open_memo_ids(persist=True)
         self._refresh_all_group_dialogs(status_only=True)
-        self.refresh()
+        if hasattr(self, "_render_sidebar"):
+            self._render_sidebar()
 
     @staticmethod
     def _entry_chip_text(entry: CalendarEntry) -> str:
@@ -6108,7 +6118,8 @@ class MainWindow(QMainWindow):
                             logger.info(f"[_edit_entry] Reusing existing memo dialog for key={key}")
                             existing_dlg.show()
                             existing_dlg.raise_()
-                            existing_dlg.activateWindow()
+                            if not getattr(self, "_batch_updating_memos", False):
+                                existing_dlg.activateWindow()
                             if force_top:
                                 from taskcalendar.desktop_services import force_window_to_foreground
                                 QTimer.singleShot(50, lambda d=existing_dlg: force_window_to_foreground(int(d.winId())))
@@ -6123,7 +6134,7 @@ class MainWindow(QMainWindow):
                 self._active_memo_dialogs[key] = dialog
                 dialog.show()
                 dialog.raise_()
-                if not restore_mode:
+                if not restore_mode and not getattr(self, "_batch_updating_memos", False):
                     dialog.activateWindow()
                 if force_top:
                     from taskcalendar.desktop_services import force_window_to_foreground

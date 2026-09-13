@@ -2514,17 +2514,27 @@ class EntryDialog(QDialog):
         if not memos:
             return
         setattr(parent, "_batch_updating_memos", True)
+        last_dlg = None
         try:
             for m in memos:
                 parent._edit_entry(EntryType.MEMO, m)
+                if m.entry_id:
+                    dlg = parent._active_memo_dialogs.get(int(m.entry_id))
+                    if dlg:
+                        last_dlg = dlg
         finally:
             setattr(parent, "_batch_updating_memos", False)
+        if last_dlg:
+            last_dlg.activateWindow()
         if hasattr(parent, "_sync_open_memo_ids"):
             parent._sync_open_memo_ids(persist=True)
         if hasattr(parent, "_refresh_all_group_dialogs"):
             parent._refresh_all_group_dialogs(status_only=True)
-        if hasattr(parent, "refresh"):
-            parent.refresh()
+        if hasattr(parent, "_render_sidebar"):
+            try:
+                parent._render_sidebar()
+            except Exception:
+                pass
 
     def _close_group_memos(self, group_id: str) -> None:
         parent = getattr(self, "_owner_window", None) or self.parent()
@@ -2539,7 +2549,8 @@ class EntryDialog(QDialog):
                 key = int(m.entry_id) if m.entry_id is not None else None
                 if key in parent._active_memo_dialogs:
                     dlg = parent._active_memo_dialogs[key]
-                    if dlg and dlg.isVisible():
+                    if dlg:
+                        dlg.hide()
                         dlg.close()
         finally:
             setattr(parent, "_batch_updating_memos", False)
@@ -2547,8 +2558,11 @@ class EntryDialog(QDialog):
             parent._sync_open_memo_ids(persist=True)
         if hasattr(parent, "_refresh_all_group_dialogs"):
             parent._refresh_all_group_dialogs(status_only=True)
-        if hasattr(parent, "refresh"):
-            parent.refresh()
+        if hasattr(parent, "_render_sidebar"):
+            try:
+                parent._render_sidebar()
+            except Exception:
+                pass
 
     def _open_hotkey_settings(self) -> None:
         parent = getattr(self, "_owner_window", None) or self.parent()
@@ -3342,9 +3356,9 @@ class EntryDialog(QDialog):
                     if hasattr(parent, "_sync_open_memo_ids"):
                         parent._sync_open_memo_ids(persist=True)
             if not getattr(parent, "_batch_updating_memos", False):
-                if parent and hasattr(parent, "refresh"):
+                if parent and hasattr(parent, "_render_sidebar"):
                     try:
-                        parent.refresh()
+                        parent._render_sidebar()
                     except Exception:
                         pass
                 if parent and hasattr(parent, "_refresh_all_group_dialogs"):
@@ -4469,14 +4483,26 @@ class FloatingGroupDialog(QDialog):
             return
         setattr(parent, "_batch_updating_memos", True)
         self.setUpdatesEnabled(False)
+        last_dlg = None
         try:
             for m in memos:
                 parent._edit_entry(EntryType.MEMO, m)
+                if m.entry_id:
+                    dlg = parent._active_memo_dialogs.get(int(m.entry_id))
+                    if dlg:
+                        last_dlg = dlg
         finally:
             setattr(parent, "_batch_updating_memos", False)
             self.setUpdatesEnabled(True)
+        if last_dlg:
+            last_dlg.activateWindow()
         if hasattr(parent, "_sync_open_memo_ids"):
             parent._sync_open_memo_ids(persist=True)
+        if hasattr(parent, "_render_sidebar"):
+            try:
+                parent._render_sidebar()
+            except Exception:
+                pass
         if hasattr(parent, "_refresh_all_group_dialogs"):
             parent._refresh_all_group_dialogs(status_only=True)
         else:
@@ -4495,16 +4521,17 @@ class FloatingGroupDialog(QDialog):
             for m in memos:
                 if m.entry_id in parent._active_memo_dialogs:
                     dlg = parent._active_memo_dialogs[m.entry_id]
-                    if dlg and dlg.isVisible():
+                    if dlg:
+                        dlg.hide()
                         dlg.close()
         finally:
             setattr(parent, "_batch_updating_memos", False)
             self.setUpdatesEnabled(True)
         if hasattr(parent, "_sync_open_memo_ids"):
             parent._sync_open_memo_ids(persist=True)
-        if hasattr(parent, "refresh"):
+        if hasattr(parent, "_render_sidebar"):
             try:
-                parent.refresh()
+                parent._render_sidebar()
             except Exception:
                 pass
         if hasattr(parent, "_refresh_all_group_dialogs"):
