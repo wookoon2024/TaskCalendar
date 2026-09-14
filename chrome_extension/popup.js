@@ -225,7 +225,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function limit50(str) {
       if (!str || typeof str !== 'string') return '';
-      return str.replace(/[\s\n\r\t]+/g, ' ').trim().substring(0, 50);
+      let s = str.replace(/[\s\n\r\t]+/g, ' ').trim();
+      // 끝부분의 공백+따옴표 (예: '안녕하세요 "') 및 HTML 엔티티(&quot;) 제거
+      s = s.replace(/\s+["'”’`]+$/g, '').trim();
+      s = s.replace(/\s*(&(quot|#34|#39|apos);)+\s*$/gi, '').trim();
+      const dQuotes = (s.match(/"/g) || []).length;
+      if (dQuotes % 2 !== 0 && s.endsWith('"')) s = s.slice(0, -1).trim();
+      const sQuotes = (s.match(/'/g) || []).length;
+      if (sQuotes % 2 !== 0 && s.endsWith("'")) s = s.slice(0, -1).trim();
+      return s.substring(0, 50).trim();
     }
 
     // 제목 (최대 50자)
@@ -725,7 +733,15 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.storage.local.set({ lastSelectedType: type });
 
     function clean50(val) {
-      return (val || '').replace(/[\s\n\r\t]+/g, ' ').trim().substring(0, 50);
+      if (!val || typeof val !== 'string') return '';
+      let s = val.replace(/[\s\n\r\t]+/g, ' ').trim();
+      s = s.replace(/\s+["'”’`]+$/g, '').trim();
+      s = s.replace(/\s*(&(quot|#34|#39|apos);)+\s*$/gi, '').trim();
+      const dQuotes = (s.match(/"/g) || []).length;
+      if (dQuotes % 2 !== 0 && s.endsWith('"')) s = s.slice(0, -1).trim();
+      const sQuotes = (s.match(/'/g) || []).length;
+      if (sQuotes % 2 !== 0 && s.endsWith("'")) s = s.slice(0, -1).trim();
+      return s.substring(0, 50).trim();
     }
 
     let url = `taskcalendar://add?type=${type}`;

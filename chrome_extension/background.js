@@ -686,7 +686,15 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
   // 9. 보안 및 전자결재 정보보호를 위한 길이 제한 (모든 필드 최대 50자 이내)
   function limit50(str) {
     if (!str || typeof str !== 'string') return '';
-    return str.replace(/[\s\n\r\t]+/g, ' ').trim().substring(0, 50);
+    let s = str.replace(/[\s\n\r\t]+/g, ' ').trim();
+    // 끝부분의 공백+따옴표 (예: '안녕하세요 "') 및 HTML 엔티티(&quot;) 제거
+    s = s.replace(/\s+["'”’`]+$/g, '').trim();
+    s = s.replace(/\s*(&(quot|#34|#39|apos);)+\s*$/gi, '').trim();
+    const dQuotes = (s.match(/"/g) || []).length;
+    if (dQuotes % 2 !== 0 && s.endsWith('"')) s = s.slice(0, -1).trim();
+    const sQuotes = (s.match(/'/g) || []).length;
+    if (sQuotes % 2 !== 0 && s.endsWith("'")) s = s.slice(0, -1).trim();
+    return s.substring(0, 50).trim();
   }
 
   result.linkText = limit50(result.linkText);
@@ -913,6 +921,14 @@ function findMatchingElementOnPage(sampleText, isUrl) {
 
   var selector = buildSelector(best, scopeRoot);
   var matchedVal = isUrl ? (best.href || best.getAttribute('href') || '') : (best.innerText || best.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
+  if (!isUrl && matchedVal) {
+    matchedVal = matchedVal.replace(/\s+["'”’`]+$/g, '').trim();
+    matchedVal = matchedVal.replace(/\s*(&(quot|#34|#39|apos);)+\s*$/gi, '').trim();
+    const dQ = (matchedVal.match(/"/g) || []).length;
+    if (dQ % 2 !== 0 && matchedVal.endsWith('"')) matchedVal = matchedVal.slice(0, -1).trim();
+    const sQ = (matchedVal.match(/'/g) || []).length;
+    if (sQ % 2 !== 0 && matchedVal.endsWith("'")) matchedVal = matchedVal.slice(0, -1).trim();
+  }
 
   return {
     success: true,
@@ -1177,7 +1193,15 @@ function handleCaptureResults(results, tab, linkUrl, selection, pageUrl, domain,
 
   function limit50(str) {
     if (!str || typeof str !== 'string') return '';
-    return str.replace(/[\s\n\r\t]+/g, ' ').trim().substring(0, 50);
+    let s = str.replace(/[\s\n\r\t]+/g, ' ').trim();
+    // 끝부분의 공백+따옴표 (예: '안녕하세요 "') 및 HTML 엔티티(&quot;) 제거
+    s = s.replace(/\s+["'”’`]+$/g, '').trim();
+    s = s.replace(/\s*(&(quot|#34|#39|apos);)+\s*$/gi, '').trim();
+    const dQuotes = (s.match(/"/g) || []).length;
+    if (dQuotes % 2 !== 0 && s.endsWith('"')) s = s.slice(0, -1).trim();
+    const sQuotes = (s.match(/'/g) || []).length;
+    if (sQuotes % 2 !== 0 && s.endsWith("'")) s = s.slice(0, -1).trim();
+    return s.substring(0, 50).trim();
   }
 
   var finalLinkText = limit50(captured.linkText || "");
