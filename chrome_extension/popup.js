@@ -789,34 +789,28 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     els.btnSubmit.disabled = true;
-    els.btnSubmit.textContent = '등록 중...';
+    els.btnSubmit.textContent = '전송 중...';
 
-    // 1. 백그라운드 서비스 워커를 통한 윈도우 프로토콜 URL 호출
+    // 1. 백그라운드 서비스 워커를 통한 윈도우 프로토콜 URL 호출 (새 백그라운드 탭 생성 방식)
     chrome.runtime.sendMessage({
       action: "openProtocolUrl",
       url: url,
       tabId: originTabId
     }).catch(() => {});
 
-    // 2. 원본 탭 내 히든 아이프레임 주입으로 프로토콜 즉시 실행
-    if (originTabId) {
-      chrome.scripting.executeScript({
-        target: { tabId: originTabId },
-        func: (protocolUrl) => {
-          try {
-            const ifr = document.createElement('iframe');
-            ifr.style.display = 'none';
-            ifr.src = protocolUrl;
-            document.body.appendChild(ifr);
-            setTimeout(() => { ifr.remove(); }, 3000);
-          } catch (err) {}
-        },
-        args: [url]
-      }).catch(() => {});
-    }
+    // 2. 팝업에서도 직접 chrome.tabs.create를 실행하여 윈도우 프로토콜 핸들러 트리거 보장
+    try {
+      chrome.tabs.create({ url: url, active: false }, (newTab) => {
+        setTimeout(() => {
+          if (newTab && newTab.id) {
+            chrome.tabs.remove(newTab.id).catch(() => {});
+          }
+        }, 1500);
+      });
+    } catch (err) {}
 
-    els.btnSubmit.textContent = '✅ 등록 완료!';
+    els.btnSubmit.textContent = '✅ 전송 완료!';
     els.btnSubmit.style.background = '#10B981';
-    setTimeout(() => window.close(), 450);
+    setTimeout(() => window.close(), 700);
   });
 });

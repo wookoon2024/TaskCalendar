@@ -3,7 +3,7 @@ function setupContextMenu() {
     chrome.contextMenus.removeAll(() => {
       chrome.contextMenus.create({
         id: "taskcalendar-add",
-        title: "TaskCalendar에 등록",
+        title: "K캘린더로 보내기",
         contexts: ["page", "selection", "link", "image"]
       });
     });
@@ -1150,24 +1150,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "openProtocolUrl") {
     var urlToOpen = request.url;
-    var targetTabId = request.tabId;
-    if (targetTabId) {
-      chrome.tabs.update(targetTabId, { url: urlToOpen }, () => {
-        if (chrome.runtime.lastError) {
-          chrome.tabs.create({ url: urlToOpen, active: false }, (t) => {
-            setTimeout(() => {
-              if (t && t.id) chrome.tabs.remove(t.id).catch(() => {});
-            }, 1500);
-          });
-        }
-      });
-    } else {
-      chrome.tabs.create({ url: urlToOpen, active: false }, (t) => {
-        setTimeout(() => {
-          if (t && t.id) chrome.tabs.remove(t.id).catch(() => {});
-        }, 1500);
-      });
-    }
+    // Chrome에서 커스텀 프로토콜(taskcalendar://) 호출은 반드시 chrome.tabs.create로 새 탭을 생성해야 윈도우 셸로 안정적으로 전달됩니다.
+    chrome.tabs.create({ url: urlToOpen, active: false }, (t) => {
+      setTimeout(() => {
+        if (t && t.id) chrome.tabs.remove(t.id).catch(() => {});
+      }, 1500);
+    });
     sendResponse({ success: true });
     return true;
   }
