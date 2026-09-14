@@ -545,7 +545,7 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
       var tEl = queryCustomElement(rootEl, ruleSelectors.title);
       if (tEl) {
         var tText = (tEl.innerText || tEl.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
-        if (tText) result.linkText = tText;
+        if (tText) result.linkText = tText.substring(0, 50);
       }
     }
 
@@ -556,7 +556,7 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
       var cEl = queryCustomElement(rootEl, ruleSelectors.category);
       if (cEl) {
         var cText = (cEl.innerText || cEl.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
-        if (cText) result.category = cText;
+        if (cText) result.category = cText.substring(0, 50);
       }
     }
 
@@ -567,7 +567,7 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
       var aEl = queryCustomElement(rootEl, ruleSelectors.author);
       if (aEl) {
         var aText = cleanAuthor(aEl.innerText || aEl.textContent || '');
-        if (aText) result.author = aText;
+        if (aText) result.author = aText.substring(0, 50);
       }
     }
 
@@ -578,7 +578,7 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
       var sEl = queryCustomElement(rootEl, ruleSelectors.status);
       if (sEl) {
         var sText = (sEl.innerText || sEl.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
-        if (sText) result.status = sText;
+        if (sText) result.status = sText.substring(0, 50);
       }
     }
 
@@ -589,7 +589,7 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
       var dEl = queryCustomElement(rootEl, ruleSelectors.date);
       if (dEl) {
         var dText = normalizeDate(dEl.innerText || dEl.textContent || '');
-        if (dText) result.detectedDate = dText;
+        if (dText) result.detectedDate = dText.substring(0, 50);
       }
     }
 
@@ -735,8 +735,13 @@ function findMatchingElementOnPage(sampleText, isUrl) {
 
       var text = (el.innerText || el.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
       var href = (el.tagName === 'A' ? (el.href || el.getAttribute('href') || '') : '');
-      var title = (el.getAttribute('title') || '');
-      var alt = (el.getAttribute('alt') || '');
+      var title = (el.getAttribute('title') || '').trim();
+      var alt = (el.getAttribute('alt') || '').trim();
+
+      // 50자 초과 요소는 절대 후보에 포함하지 않음 (본문 문단, 긴 영역 등 매칭 차단)
+      if (!isUrl && text.length > 50) continue;
+      if (title.length > 50) title = '';
+      if (alt.length > 50) alt = '';
 
       var tNorm = text.toLowerCase();
       var hNorm = href.toLowerCase();
@@ -804,7 +809,7 @@ function findMatchingElementOnPage(sampleText, isUrl) {
   }
 
   if (candidates.length === 0) {
-    return { success: false, error: '페이지에서 일치하는 요소를 찾을 수 없습니다.' };
+    return { success: false, error: '❌ 50자 이내 일치 항목 없음' };
   }
 
   // 잎(leaf) 노드 우선 정렬
@@ -818,6 +823,11 @@ function findMatchingElementOnPage(sampleText, isUrl) {
   if (isUrl && best.tagName !== 'A') {
     var aChild = best.querySelector('a') || (best.closest ? best.closest('a') : null);
     if (aChild) best = aChild;
+  }
+
+  var bestText = (best.innerText || best.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
+  if (!isUrl && bestText.length > 50) {
+    return { success: false, error: '❌ 50자 초과 항목은 선택할 수 없습니다.' };
   }
 
   // 웹페이지 내 보라색 하이라이트 효과 부여

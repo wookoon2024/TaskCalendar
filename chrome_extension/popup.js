@@ -498,7 +498,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.disabled = false;
         if (!res || !res.success) {
           statusPill.className = 'cfg-status-pill pill-fail';
-          statusPill.textContent = '❌ 일치 항목 없음';
+          statusPill.textContent = (res && res.error) ? res.error : '❌ 일치 항목 없음';
           return;
         }
 
