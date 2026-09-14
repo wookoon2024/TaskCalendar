@@ -307,12 +307,12 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
     }}
     QListWidget#navSidebar::item {{
         height: 38px;
-        padding-left: 12px;
+        min-height: 38px;
+        padding-left: 10px;
         font-size: 13px;
         font-weight: 600;
         color: {text};
         border-radius: 6px;
-        margin-bottom: 3px;
     }}
     QListWidget#navSidebar::item:hover {{
         background-color: {panel_alt};

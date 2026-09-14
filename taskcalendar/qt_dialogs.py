@@ -5621,6 +5621,9 @@ class SettingsDialog(QDialog):
         self.nav_list = QListWidget()
         self.nav_list.setObjectName("navSidebar")
         self.nav_list.setFixedWidth(140)
+        self.nav_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.nav_list.setSpacing(4)
         
         items = [
             ("⚙️ 기본", 0),
@@ -5633,6 +5636,7 @@ class SettingsDialog(QDialog):
         for label, idx in items:
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, idx)
+            item.setSizeHint(QSize(120, 38))
             self.nav_list.addItem(item)
             
         body_layout.addWidget(self.nav_list)
