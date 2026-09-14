@@ -28,7 +28,11 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
     postNo: '',
     detectedDate: '',
     views: '',
-    votes: ''
+    votes: '',
+    frameUrl: window.location.href || '',
+    isIframe: (window !== window.top),
+    lastActivity: Math.max(document.__tcLastContextMenuTime || 0, document.__tcLastMouseMoveTime || 0),
+    hasTarget: !!(document.__tcTarget || document.__tcHoverTarget || document.__tcContainer)
   };
 
   // 대상 요소 스마트 해결 (명시적 타겟 > 드래그 텍스트 노드 > 체크된 행 > 마우스 호버 대상 > :hover 행)
@@ -412,25 +416,32 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
     }
   }
 
-  // [전략 3] 상세 본문 페이지 탐색
+  // [전략 3] 상세 본문 페이지 및 전자결재/온나라 본문 탐색
   if (!result.author || !result.detectedDate || !result.linkText) {
     try {
       if (!result.linkText) {
-        var titleElem = document.querySelector('h1.title, h2.title, .view_title, .art_title, .board_view_title, .subject, h3.title, .top_title');
+        var titleElem = document.querySelector('h1.title, h2.title, .view_title, .art_title, .board_view_title, .subject, h3.title, .top_title, #docTitle, #subject, #txtTitle, .doc_title, .docTitle, .viewTitle, .view-title, td.subject, span.subject, div.view_subject, p.subject');
         if (titleElem) {
           result.linkText = (titleElem.innerText || '').replace(/[\s\n\r\t]+/g, ' ').trim();
         }
       }
       if (!result.author) {
-        var authorElem = document.querySelector('.writer, .author, .nick, .user_name, .info_author, [class*="writer"], [class*="author"]');
+        var authorElem = document.querySelector('.writer, .author, .nick, .user_name, .info_author, [class*="writer"], [class*="author"], #drafter, #writer, #docWriter, .drafter, td.drafter, span.drafter');
         if (authorElem) {
           result.author = cleanAuthor(authorElem.innerText || authorElem.textContent || '');
         }
       }
       if (!result.detectedDate) {
-        var dateElem = document.querySelector('.date, .time, time, .regdate, .created_at, [class*="date"], [class*="time"]');
+        var dateElem = document.querySelector('.date, .time, time, .regdate, .created_at, [class*="date"], [class*="time"], #draftDate, #regDate, #docDate, .draft_date, .doc_date');
         if (dateElem) {
           result.detectedDate = normalizeDate(dateElem.innerText || dateElem.textContent || '');
+        }
+      }
+      // iframe 단독 문서 뷰어의 경우 document.title 활용
+      if (!result.linkText && window !== window.top && document.title && document.title.trim()) {
+        var dt = document.title.trim();
+        if (!dt.includes('about:') && !dt.includes('javascript:') && !dt.startsWith('http://') && !dt.startsWith('https://')) {
+          result.linkText = dt;
         }
       }
     } catch(e) {}
@@ -927,6 +938,77 @@ function getDomainFromUrl(url) {
   }
 }
 
+// 🎯 프레임 목록 중 최적의 결과(선택 텍스트, 클릭 대상, 최근 마우스 활동 등) 선별
+function selectBestResult(results, targetFrameId) {
+  if (!results || results.length === 0) return null;
+  if (results.length === 1) return results[0];
+
+  // 1. targetFrameId가 명시적으로 지정된 경우 해당 프레임 우선 검색
+  if (typeof targetFrameId === 'number' && targetFrameId > 0) {
+    for (var i = 0; i < results.length; i++) {
+      if (results[i].frameId === targetFrameId) {
+        var r0 = results[i].result;
+        if (r0 && (r0.linkText || r0.selectedText || r0.hasTarget || r0.author || r0.detectedDate)) {
+          return results[i];
+        }
+      }
+    }
+  }
+
+  // 2. 가중치 기반 최적 프레임 선별
+  var bestItem = null;
+  var bestScore = -1;
+
+  for (var j = 0; j < results.length; j++) {
+    var item = results[j];
+    var r = item.result;
+    if (!r) continue;
+
+    var score = 0;
+
+    // 타겟 프레임 ID 일치 시 최고 가산점
+    if (typeof targetFrameId === 'number' && item.frameId === targetFrameId) {
+      score += 1000;
+    }
+
+    // 마우스 호버나 우클릭 대상이 존재했던 프레임
+    if (r.hasTarget) score += 500;
+
+    // 드래그 선택 텍스트가 있는 프레임
+    if (r.selectedText && r.selectedText.trim()) score += 300;
+
+    // 제목/링크텍스트 추출 성공
+    if (r.linkText && r.linkText.trim()) {
+      score += 150;
+      if (r.linkText.trim().length >= 4 && r.linkText.trim().length <= 150) score += 50;
+    }
+
+    // 작성자 또는 날짜 감지
+    if (r.author && r.author.trim()) score += 40;
+    if (r.detectedDate && r.detectedDate.trim()) score += 40;
+
+    // 최근 마우스/컨텍스트메뉴 활동 (10초 이내)
+    if (r.lastActivity && r.lastActivity > 0) {
+      var age = Date.now() - r.lastActivity;
+      if (age < 10000) {
+        score += Math.max(0, 100 - Math.floor(age / 100));
+      }
+    }
+
+    // iframe 내부인데 제목/선택텍스트가 있으면 빈 탑 프레임보다 우선
+    if (r.isIframe && (r.linkText || r.selectedText)) {
+      score += 30;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestItem = item;
+    }
+  }
+
+  return bestItem || results[0];
+}
+
 // 팝업과의 통신 메시지 리스너 (DOM 검색 및 재추출)
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "matchElementInTab") {
@@ -935,8 +1017,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ success: false, error: "활성 탭 ID를 찾을 수 없습니다." });
       return true;
     }
+    var execTarget = { tabId: tabId };
+    if (typeof request.frameId === 'number') {
+      execTarget.frameIds = [request.frameId];
+    } else {
+      execTarget.allFrames = true;
+    }
     chrome.scripting.executeScript({
-      target: { tabId: tabId },
+      target: execTarget,
       func: findMatchingElementOnPage,
       args: [request.sampleText, !!request.isUrl]
     }, (results) => {
@@ -944,7 +1032,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: false, error: chrome.runtime.lastError.message });
         return;
       }
-      var res = (results && results[0] && results[0].result) || { success: false, error: '응답이 없습니다.' };
+      var best = null;
+      if (results && results.length > 0) {
+        for (var r = 0; r < results.length; r++) {
+          if (results[r] && results[r].result && results[r].result.success) {
+            best = results[r].result;
+            break;
+          }
+        }
+      }
+      var res = best || (results && results[0] && results[0].result) || { success: false, error: '응답이 없습니다.' };
       sendResponse(res);
     });
     return true; // 비동기 응답
@@ -961,8 +1058,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       selectors: (rawC && rawC.selectors) ? rawC.selectors : (rawC || {}),
       templates: (rawC && rawC.templates) ? rawC.templates : (request.templates || {})
     };
+    var execTarget2 = { tabId: tabId2 };
+    if (typeof request.frameId === 'number') {
+      execTarget2.frameIds = [request.frameId];
+    } else {
+      execTarget2.allFrames = true;
+    }
     chrome.scripting.executeScript({
-      target: { tabId: tabId2 },
+      target: execTarget2,
       func: extractRowData,
       args: [request.linkUrl || "", request.selection || "", ruleToUse]
     }, (results2) => {
@@ -970,7 +1073,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: false, error: chrome.runtime.lastError.message });
         return;
       }
-      var res2 = (results2 && results2[0] && results2[0].result) || {};
+      var chosen = selectBestResult(results2, request.frameId);
+      var res2 = (chosen && chosen.result) || {};
       sendResponse({ success: true, data: res2 });
     });
     return true;
@@ -1003,14 +1107,54 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "elementPickerCompleted") {
     var pTab = sender.tab;
     if (pTab) {
-      triggerCapture(pTab, request.linkUrl || "", "", pTab.url || "");
+      // 모든 프레임의 피커 하이라이트/배너 정리
+      chrome.tabs.sendMessage(pTab.id, { action: "stopElementPicker" }).catch(() => {});
+      triggerCapture(pTab, request.linkUrl || "", "", request.frameUrl || pTab.url || "", sender.frameId);
     }
     sendResponse({ success: true });
     return true;
   }
 });
 
-function triggerCapture(tab, clickedLinkUrl, clickedSelection, fallbackUrl) {
+function handleCaptureResults(results, tab, linkUrl, selection, pageUrl, domain, hasCustomRule, rawRule, targetFrameId) {
+  var chosenItem = selectBestResult(results, targetFrameId);
+  var captured = (chosenItem && chosenItem.result) || {};
+  var originFrameId = (chosenItem && typeof chosenItem.frameId === 'number') ? chosenItem.frameId : (targetFrameId || 0);
+
+  console.log('[TaskCalendar BG] chosen frameId:', originFrameId, 'captured:', JSON.stringify(captured));
+
+  var finalLinkText = captured.linkText || "";
+  var finalLinkUrl = captured.linkUrl || linkUrl || "";
+  var finalSelectedText = captured.selectedText || selection || "";
+
+  if (!finalLinkText && finalSelectedText && finalSelectedText.length <= 150) {
+    finalLinkText = finalSelectedText.trim();
+  }
+
+  var effectivePageUrl = captured.frameUrl || finalLinkUrl || pageUrl;
+  var effectiveDomain = getDomainFromUrl(effectivePageUrl) || domain;
+
+  const data = {
+    selectedText: finalSelectedText,
+    linkText: finalLinkText,
+    linkUrl: finalLinkUrl,
+    metaText: captured.metaText || "",
+    author: captured.author || "",
+    category: captured.category || "",
+    status: captured.status || "등록",
+    detectedDate: captured.detectedDate || "",
+    pageTitle: tab.title || "",
+    pageUrl: effectivePageUrl,
+    siteDomain: effectiveDomain,
+    hasCustomRule: hasCustomRule,
+    customRule: rawRule || {},
+    originTabId: tab.id,
+    originFrameId: originFrameId
+  };
+  openOrFocusPopup(data);
+}
+
+function triggerCapture(tab, clickedLinkUrl, clickedSelection, fallbackUrl, targetFrameId) {
   if (!tab) return;
   var linkUrl = clickedLinkUrl || "";
   var selection = clickedSelection || "";
@@ -1031,7 +1175,8 @@ function triggerCapture(tab, clickedLinkUrl, clickedSelection, fallbackUrl) {
       pageUrl: linkUrl || pageUrl,
       siteDomain: domain,
       hasCustomRule: false,
-      originTabId: null
+      originTabId: null,
+      originFrameId: 0
     };
     openOrFocusPopup(data);
     return;
@@ -1047,53 +1192,39 @@ function triggerCapture(tab, clickedLinkUrl, clickedSelection, fallbackUrl) {
     };
     var hasCustomRule = !!(rawRule && ((rawRule.selectors && Object.keys(rawRule.selectors).some(k => rawRule.selectors[k])) || (rawRule.templates && Object.keys(rawRule.templates).some(k => rawRule.templates[k])) || Object.keys(rawRule).some(k => rawRule[k])));
 
+    // 모든 프레임(iframe 포함) 대상으로 스크립트 실행하여 최적 결과 수집
     chrome.scripting.executeScript(
       {
-        target: { tabId: tab.id },
+        target: { tabId: tab.id, allFrames: true },
         func: extractRowData,
         args: [linkUrl, selection, ruleToUse]
       },
       (results) => {
         if (chrome.runtime.lastError) {
-          console.warn("[TaskCalendar BG] Error:", chrome.runtime.lastError.message);
+          console.warn("[TaskCalendar BG] Error executing in allFrames:", chrome.runtime.lastError.message);
+          // allFrames 실패 시 최상위 프레임 단독 재시도
+          chrome.scripting.executeScript(
+            {
+              target: { tabId: tab.id },
+              func: extractRowData,
+              args: [linkUrl, selection, ruleToUse]
+            },
+            (fallbackResults) => {
+              handleCaptureResults(fallbackResults, tab, linkUrl, selection, pageUrl, domain, hasCustomRule, rawRule, targetFrameId);
+            }
+          );
+          return;
         }
-        var captured = (results && results[0] && results[0].result) || {};
-        console.log('[TaskCalendar BG] captured:', JSON.stringify(captured));
-
-        var finalLinkText = captured.linkText || "";
-        var finalLinkUrl = captured.linkUrl || linkUrl || "";
-        var finalSelectedText = captured.selectedText || selection || "";
-
-        if (!finalLinkText && finalSelectedText && finalSelectedText.length <= 150) {
-          finalLinkText = finalSelectedText.trim();
-        }
-
-        const data = {
-          selectedText: finalSelectedText,
-          linkText: finalLinkText,
-          linkUrl: finalLinkUrl,
-          metaText: captured.metaText || "",
-          author: captured.author || "",
-          category: captured.category || "",
-          status: captured.status || "등록",
-          detectedDate: captured.detectedDate || "",
-          pageTitle: tab.title || "",
-          pageUrl: finalLinkUrl || pageUrl,
-          siteDomain: domain,
-          hasCustomRule: hasCustomRule,
-          customRule: rawRule || {},
-          originTabId: tab.id
-        };
-        openOrFocusPopup(data);
+        handleCaptureResults(results, tab, linkUrl, selection, pageUrl, domain, hasCustomRule, rawRule, targetFrameId);
       }
     );
   });
 }
 
-// 1. 우클릭 컨텍스트 메뉴 클릭
+// 1. 우클릭 컨텍스트 메뉴 클릭 (iframe 내 발생 시 info.frameId, info.frameUrl 전달)
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== "taskcalendar-add") return;
-  triggerCapture(tab, info.linkUrl || "", info.selectionText || "", info.pageUrl || "");
+  triggerCapture(tab, info.linkUrl || "", info.selectionText || "", info.frameUrl || info.pageUrl || "", info.frameId);
 });
 
 // 2. 확장 프로그램 툴바 아이콘 클릭 (Gmail 등 자체 우클릭 메뉴가 있는 사이트 대응)
@@ -1103,7 +1234,7 @@ if (chrome.action && chrome.action.onClicked) {
   });
 }
 
-// 3. 단축키 실행 (Alt+Shift+C)
+// 3. 단축키 실행 (Ctrl+Shift+K)
 if (chrome.commands && chrome.commands.onCommand) {
   chrome.commands.onCommand.addListener((command) => {
     if (command === "open-taskcalendar-add") {

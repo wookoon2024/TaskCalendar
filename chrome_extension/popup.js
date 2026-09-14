@@ -130,7 +130,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (chrome.runtime.lastError) {
             // content.js 동적 주입 후 재시도
             chrome.scripting.executeScript({
-              target: { tabId: tabId },
+              target: { tabId: tabId, allFrames: true },
               files: ["content.js"]
             }, () => {
               setTimeout(() => {
@@ -498,6 +498,7 @@ document.addEventListener('DOMContentLoaded', () => {
       chrome.runtime.sendMessage({
         action: "matchElementInTab",
         tabId: originTabId,
+        frameId: currentData.originFrameId,
         sampleText: sampleText,
         isUrl: (field === 'url')
       }, (res) => {
@@ -653,6 +654,7 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.runtime.sendMessage({
           action: "reExtractData",
           tabId: originTabId,
+          frameId: currentData.originFrameId,
           linkUrl: currentData.linkUrl || "",
           selection: currentData.selectedText || "",
           customRule: activeRules,
@@ -699,6 +701,7 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.runtime.sendMessage({
           action: "reExtractData",
           tabId: originTabId,
+          frameId: currentData.originFrameId,
           linkUrl: currentData.linkUrl || "",
           selection: currentData.selectedText || "",
           customRule: null,

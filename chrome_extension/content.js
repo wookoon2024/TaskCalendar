@@ -70,6 +70,7 @@
   window.addEventListener('mousemove', function(e) {
     document.__tcHoverTarget = e.target;
     document.__tcHoverContainer = findRowContainer(e.target);
+    document.__tcLastMouseMoveTime = Date.now();
   }, { passive: true, capture: true });
 
   // 2. 우클릭 대상 캡처 (Capture Phase로 웹앱의 자체 이벤트 간섭 방지)
@@ -79,6 +80,7 @@
     var a = target && target.closest ? target.closest('a') : null;
     document.__tcLink = a;
     document.__tcContainer = findRowContainer(target);
+    document.__tcLastContextMenuTime = Date.now();
   }, true);
 
   // 3. 🎯 화면에서 직접 찍기 (Visual Element Picker)
@@ -90,8 +92,8 @@
     if (isPickerActive) return;
     isPickerActive = true;
 
-    // 상단 안내 배너 생성
-    if (!pickerBanner) {
+    // 상단 안내 배너 생성 (최상위 창에서만 1개 노출)
+    if (window === window.top && !pickerBanner) {
       pickerBanner = document.createElement('div');
       pickerBanner.id = '__tc_picker_banner';
       pickerBanner.innerHTML = '<div style="display:flex;align-items:center;gap:12px;">' +
@@ -189,7 +191,8 @@
     try {
       chrome.runtime.sendMessage({
         action: "elementPickerCompleted",
-        linkUrl: a ? a.href : ""
+        linkUrl: a ? a.href : "",
+        frameUrl: window.location.href
       });
     } catch(err) {}
   }

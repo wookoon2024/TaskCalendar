@@ -4,6 +4,7 @@
   "version": "1.14.0",
   "description": "웹 페이지에서 K캘린더로 일정/업무/메모를 바로 등록합니다",
   "permissions": ["contextMenus", "activeTab", "scripting", "storage", "tabs"],
+  "host_permissions": ["<all_urls>"],
   "action": {
     "default_title": "TaskCalendar에 등록 (Ctrl+Shift+K)",
     "default_icon": {
@@ -26,7 +27,8 @@
     "matches": ["<all_urls>"],
     "js": ["content.js"],
     "run_at": "document_start",
-    "all_frames": true
+    "all_frames": true,
+    "match_about_blank": true
   }],
   "icons": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" }
 }
