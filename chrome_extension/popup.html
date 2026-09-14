@@ -144,16 +144,22 @@
       gap: 6px;
       padding: 4px 0;
     }
-    .field-row.field-desc-row {
+    .field-row.field-desc-row,
+    .field-row.field-url-row {
       display: none !important;
       align-items: flex-start;
       flex: 1;
     }
-    .field-row.field-desc-row .field-label {
-      padding-top: 5px;
+    .field-row.field-split-row {
+      display: flex;
+      gap: 10px;
     }
-    .field-row.field-desc-row input[type="checkbox"] {
-      margin-top: 5px;
+    .split-col {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex: 1;
+      min-width: 0;
     }
     .field-row + .field-row { border-top: 1px solid #f0f0f0; }
     .field-row input[type="checkbox"] {
@@ -535,68 +541,67 @@
       <button type="button" class="tab-btn" id="btn-memo" data-type="memo">메모</button>
     </div>
 
-    <div class="fields">
-      <!-- 제목 (최대 50자) -->
-      <div class="field-row">
+      <!-- 1. 제목 (최대 50자) -->
+      <div class="field-row" id="item-title">
         <input type="checkbox" id="chk-title" checked>
         <span class="field-label">제목</span>
         <input type="text" class="field-input" id="val-title" placeholder="제목" maxlength="50">
       </div>
 
-      <!-- 업무 분류 필드 (업무 탭, 최대 50자) -->
-      <div class="field-row" id="item-category" style="display: none;">
-        <input type="checkbox" id="chk-category" checked>
-        <span class="field-label">분류</span>
-        <input type="text" class="field-input" id="val-category" list="category-options" placeholder="일반, 공문, 보고, 기안 등" maxlength="50">
-        <datalist id="category-options">
-          <option value="일반">
-          <option value="공문">
-          <option value="보고">
-          <option value="기안">
-          <option value="결재">
-          <option value="민원">
-          <option value="예산">
-          <option value="기타">
-        </datalist>
-      </div>
-
-      <!-- 기안자 / 작성자 (업무 탭, 최대 50자) -->
+      <!-- 2. 기안자 / 작성자 (업무 탭, 최대 50자) -->
       <div class="field-row" id="item-author" style="display: none;">
         <input type="checkbox" id="chk-author" checked>
         <span class="field-label">기안자</span>
         <input type="text" class="field-input" id="val-author" placeholder="기안자 성명/부서" maxlength="50">
       </div>
 
-      <!-- 처리 상태 (업무 탭) -->
-      <div class="field-row" id="item-status" style="display: none;">
-        <input type="checkbox" id="chk-status" checked>
-        <span class="field-label">상태</span>
-        <select class="field-input" id="val-status">
-          <option value="등록" selected>등록</option>
-          <option value="진행중">진행중</option>
-          <option value="완료">완료</option>
-          <option value="보류">보류</option>
-          <option value="취소">취소</option>
-        </select>
-      </div>
-
-      <!-- 날짜 (일정/업무 탭) -->
+      <!-- 3. 날짜 (일정/업무/메모 탭) -->
       <div class="field-row" id="item-date">
         <input type="checkbox" id="chk-date" checked>
         <span class="field-label">날짜</span>
         <input type="date" class="field-input" id="val-date">
       </div>
 
-      <!-- 비고 / 세부내용 (보안 및 전자결재 문서 보호를 위해 기본 숨김/미등록) -->
+      <!-- 4. 분류 및 상태 (업무 탭, 2개 1줄 배치) -->
+      <div class="field-row field-split-row" id="item-category-status" style="display: none;">
+        <div class="split-col">
+          <input type="checkbox" id="chk-category" checked>
+          <span class="field-label" style="width: 32px;">분류</span>
+          <input type="text" class="field-input" id="val-category" list="category-options" placeholder="일반, 공문 등" maxlength="50">
+          <datalist id="category-options">
+            <option value="일반">
+            <option value="공문">
+            <option value="보고">
+            <option value="기안">
+            <option value="결재">
+            <option value="민원">
+            <option value="예산">
+            <option value="기타">
+          </datalist>
+        </div>
+        <div class="split-col">
+          <input type="checkbox" id="chk-status" checked>
+          <span class="field-label" style="width: 32px;">상태</span>
+          <select class="field-input" id="val-status">
+            <option value="등록" selected>등록</option>
+            <option value="진행중">진행중</option>
+            <option value="완료">완료</option>
+            <option value="보류">보류</option>
+            <option value="취소">취소</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- 5. 내용 (보안 및 전자결재 문서 보호를 위해 기본 숨김/미등록) -->
       <div class="field-row field-desc-row" style="display: none;">
         <input type="checkbox" id="chk-desc">
         <span class="field-label">내용</span>
         <textarea class="field-input" id="val-desc" placeholder="세부내용"></textarea>
       </div>
 
-      <!-- 출처 URL -->
-      <div class="field-row">
-        <input type="checkbox" id="chk-url" checked>
+      <!-- 6. 출처 URL (보안상 기본 숨김) -->
+      <div class="field-row field-url-row" style="display: none;">
+        <input type="checkbox" id="chk-url">
         <span class="field-label">출처</span>
         <input type="text" class="field-input" id="val-url" placeholder="URL">
       </div>

@@ -927,7 +927,7 @@ function findOrCreatePopup() {
         url: "popup.html",
         type: "popup",
         width: 470,
-        height: 430,
+        height: 360,
         focused: true
       },
       (newWin) => {

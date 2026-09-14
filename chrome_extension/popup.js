@@ -19,10 +19,9 @@ document.addEventListener('DOMContentLoaded', () => {
     btnSchedule: document.getElementById('btn-schedule'),
     btnTask: document.getElementById('btn-task'),
     btnMemo: document.getElementById('btn-memo'),
-    itemDate: document.getElementById('item-date'),
-    itemCategory: document.getElementById('item-category'),
     itemAuthor: document.getElementById('item-author'),
-    itemStatus: document.getElementById('item-status'),
+    itemDate: document.getElementById('item-date'),
+    itemCategoryStatus: document.getElementById('item-category-status'),
     chkTitle: document.getElementById('chk-title'),
     chkCategory: document.getElementById('chk-category'),
     chkAuthor: document.getElementById('chk-author'),
@@ -70,20 +69,18 @@ document.addEventListener('DOMContentLoaded', () => {
     els.btnMemo.classList.toggle('active', val === 'memo');
 
     if (val === 'schedule') {
-      els.itemDate.style.display = 'flex';
-      els.itemCategory.style.display = 'none';
       els.itemAuthor.style.display = 'none';
-      els.itemStatus.style.display = 'none';
+      els.itemDate.style.display = 'flex';
+      if (els.itemCategoryStatus) els.itemCategoryStatus.style.display = 'none';
     } else if (val === 'task') {
-      els.itemDate.style.display = 'flex';
-      els.itemCategory.style.display = 'flex';
       els.itemAuthor.style.display = 'flex';
-      els.itemStatus.style.display = 'flex';
+      els.itemDate.style.display = 'flex';
+      if (els.itemCategoryStatus) els.itemCategoryStatus.style.display = 'flex';
     } else {
-      els.itemDate.style.display = 'none';
-      els.itemCategory.style.display = 'none';
+      // 메모 탭: 날짜 표시
       els.itemAuthor.style.display = 'none';
-      els.itemStatus.style.display = 'none';
+      els.itemDate.style.display = 'flex';
+      if (els.itemCategoryStatus) els.itemCategoryStatus.style.display = 'none';
     }
 
     if (save) {
@@ -285,14 +282,9 @@ document.addEventListener('DOMContentLoaded', () => {
       els.chkDate.checked = true;
     }
 
-    // 출처 URL
-    if (activeRules.url === '__none__') {
-      els.valUrl.value = '';
-      els.chkUrl.checked = false;
-    } else {
-      els.valUrl.value = data.linkUrl || data.pageUrl || '';
-      els.chkUrl.checked = !!els.valUrl.value;
-    }
+    // 출처 URL: 보안 및 전자결재 URL 보호를 위해 기본 숨김 및 미입력 처리
+    els.valUrl.value = '';
+    els.chkUrl.checked = false;
 
     // 맞춤 규칙 적용 배지 표시 여부
     updateRuleBadgeVisibility(!!data.hasCustomRule);
@@ -726,32 +718,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let url = `taskcalendar://add?type=${type}`;
 
-    if (els.chkTitle.checked && clean50(els.valTitle.value)) {
-      url += `&title=${encodeURIComponent(clean50(els.valTitle.value))}`;
-    }
+    if (type === 'memo') {
+      // 3. 메모에 날짜 추가 -> 메모앱으로 가져왔을 때 메모제목을 날짜로 하고 제목을 내용을 넣어줌
+      const memoDate = (els.chkDate && els.chkDate.checked && els.valDate.value) ? els.valDate.value : dateStr;
+      const memoTitleAsContent = els.chkTitle.checked ? clean50(els.valTitle.value) : '';
 
-    if (type === 'task') {
-      if (els.chkCategory.checked && clean50(els.valCategory.value)) {
-        url += `&category=${encodeURIComponent(clean50(els.valCategory.value))}`;
+      url += `&title=${encodeURIComponent(memoDate)}`;
+      if (memoTitleAsContent) {
+        url += `&desc=${encodeURIComponent(memoTitleAsContent)}`;
       }
-      if (els.chkAuthor.checked && clean50(els.valAuthor.value)) {
-        url += `&author=${encodeURIComponent(clean50(els.valAuthor.value))}`;
+      url += `&date=${encodeURIComponent(memoDate)}`;
+    } else {
+      if (els.chkTitle.checked && clean50(els.valTitle.value)) {
+        url += `&title=${encodeURIComponent(clean50(els.valTitle.value))}`;
       }
-      if (els.chkStatus.checked && clean50(els.valStatus.value)) {
-        url += `&status=${encodeURIComponent(clean50(els.valStatus.value))}`;
+
+      if (type === 'task') {
+        if (els.chkAuthor.checked && clean50(els.valAuthor.value)) {
+          url += `&author=${encodeURIComponent(clean50(els.valAuthor.value))}`;
+        }
+        if (els.chkCategory.checked && clean50(els.valCategory.value)) {
+          url += `&category=${encodeURIComponent(clean50(els.valCategory.value))}`;
+        }
+        if (els.chkStatus.checked && clean50(els.valStatus.value)) {
+          url += `&status=${encodeURIComponent(clean50(els.valStatus.value))}`;
+        }
+      }
+
+      if (els.chkDate.checked && els.valDate.value) {
+        url += `&date=${els.valDate.value}`;
+      }
+
+      // 내용은 보안상 기본 숨김이며, 체크된 경우에만 최대 50자로 전송
+      if (els.chkDesc && els.chkDesc.checked && clean50(els.valDesc.value)) {
+        url += `&desc=${encodeURIComponent(clean50(els.valDesc.value))}`;
       }
     }
 
-    // 내용은 보안상 기본 숨김이며, 체크된 경우에만 최대 50자로 전송
-    if (els.chkDesc && els.chkDesc.checked && clean50(els.valDesc.value)) {
-      url += `&desc=${encodeURIComponent(clean50(els.valDesc.value))}`;
-    }
-
-    if (type !== 'memo' && els.chkDate.checked && els.valDate.value) {
-      url += `&date=${els.valDate.value}`;
-    }
-
-    if (els.chkUrl.checked && els.valUrl.value.trim()) {
+    // 출처는 보안상 기본 숨김이며, 체크된 경우에만 전송
+    if (els.chkUrl && els.chkUrl.checked && els.valUrl.value.trim()) {
       url += `&url=${encodeURIComponent(els.valUrl.value.trim())}`;
     }
 

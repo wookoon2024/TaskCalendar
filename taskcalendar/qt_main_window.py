@@ -6051,10 +6051,19 @@ class MainWindow(QMainWindow):
 
             if entry_type_str == "memo":
                 entry_type = EntryType.MEMO
+                # 메모 등록: 메모 제목을 날짜로, 제목(웹페이지 제목)을 내용으로 배치
+                memo_title = title or date_str or "메모"
+                memo_desc = desc or ""
+                if date_str and not desc and title != date_str:
+                    memo_title = date_str
+                    memo_desc = title
+                elif not memo_desc and title and title != date_str:
+                    memo_desc = title
+
                 entry = CalendarEntry(
                     entry_type=entry_type,
-                    title=title or "크롬에서 등록",
-                    description=full_desc,
+                    title=memo_title,
+                    description=memo_desc,
                 )
                 self._edit_entry(entry_type, entry, force_top=True)
             elif entry_type_str == "task":
