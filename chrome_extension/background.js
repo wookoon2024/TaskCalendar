@@ -1029,6 +1029,10 @@ function selectBestResult(results, targetFrameId) {
 // 팝업과의 통신 메시지 리스너 (DOM 검색 및 재추출)
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "matchElementInTab") {
+    if (request.sampleText && request.sampleText.length > 50) {
+      sendResponse({ success: false, error: "50자를 초과하는 검색어는 검색할 수 없습니다." });
+      return true;
+    }
     var tabId = request.tabId;
     if (!tabId) {
       sendResponse({ success: false, error: "활성 탭 ID를 찾을 수 없습니다." });

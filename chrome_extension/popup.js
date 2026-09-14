@@ -2,7 +2,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const today = new Date();
   const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
-  const FIELDS = ['title', 'category', 'author', 'status', 'date', 'desc', 'url'];
+  const FIELDS = ['title', 'author', 'date', 'category', 'status', 'desc', 'url'];
 
   // DOM 요소 참조
   const els = {
@@ -99,17 +99,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ========== 뷰 전환 (등록 ↔ 사이트 맞춤 설정) ==========
   function switchView(target) {
+    const actionsEl = document.querySelector('.actions');
     if (target === 'config') {
       els.headerRow.style.display = 'none';
       els.siteRuleBadge.style.display = 'none';
       els.viewRegister.style.display = 'none';
+      if (actionsEl) actionsEl.style.display = 'none';
       els.viewConfig.style.display = 'flex';
       populateConfigView();
+
+      // 사이트 맞춤 설정 시 세로 높이를 500으로 확장하여 스크롤 없이 시원하게 표시
+      try {
+        chrome.windows.getCurrent((win) => {
+          if (win && win.id) {
+            chrome.windows.update(win.id, { height: 500 });
+          }
+        });
+      } catch (e) {}
     } else {
       els.headerRow.style.display = 'flex';
       els.viewRegister.style.display = 'flex';
+      if (actionsEl) actionsEl.style.display = 'flex';
       els.viewConfig.style.display = 'none';
       updateRuleBadgeVisibility(!!currentData.hasCustomRule);
+
+      // 등록 화면으로 복귀 시 360으로 복원
+      try {
+        chrome.windows.getCurrent((win) => {
+          if (win && win.id) {
+            chrome.windows.update(win.id, { height: 360 });
+          }
+        });
+      } catch (e) {}
     }
   }
 
@@ -240,29 +261,12 @@ document.addEventListener('DOMContentLoaded', () => {
       els.chkCategory.checked = true;
     }
 
-    // 상태
+    // 상태 (텍스트박스 기본값 "등록", 최대 50자)
     if (activeRules.status === '__none__') {
+      els.valStatus.value = '';
       els.chkStatus.checked = false;
-    } else if (data.status) {
-      const st = limit50(data.status);
-      let found = false;
-      for (let i = 0; i < els.valStatus.options.length; i++) {
-        if (els.valStatus.options[i].value === st) {
-          els.valStatus.selectedIndex = i;
-          found = true;
-          break;
-        }
-      }
-      if (!found && st) {
-        const opt = document.createElement('option');
-        opt.value = st;
-        opt.textContent = st;
-        opt.selected = true;
-        els.valStatus.appendChild(opt);
-      }
-      els.chkStatus.checked = true;
     } else {
-      els.valStatus.value = '등록';
+      els.valStatus.value = limit50(data.status || '등록');
       els.chkStatus.checked = true;
     }
 
@@ -468,6 +472,14 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!sampleText) {
         statusPill.className = 'cfg-status-pill pill-fail';
         statusPill.textContent = '❌ 검색어 입력 필요';
+        sampleInput.focus();
+        return;
+      }
+
+      // 50자 초과 검색 차단
+      if (sampleText.length > 50) {
+        statusPill.className = 'cfg-status-pill pill-fail';
+        statusPill.textContent = '❌ 50자 이하만 검색 가능';
         sampleInput.focus();
         return;
       }

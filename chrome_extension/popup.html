@@ -157,7 +157,7 @@
     .split-col {
       display: flex;
       align-items: center;
-      gap: 5px;
+      gap: 6px;
       flex: 1;
       min-width: 0;
     }
@@ -293,8 +293,8 @@
       background: white;
       border: 1px solid var(--border);
       border-radius: 6px;
-      padding: 6px 8px;
-      margin-bottom: 6px;
+      padding: 5px 8px;
+      margin-bottom: 5px;
     }
     .cfg-card-header {
       display: flex;
@@ -566,7 +566,7 @@
       <div class="field-row field-split-row" id="item-category-status" style="display: none;">
         <div class="split-col">
           <input type="checkbox" id="chk-category" checked>
-          <span class="field-label" style="width: 32px;">분류</span>
+          <span class="field-label">분류</span>
           <input type="text" class="field-input" id="val-category" list="category-options" placeholder="일반, 공문 등" maxlength="50">
           <datalist id="category-options">
             <option value="일반">
@@ -581,37 +581,30 @@
         </div>
         <div class="split-col">
           <input type="checkbox" id="chk-status" checked>
-          <span class="field-label" style="width: 32px;">상태</span>
-          <select class="field-input" id="val-status">
-            <option value="등록" selected>등록</option>
-            <option value="진행중">진행중</option>
-            <option value="완료">완료</option>
-            <option value="보류">보류</option>
-            <option value="취소">취소</option>
-          </select>
+          <span class="field-label" style="width: 28px;">상태</span>
+          <input type="text" class="field-input" id="val-status" value="등록" maxlength="50">
         </div>
       </div>
 
       <!-- 5. 내용 (보안 및 전자결재 문서 보호를 위해 기본 숨김/미등록) -->
-      <div class="field-row field-desc-row" style="display: none;">
+      <div class="field-row field-desc-row" style="display: none !important;">
         <input type="checkbox" id="chk-desc">
         <span class="field-label">내용</span>
         <textarea class="field-input" id="val-desc" placeholder="세부내용"></textarea>
       </div>
 
       <!-- 6. 출처 URL (보안상 기본 숨김) -->
-      <div class="field-row field-url-row" style="display: none;">
+      <div class="field-row field-url-row" style="display: none !important;">
         <input type="checkbox" id="chk-url">
         <span class="field-label">출처</span>
         <input type="text" class="field-input" id="val-url" placeholder="URL">
       </div>
-    </div>
 
-    <div class="actions">
-      <button class="btn-cancel" id="btn-cancel-action">취소</button>
-      <button class="btn-submit" id="btn-submit-action">등록</button>
+      <div class="actions">
+        <button class="btn-cancel" id="btn-cancel-action">취소</button>
+        <button class="btn-submit" id="btn-submit-action">등록</button>
+      </div>
     </div>
-  </div>
 
   <!-- 2. 사이트 맞춤 설정 뷰 (토글) -->
   <div id="view-config">
@@ -632,23 +625,21 @@
           <span class="cfg-status-pill pill-empty" id="cfg-status-title">미설정</span>
         </div>
         <div class="cfg-input-group">
-          <input type="text" class="cfg-input" id="cfg-sample-title" placeholder="예: [11번가] 주문서비스기획 담당자 모집">
+          <input type="text" class="cfg-input" id="cfg-sample-title" placeholder="예: 공문서명 또는 게시글 제목" maxlength="50">
           <button type="button" class="btn-cfg-search" data-field="title">검색</button>
           <button type="button" class="btn-cfg-none" data-field="title">없음</button>
           <button type="button" class="btn-cfg-custom" data-field="title">사용자정의</button>
         </div>
         <!-- 사용자정의 서식 패널 -->
         <div class="cfg-template-panel" id="cfg-tpl-panel-title" style="display: none;">
-          <input type="text" class="cfg-tpl-input" id="cfg-tpl-title" placeholder="치환 서식 입력 (예: [{분류}] {제목})">
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-title" placeholder="치환 서식 입력 (예: [{분류}] {제목})" maxlength="50">
           <div class="cfg-chips-row">
             <span class="cfg-chip-label">치환 태그:</span>
             <button type="button" class="cfg-chip" data-field="title" data-tag="{제목}">{제목}</button>
-            <button type="button" class="cfg-chip" data-field="title" data-tag="{분류}">{분류}</button>
             <button type="button" class="cfg-chip" data-field="title" data-tag="{기안자}">{기안자}</button>
-            <button type="button" class="cfg-chip" data-field="title" data-tag="{상태}">{상태}</button>
             <button type="button" class="cfg-chip" data-field="title" data-tag="{날짜}">{날짜}</button>
-            <button type="button" class="cfg-chip" data-field="title" data-tag="{내용}">{내용}</button>
-            <button type="button" class="cfg-chip" data-field="title" data-tag="{출처}">{출처}</button>
+            <button type="button" class="cfg-chip" data-field="title" data-tag="{분류}">{분류}</button>
+            <button type="button" class="cfg-chip" data-field="title" data-tag="{상태}">{상태}</button>
           </div>
         </div>
         <div class="cfg-preview-box" id="cfg-prev-title" style="display: none;">
@@ -657,52 +648,21 @@
         </div>
       </div>
 
-      <!-- 2. 분류 -->
-      <div class="cfg-card" data-field="category">
-        <div class="cfg-card-header">
-          <span class="cfg-card-label">분류</span>
-          <span class="cfg-status-pill pill-empty" id="cfg-status-category">미설정</span>
-        </div>
-        <div class="cfg-input-group">
-          <input type="text" class="cfg-input" id="cfg-sample-category" placeholder="예: BIZ, 기획, 공문 등">
-          <button type="button" class="btn-cfg-search" data-field="category">검색</button>
-          <button type="button" class="btn-cfg-none" data-field="category">없음</button>
-          <button type="button" class="btn-cfg-custom" data-field="category">사용자정의</button>
-        </div>
-        <!-- 사용자정의 서식 패널 -->
-        <div class="cfg-template-panel" id="cfg-tpl-panel-category" style="display: none;">
-          <input type="text" class="cfg-tpl-input" id="cfg-tpl-category" placeholder="치환 서식 입력 (예: 채용-{분류})">
-          <div class="cfg-chips-row">
-            <span class="cfg-chip-label">치환 태그:</span>
-            <button type="button" class="cfg-chip" data-field="category" data-tag="{제목}">{제목}</button>
-            <button type="button" class="cfg-chip" data-field="category" data-tag="{분류}">{분류}</button>
-            <button type="button" class="cfg-chip" data-field="category" data-tag="{기안자}">{기안자}</button>
-            <button type="button" class="cfg-chip" data-field="category" data-tag="{상태}">{상태}</button>
-            <button type="button" class="cfg-chip" data-field="category" data-tag="{날짜}">{날짜}</button>
-            <button type="button" class="cfg-chip" data-field="category" data-tag="{출처}">{출처}</button>
-          </div>
-        </div>
-        <div class="cfg-preview-box" id="cfg-prev-category" style="display: none;">
-          <span class="cfg-prev-text" id="cfg-prev-text-category"></span>
-          <span class="cfg-prev-sel" id="cfg-prev-sel-category"></span>
-        </div>
-      </div>
-
-      <!-- 3. 기안자 / 작성자 -->
+      <!-- 2. 기안자 / 작성자 -->
       <div class="cfg-card" data-field="author">
         <div class="cfg-card-header">
           <span class="cfg-card-label">기안자 / 작성자</span>
           <span class="cfg-status-pill pill-empty" id="cfg-status-author">미설정</span>
         </div>
         <div class="cfg-input-group">
-          <input type="text" class="cfg-input" id="cfg-sample-author" placeholder="예: 홍길동, 인사팀, 작성자명 등">
+          <input type="text" class="cfg-input" id="cfg-sample-author" placeholder="예: 홍길동, 인사팀, 작성자명 등" maxlength="50">
           <button type="button" class="btn-cfg-search" data-field="author">검색</button>
           <button type="button" class="btn-cfg-none" data-field="author">없음</button>
           <button type="button" class="btn-cfg-custom" data-field="author">사용자정의</button>
         </div>
         <!-- 사용자정의 서식 패널 -->
         <div class="cfg-template-panel" id="cfg-tpl-panel-author" style="display: none;">
-          <input type="text" class="cfg-tpl-input" id="cfg-tpl-author" placeholder="치환 서식 입력 (예: {기안자})">
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-author" placeholder="치환 서식 입력 (예: {기안자})" maxlength="50">
           <div class="cfg-chips-row">
             <span class="cfg-chip-label">치환 태그:</span>
             <button type="button" class="cfg-chip" data-field="author" data-tag="{기안자}">{기안자}</button>
@@ -716,21 +676,77 @@
         </div>
       </div>
 
-      <!-- 4. 상태 -->
+      <!-- 3. 날짜 -->
+      <div class="cfg-card" data-field="date">
+        <div class="cfg-card-header">
+          <span class="cfg-card-label">날짜</span>
+          <span class="cfg-status-pill pill-empty" id="cfg-status-date">미설정</span>
+        </div>
+        <div class="cfg-input-group">
+          <input type="text" class="cfg-input" id="cfg-sample-date" placeholder="예: 2026.09.13, 26-09-13, 09/13 등" maxlength="50">
+          <button type="button" class="btn-cfg-search" data-field="date">검색</button>
+          <button type="button" class="btn-cfg-none" data-field="date">없음</button>
+          <button type="button" class="btn-cfg-custom" data-field="date">사용자정의</button>
+        </div>
+        <!-- 사용자정의 서식 패널 -->
+        <div class="cfg-template-panel" id="cfg-tpl-panel-date" style="display: none;">
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-date" placeholder="치환 서식 입력 (예: {날짜})" maxlength="50">
+          <div class="cfg-chips-row">
+            <span class="cfg-chip-label">치환 태그:</span>
+            <button type="button" class="cfg-chip" data-field="date" data-tag="{날짜}">{날짜}</button>
+          </div>
+        </div>
+        <div class="cfg-preview-box" id="cfg-prev-date" style="display: none;">
+          <span class="cfg-prev-text" id="cfg-prev-text-date"></span>
+          <span class="cfg-prev-sel" id="cfg-prev-sel-date"></span>
+        </div>
+      </div>
+
+      <!-- 4. 분류 -->
+      <div class="cfg-card" data-field="category">
+        <div class="cfg-card-header">
+          <span class="cfg-card-label">분류</span>
+          <span class="cfg-status-pill pill-empty" id="cfg-status-category">미설정</span>
+        </div>
+        <div class="cfg-input-group">
+          <input type="text" class="cfg-input" id="cfg-sample-category" placeholder="예: BIZ, 기획, 공문 등" maxlength="50">
+          <button type="button" class="btn-cfg-search" data-field="category">검색</button>
+          <button type="button" class="btn-cfg-none" data-field="category">없음</button>
+          <button type="button" class="btn-cfg-custom" data-field="category">사용자정의</button>
+        </div>
+        <!-- 사용자정의 서식 패널 -->
+        <div class="cfg-template-panel" id="cfg-tpl-panel-category" style="display: none;">
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-category" placeholder="치환 서식 입력 (예: 채용-{분류})" maxlength="50">
+          <div class="cfg-chips-row">
+            <span class="cfg-chip-label">치환 태그:</span>
+            <button type="button" class="cfg-chip" data-field="category" data-tag="{분류}">{분류}</button>
+            <button type="button" class="cfg-chip" data-field="category" data-tag="{제목}">{제목}</button>
+            <button type="button" class="cfg-chip" data-field="category" data-tag="{기안자}">{기안자}</button>
+            <button type="button" class="cfg-chip" data-field="category" data-tag="{상태}">{상태}</button>
+            <button type="button" class="cfg-chip" data-field="category" data-tag="{날짜}">{날짜}</button>
+          </div>
+        </div>
+        <div class="cfg-preview-box" id="cfg-prev-category" style="display: none;">
+          <span class="cfg-prev-text" id="cfg-prev-text-category"></span>
+          <span class="cfg-prev-sel" id="cfg-prev-sel-category"></span>
+        </div>
+      </div>
+
+      <!-- 5. 상태 -->
       <div class="cfg-card" data-field="status">
         <div class="cfg-card-header">
           <span class="cfg-card-label">상태</span>
           <span class="cfg-status-pill pill-empty" id="cfg-status-status">미설정</span>
         </div>
         <div class="cfg-input-group">
-          <input type="text" class="cfg-input" id="cfg-sample-status" placeholder="예: 모집중, 진행중, 접수, 완료 등">
+          <input type="text" class="cfg-input" id="cfg-sample-status" placeholder="예: 등록, 진행중, 접수, 완료 등" maxlength="50">
           <button type="button" class="btn-cfg-search" data-field="status">검색</button>
           <button type="button" class="btn-cfg-none" data-field="status">없음</button>
           <button type="button" class="btn-cfg-custom" data-field="status">사용자정의</button>
         </div>
         <!-- 사용자정의 서식 패널 -->
         <div class="cfg-template-panel" id="cfg-tpl-panel-status" style="display: none;">
-          <input type="text" class="cfg-tpl-input" id="cfg-tpl-status" placeholder="치환 서식 입력 (예: {상태})">
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-status" placeholder="치환 서식 입력 (예: {상태})" maxlength="50">
           <div class="cfg-chips-row">
             <span class="cfg-chip-label">치환 태그:</span>
             <button type="button" class="cfg-chip" data-field="status" data-tag="{상태}">{상태}</button>
@@ -743,57 +759,20 @@
         </div>
       </div>
 
-      <!-- 5. 날짜 -->
-      <div class="cfg-card" data-field="date">
-        <div class="cfg-card-header">
-          <span class="cfg-card-label">날짜</span>
-          <span class="cfg-status-pill pill-empty" id="cfg-status-date">미설정</span>
-        </div>
-        <div class="cfg-input-group">
-          <input type="text" class="cfg-input" id="cfg-sample-date" placeholder="예: 2026.09.13, 26-09-13, 09/13 등">
-          <button type="button" class="btn-cfg-search" data-field="date">검색</button>
-          <button type="button" class="btn-cfg-none" data-field="date">없음</button>
-          <button type="button" class="btn-cfg-custom" data-field="date">사용자정의</button>
-        </div>
-        <!-- 사용자정의 서식 패널 -->
-        <div class="cfg-template-panel" id="cfg-tpl-panel-date" style="display: none;">
-          <input type="text" class="cfg-tpl-input" id="cfg-tpl-date" placeholder="치환 서식 입력 (예: {날짜})">
-          <div class="cfg-chips-row">
-            <span class="cfg-chip-label">치환 태그:</span>
-            <button type="button" class="cfg-chip" data-field="date" data-tag="{날짜}">{날짜}</button>
-          </div>
-        </div>
-        <div class="cfg-preview-box" id="cfg-prev-date" style="display: none;">
-          <span class="cfg-prev-text" id="cfg-prev-text-date"></span>
-          <span class="cfg-prev-sel" id="cfg-prev-sel-date"></span>
-        </div>
-      </div>
-
-      <!-- 6. 내용 -->
-      <div class="cfg-card" data-field="desc">
+      <!-- 6. 내용 (숨김) -->
+      <div class="cfg-card" data-field="desc" style="display: none !important;">
         <div class="cfg-card-header">
           <span class="cfg-card-label">내용</span>
           <span class="cfg-status-pill pill-empty" id="cfg-status-desc">미설정</span>
         </div>
         <div class="cfg-input-group">
-          <input type="text" class="cfg-input" id="cfg-sample-desc" placeholder="예: 담당업무 세부 내용 등">
+          <input type="text" class="cfg-input" id="cfg-sample-desc" placeholder="예: 담당업무 세부 내용 등" maxlength="50">
           <button type="button" class="btn-cfg-search" data-field="desc">검색</button>
           <button type="button" class="btn-cfg-none" data-field="desc">없음</button>
           <button type="button" class="btn-cfg-custom" data-field="desc">사용자정의</button>
         </div>
-        <!-- 사용자정의 서식 패널 (내용은 멀티라인 textarea) -->
         <div class="cfg-template-panel" id="cfg-tpl-panel-desc" style="display: none;">
-          <textarea class="cfg-tpl-input" id="cfg-tpl-desc" rows="3" placeholder="예:&#10;제목: {제목}&#10;분류: {분류}&#10;출처: {출처}"></textarea>
-          <div class="cfg-chips-row">
-            <span class="cfg-chip-label">치환 태그:</span>
-            <button type="button" class="cfg-chip" data-field="desc" data-tag="{제목}">{제목}</button>
-            <button type="button" class="cfg-chip" data-field="desc" data-tag="{분류}">{분류}</button>
-            <button type="button" class="cfg-chip" data-field="desc" data-tag="{기안자}">{기안자}</button>
-            <button type="button" class="cfg-chip" data-field="desc" data-tag="{상태}">{상태}</button>
-            <button type="button" class="cfg-chip" data-field="desc" data-tag="{날짜}">{날짜}</button>
-            <button type="button" class="cfg-chip" data-field="desc" data-tag="{내용}">{내용}</button>
-            <button type="button" class="cfg-chip" data-field="desc" data-tag="{출처}">{출처}</button>
-          </div>
+          <textarea class="cfg-tpl-input" id="cfg-tpl-desc" rows="3"></textarea>
         </div>
         <div class="cfg-preview-box" id="cfg-prev-desc" style="display: none;">
           <span class="cfg-prev-text" id="cfg-prev-text-desc"></span>
@@ -801,25 +780,20 @@
         </div>
       </div>
 
-      <!-- 7. 출처 -->
-      <div class="cfg-card" data-field="url">
+      <!-- 7. 출처 (숨김) -->
+      <div class="cfg-card" data-field="url" style="display: none !important;">
         <div class="cfg-card-header">
           <span class="cfg-card-label">출처 URL</span>
           <span class="cfg-status-pill pill-empty" id="cfg-status-url">미설정</span>
         </div>
         <div class="cfg-input-group">
-          <input type="text" class="cfg-input" id="cfg-sample-url" placeholder="예: 링크 텍스트 또는 URL 일부">
+          <input type="text" class="cfg-input" id="cfg-sample-url" placeholder="예: 링크 텍스트 또는 URL 일부" maxlength="50">
           <button type="button" class="btn-cfg-search" data-field="url">검색</button>
           <button type="button" class="btn-cfg-none" data-field="url">없음</button>
           <button type="button" class="btn-cfg-custom" data-field="url">사용자정의</button>
         </div>
-        <!-- 사용자정의 서식 패널 -->
         <div class="cfg-template-panel" id="cfg-tpl-panel-url" style="display: none;">
-          <input type="text" class="cfg-tpl-input" id="cfg-tpl-url" placeholder="치환 서식 입력 (예: {출처})">
-          <div class="cfg-chips-row">
-            <span class="cfg-chip-label">치환 태그:</span>
-            <button type="button" class="cfg-chip" data-field="url" data-tag="{출처}">{출처}</button>
-          </div>
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-url">
         </div>
         <div class="cfg-preview-box" id="cfg-prev-url" style="display: none;">
           <span class="cfg-prev-text" id="cfg-prev-text-url"></span>
