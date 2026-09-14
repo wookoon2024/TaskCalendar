@@ -145,6 +145,7 @@
       padding: 4px 0;
     }
     .field-row.field-desc-row {
+      display: none !important;
       align-items: flex-start;
       flex: 1;
     }
@@ -535,18 +536,18 @@
     </div>
 
     <div class="fields">
-      <!-- 제목 -->
+      <!-- 제목 (최대 50자) -->
       <div class="field-row">
         <input type="checkbox" id="chk-title" checked>
         <span class="field-label">제목</span>
-        <input type="text" class="field-input" id="val-title" placeholder="제목">
+        <input type="text" class="field-input" id="val-title" placeholder="제목" maxlength="50">
       </div>
 
-      <!-- 업무 분류 필드 (업무 탭) -->
+      <!-- 업무 분류 필드 (업무 탭, 최대 50자) -->
       <div class="field-row" id="item-category" style="display: none;">
         <input type="checkbox" id="chk-category" checked>
         <span class="field-label">분류</span>
-        <input type="text" class="field-input" id="val-category" list="category-options" placeholder="일반, 공문, 보고, 기안 등">
+        <input type="text" class="field-input" id="val-category" list="category-options" placeholder="일반, 공문, 보고, 기안 등" maxlength="50">
         <datalist id="category-options">
           <option value="일반">
           <option value="공문">
@@ -559,11 +560,11 @@
         </datalist>
       </div>
 
-      <!-- 기안자 / 작성자 (업무 탭) -->
+      <!-- 기안자 / 작성자 (업무 탭, 최대 50자) -->
       <div class="field-row" id="item-author" style="display: none;">
         <input type="checkbox" id="chk-author" checked>
         <span class="field-label">기안자</span>
-        <input type="text" class="field-input" id="val-author" placeholder="기안자 성명/부서">
+        <input type="text" class="field-input" id="val-author" placeholder="기안자 성명/부서" maxlength="50">
       </div>
 
       <!-- 처리 상태 (업무 탭) -->
@@ -586,11 +587,11 @@
         <input type="date" class="field-input" id="val-date">
       </div>
 
-      <!-- 비고 / 세부내용 -->
-      <div class="field-row field-desc-row">
-        <input type="checkbox" id="chk-desc" checked>
+      <!-- 비고 / 세부내용 (보안 및 전자결재 문서 보호를 위해 기본 숨김/미등록) -->
+      <div class="field-row field-desc-row" style="display: none;">
+        <input type="checkbox" id="chk-desc">
         <span class="field-label">내용</span>
-        <textarea class="field-input" id="val-desc" placeholder="세부내용 또는 메타정보"></textarea>
+        <textarea class="field-input" id="val-desc" placeholder="세부내용"></textarea>
       </div>
 
       <!-- 출처 URL -->

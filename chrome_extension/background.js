@@ -691,6 +691,23 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
 
   result.metaText = metaParts.join('\n');
 
+  // 9. 보안 및 전자결재 정보보호를 위한 길이 제한 (모든 필드 최대 50자 이내)
+  function limit50(str) {
+    if (!str || typeof str !== 'string') return '';
+    return str.replace(/[\s\n\r\t]+/g, ' ').trim().substring(0, 50);
+  }
+
+  result.linkText = limit50(result.linkText);
+  result.author = limit50(result.author);
+  result.category = limit50(result.category);
+  result.status = limit50(result.status || '등록');
+  result.postNo = limit50(result.postNo);
+  result.detectedDate = limit50(result.detectedDate);
+  result.views = limit50(result.views);
+  result.votes = limit50(result.votes);
+  result.selectedText = limit50(result.selectedText);
+  if (result.descOverride) result.descOverride = limit50(result.descOverride);
+
   return result;
 }
 
@@ -910,7 +927,7 @@ function findOrCreatePopup() {
         url: "popup.html",
         type: "popup",
         width: 470,
-        height: 610,
+        height: 430,
         focused: true
       },
       (newWin) => {
@@ -1123,12 +1140,17 @@ function handleCaptureResults(results, tab, linkUrl, selection, pageUrl, domain,
 
   console.log('[TaskCalendar BG] chosen frameId:', originFrameId, 'captured:', JSON.stringify(captured));
 
-  var finalLinkText = captured.linkText || "";
-  var finalLinkUrl = captured.linkUrl || linkUrl || "";
-  var finalSelectedText = captured.selectedText || selection || "";
+  function limit50(str) {
+    if (!str || typeof str !== 'string') return '';
+    return str.replace(/[\s\n\r\t]+/g, ' ').trim().substring(0, 50);
+  }
 
-  if (!finalLinkText && finalSelectedText && finalSelectedText.length <= 150) {
-    finalLinkText = finalSelectedText.trim();
+  var finalLinkText = limit50(captured.linkText || "");
+  var finalLinkUrl = captured.linkUrl || linkUrl || "";
+  var finalSelectedText = limit50(captured.selectedText || selection || "");
+
+  if (!finalLinkText && finalSelectedText) {
+    finalLinkText = finalSelectedText;
   }
 
   var effectivePageUrl = captured.frameUrl || finalLinkUrl || pageUrl;
@@ -1138,12 +1160,12 @@ function handleCaptureResults(results, tab, linkUrl, selection, pageUrl, domain,
     selectedText: finalSelectedText,
     linkText: finalLinkText,
     linkUrl: finalLinkUrl,
-    metaText: captured.metaText || "",
-    author: captured.author || "",
-    category: captured.category || "",
-    status: captured.status || "등록",
-    detectedDate: captured.detectedDate || "",
-    pageTitle: tab.title || "",
+    metaText: limit50(captured.metaText || ""),
+    author: limit50(captured.author || ""),
+    category: limit50(captured.category || ""),
+    status: limit50(captured.status || "등록"),
+    detectedDate: limit50(captured.detectedDate || ""),
+    pageTitle: limit50(tab.title || ""),
     pageUrl: effectivePageUrl,
     siteDomain: effectiveDomain,
     hasCustomRule: hasCustomRule,

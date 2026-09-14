@@ -74,19 +74,16 @@ document.addEventListener('DOMContentLoaded', () => {
       els.itemCategory.style.display = 'none';
       els.itemAuthor.style.display = 'none';
       els.itemStatus.style.display = 'none';
-      els.valDesc.style.height = '180px';
     } else if (val === 'task') {
       els.itemDate.style.display = 'flex';
       els.itemCategory.style.display = 'flex';
       els.itemAuthor.style.display = 'flex';
       els.itemStatus.style.display = 'flex';
-      els.valDesc.style.height = '85px';
     } else {
       els.itemDate.style.display = 'none';
       els.itemCategory.style.display = 'none';
       els.itemAuthor.style.display = 'none';
       els.itemStatus.style.display = 'none';
-      els.valDesc.style.height = '215px';
     }
 
     if (save) {
@@ -208,36 +205,41 @@ document.addEventListener('DOMContentLoaded', () => {
       els.siteDomainLabel.textContent = `(${currentDomain})`;
     }
 
-    // 제목
+    function limit50(str) {
+      if (!str || typeof str !== 'string') return '';
+      return str.replace(/[\s\n\r\t]+/g, ' ').trim().substring(0, 50);
+    }
+
+    // 제목 (최대 50자)
     if (activeRules.title === '__none__') {
       els.valTitle.value = '';
       els.chkTitle.checked = false;
     } else if (data.linkText) {
-      els.valTitle.value = data.linkText;
+      els.valTitle.value = limit50(data.linkText);
       els.chkTitle.checked = true;
-    } else if (data.selectedText && data.selectedText.length <= 150 && !data.selectedText.includes('\n')) {
-      els.valTitle.value = data.selectedText.trim();
+    } else if (data.selectedText && !data.selectedText.includes('\n')) {
+      els.valTitle.value = limit50(data.selectedText);
       els.chkTitle.checked = true;
     } else {
-      els.valTitle.value = data.pageTitle || '';
+      els.valTitle.value = limit50(data.pageTitle || '');
       els.chkTitle.checked = true;
     }
 
-    // 작성자 / 기안자
+    // 작성자 / 기안자 (최대 50자)
     if (activeRules.author === '__none__') {
       els.valAuthor.value = '';
       els.chkAuthor.checked = false;
     } else {
-      els.valAuthor.value = data.author || '';
-      els.chkAuthor.checked = !!data.author;
+      els.valAuthor.value = limit50(data.author || '');
+      els.chkAuthor.checked = !!els.valAuthor.value;
     }
 
-    // 분류
+    // 분류 (최대 50자)
     if (activeRules.category === '__none__') {
       els.valCategory.value = '';
       els.chkCategory.checked = false;
     } else {
-      els.valCategory.value = data.category || '일반';
+      els.valCategory.value = limit50(data.category || '일반');
       els.chkCategory.checked = true;
     }
 
@@ -245,18 +247,19 @@ document.addEventListener('DOMContentLoaded', () => {
     if (activeRules.status === '__none__') {
       els.chkStatus.checked = false;
     } else if (data.status) {
+      const st = limit50(data.status);
       let found = false;
       for (let i = 0; i < els.valStatus.options.length; i++) {
-        if (els.valStatus.options[i].value === data.status) {
+        if (els.valStatus.options[i].value === st) {
           els.valStatus.selectedIndex = i;
           found = true;
           break;
         }
       }
-      if (!found && data.status.trim()) {
+      if (!found && st) {
         const opt = document.createElement('option');
-        opt.value = data.status.trim();
-        opt.textContent = data.status.trim();
+        opt.value = st;
+        opt.textContent = st;
         opt.selected = true;
         els.valStatus.appendChild(opt);
       }
@@ -266,23 +269,9 @@ document.addEventListener('DOMContentLoaded', () => {
       els.chkStatus.checked = true;
     }
 
-    // 내용
-    if (activeRules.desc === '__none__') {
-      els.valDesc.value = '';
-      els.chkDesc.checked = false;
-    } else if (data.descOverride) {
-      els.valDesc.value = data.descOverride;
-      els.chkDesc.checked = true;
-    } else if (data.selectedText && data.selectedText.trim() !== els.valTitle.value.trim()) {
-      els.valDesc.value = data.selectedText;
-      els.chkDesc.checked = true;
-    } else if (data.metaText) {
-      els.valDesc.value = data.metaText;
-      els.chkDesc.checked = true;
-    } else {
-      els.valDesc.value = '';
-      els.chkDesc.checked = false;
-    }
+    // 내용: 보안 및 전자결재 문서 보호를 위해 기본 숨김 및 미입력 처리
+    els.valDesc.value = '';
+    els.chkDesc.checked = false;
 
     // 날짜
     if (activeRules.date === '__none__') {
@@ -731,26 +720,31 @@ document.addEventListener('DOMContentLoaded', () => {
     const type = currentType || 'schedule';
     chrome.storage.local.set({ lastSelectedType: type });
 
+    function clean50(val) {
+      return (val || '').replace(/[\s\n\r\t]+/g, ' ').trim().substring(0, 50);
+    }
+
     let url = `taskcalendar://add?type=${type}`;
 
-    if (els.chkTitle.checked && els.valTitle.value.trim()) {
-      url += `&title=${encodeURIComponent(els.valTitle.value.trim())}`;
+    if (els.chkTitle.checked && clean50(els.valTitle.value)) {
+      url += `&title=${encodeURIComponent(clean50(els.valTitle.value))}`;
     }
 
     if (type === 'task') {
-      if (els.chkCategory.checked && els.valCategory.value.trim()) {
-        url += `&category=${encodeURIComponent(els.valCategory.value.trim())}`;
+      if (els.chkCategory.checked && clean50(els.valCategory.value)) {
+        url += `&category=${encodeURIComponent(clean50(els.valCategory.value))}`;
       }
-      if (els.chkAuthor.checked && els.valAuthor.value.trim()) {
-        url += `&author=${encodeURIComponent(els.valAuthor.value.trim())}`;
+      if (els.chkAuthor.checked && clean50(els.valAuthor.value)) {
+        url += `&author=${encodeURIComponent(clean50(els.valAuthor.value))}`;
       }
-      if (els.chkStatus.checked && els.valStatus.value) {
-        url += `&status=${encodeURIComponent(els.valStatus.value)}`;
+      if (els.chkStatus.checked && clean50(els.valStatus.value)) {
+        url += `&status=${encodeURIComponent(clean50(els.valStatus.value))}`;
       }
     }
 
-    if (els.chkDesc.checked && els.valDesc.value.trim()) {
-      url += `&desc=${encodeURIComponent(els.valDesc.value.trim())}`;
+    // 내용은 보안상 기본 숨김이며, 체크된 경우에만 최대 50자로 전송
+    if (els.chkDesc && els.chkDesc.checked && clean50(els.valDesc.value)) {
+      url += `&desc=${encodeURIComponent(clean50(els.valDesc.value))}`;
     }
 
     if (type !== 'memo' && els.chkDate.checked && els.valDate.value) {
