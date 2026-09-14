@@ -18,7 +18,7 @@ chrome.runtime.onStartup.addListener(setupContextMenu);
 // 스마트 추출 엔진 v2.1 (모든 유형의 게시판, 커뮤니티, 전자결재/온나라, 지메일 등 웹앱 자동 대응 + 사이트별 맞춤 규칙)
 function extractRowData(targetLinkUrl, targetSelection, customRule) {
   var result = {
-    selectedText: targetSelection || (window.getSelection() ? window.getSelection().toString() : '') || '',
+    selectedText: '', // 내용(본문)은 보안상 절대 추출하지 않음
     linkText: '',
     linkUrl: targetLinkUrl || '',
     metaText: '',
@@ -167,17 +167,9 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
         result.detectedDate = normalizeDate(dStr);
       }
     }
-    // 4. 내용 (메일 본문 요약 스니펫)
-    if (!result.descOverride && !result.selectedText) {
-      var gmSnippet = gContainer.querySelector('span.y2');
-      if (gmSnippet) {
-        var snipText = (gmSnippet.innerText || gmSnippet.textContent || '').replace(/^[\s\-–—:]+/, '').trim();
-        if (snipText) {
-          result.descOverride = snipText;
-          result.selectedText = snipText;
-        }
-      }
-    }
+    // 4. 내용: 보안상 수집하지 않음
+    result.descOverride = '';
+    result.selectedText = '';
     // 5. 스레드 직접 링크 (data-legacy-thread-id 또는 data-thread-id)
     var threadId = gContainer.getAttribute('data-legacy-thread-id') || gContainer.getAttribute('data-thread-id');
     if (threadId && !targetLinkUrl) {
@@ -725,6 +717,35 @@ function findMatchingElementOnPage(sampleText, isUrl) {
 
   var candidates = [];
 
+  // 본문 / 내용 요소 판별 함수 (HTML 태그가 포함되어 있거나 문단, 영역, 서식 태그를 가진 경우)
+  function isContentOrBodyElement(el) {
+    if (!el) return true;
+    var tag = el.tagName ? el.tagName.toUpperCase() : '';
+    // 1. 태그 자체가 본문/문단/컨테이너인 경우
+    if (['P', 'ARTICLE', 'SECTION', 'BLOCKQUOTE', 'PRE', 'MAIN', 'BODY', 'FORM', 'FIELDSET', 'TEXTAREA'].includes(tag)) {
+      return true;
+    }
+    // 2. 내부에 문단(p), 줄바꿈(br), 블록(div), 테이블 등 구조/서식 태그가 포함되어 있는 경우
+    if (el.querySelector && el.querySelector('p, br, div, table, ul, ol, blockquote, pre, hr, article, section')) {
+      return true;
+    }
+    // 3. 자식 태그가 2개 이상이거나 서식 태그가 복합적인 경우
+    if (el.children && el.children.length >= 2) {
+      return true;
+    }
+    // 4. innerHTML에 문단/서식 태그가 포함되어 있는 경우
+    var html = el.innerHTML || '';
+    if (/<(p|br|div|table|ul|ol|li|blockquote|pre|hr)\b/i.test(html)) {
+      return true;
+    }
+    // 5. 텍스트 자체에 줄바꿈(\n)이 포함된 경우
+    var rawText = el.innerText || el.textContent || '';
+    if (rawText.includes('\n')) {
+      return true;
+    }
+    return false;
+  }
+
   function collectFromRoot(searchRoot, isLocal) {
     var all = Array.from(searchRoot.querySelectorAll('*'));
     if (isLocal) all.unshift(searchRoot);
@@ -738,8 +759,8 @@ function findMatchingElementOnPage(sampleText, isUrl) {
       var title = (el.getAttribute('title') || '').trim();
       var alt = (el.getAttribute('alt') || '').trim();
 
-      // 50자 초과 요소는 절대 후보에 포함하지 않음 (본문 문단, 긴 영역 등 매칭 차단)
-      if (!isUrl && text.length > 50) continue;
+      // 50자 초과 요소 및 본문/태그 포함 요소는 절대 후보에 포함하지 않음 (본문 문단, 긴 영역 등 매칭 차단)
+      if (!isUrl && (text.length > 50 || isContentOrBodyElement(el))) continue;
       if (title.length > 50) title = '';
       if (alt.length > 50) alt = '';
 
@@ -826,8 +847,8 @@ function findMatchingElementOnPage(sampleText, isUrl) {
   }
 
   var bestText = (best.innerText || best.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
-  if (!isUrl && bestText.length > 50) {
-    return { success: false, error: '❌ 50자 초과 항목은 선택할 수 없습니다.' };
+  if (!isUrl && (bestText.length > 50 || isContentOrBodyElement(best))) {
+    return { success: false, error: '❌ 본문/태그 포함 항목은 선택할 수 없습니다 (50자 이내 텍스트만 가능)' };
   }
 
   // 웹페이지 내 보라색 하이라이트 효과 부여
@@ -1161,10 +1182,10 @@ function handleCaptureResults(results, tab, linkUrl, selection, pageUrl, domain,
 
   var finalLinkText = limit50(captured.linkText || "");
   var finalLinkUrl = captured.linkUrl || linkUrl || "";
-  var finalSelectedText = limit50(captured.selectedText || selection || "");
+  var finalSelectedText = ""; // 보안상 본문 내용은 절대 수집하지 않음 (항목 직접 찍기 시에도 차단)
 
-  if (!finalLinkText && finalSelectedText) {
-    finalLinkText = finalSelectedText;
+  if (!finalLinkText) {
+    finalLinkText = limit50(captured.pageTitle || (tab && tab.title) || "");
   }
 
   var effectivePageUrl = captured.frameUrl || finalLinkUrl || pageUrl;

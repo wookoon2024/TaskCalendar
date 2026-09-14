@@ -235,9 +235,6 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (data.linkText) {
       els.valTitle.value = limit50(data.linkText);
       els.chkTitle.checked = true;
-    } else if (data.selectedText && !data.selectedText.includes('\n')) {
-      els.valTitle.value = limit50(data.selectedText);
-      els.chkTitle.checked = true;
     } else {
       els.valTitle.value = limit50(data.pageTitle || '');
       els.chkTitle.checked = true;
@@ -270,7 +267,10 @@ document.addEventListener('DOMContentLoaded', () => {
       els.chkStatus.checked = true;
     }
 
-    // 내용: 보안 및 전자결재 문서 보호를 위해 기본 숨김 및 미입력 처리
+    // 내용: 보안 및 전자결재 문서 보호를 위해 절대 수집하지 않음 (항목 직접 찍기 시에도 미입력)
+    data.selectedText = '';
+    data.descOverride = '';
+    data.desc = '';
     els.valDesc.value = '';
     els.chkDesc.checked = false;
 

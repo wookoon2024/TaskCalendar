@@ -183,7 +183,17 @@
     document.__tcHoverTarget = target;
     document.__tcHoverContainer = container;
     var a = target && target.closest ? target.closest('a') : null;
+    if (!a && container) {
+      a = container.querySelector('a[href]');
+    }
     document.__tcLink = a;
+
+    // 블록 드래그 텍스트 해제 (내용 수집 원천 차단)
+    try {
+      if (window.getSelection) {
+        window.getSelection().removeAllRanges();
+      }
+    } catch(err) {}
 
     stopElementPicker();
 
