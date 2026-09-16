@@ -1146,6 +1146,7 @@ class MainWindow(QMainWindow):
         self._sticker_animation_enabled = self.repository.get_setting("sticker_animation_enabled", "1") == "1"
         self.hide_completed_on_calendar = self.repository.get_setting("hide_completed_on_calendar", "1") == "1"
         self.show_task_count_on_calendar = self.repository.get_setting("show_task_count_on_calendar", "1") == "1"
+        self.calendar_task_statuses = self._get_calendar_task_statuses()
         self.show_lunar_calendar = self.repository.get_setting("show_lunar_calendar", "1") == "1"
         self.lunar_display_frequency = self.repository.get_setting("lunar_display_frequency", "all")
         self.show_solar_terms = self.repository.get_setting("show_solar_terms", "1") == "1"
@@ -4083,6 +4084,10 @@ class MainWindow(QMainWindow):
         self._render_stickers()
         self._apply_clickable_cursor()
 
+    def _get_calendar_task_statuses(self) -> list[str]:
+        from taskcalendar.qt_task_manager import get_calendar_task_statuses
+        return get_calendar_task_statuses(self.repository)
+
     def _create_task_count_badge(self, target_day: date, tasks: list[CalendarEntry]) -> QWidget:
         count = len(tasks)
         badge = ClickableLabel(f"업무 {count}건", is_elided=False)
@@ -4172,10 +4177,12 @@ class MainWindow(QMainWindow):
         self._last_calendar_item_capacity = item_capacity
         grouped: dict[date, list[CalendarEntry]] = {}
         for entry in entries:
-            if entry.day and self.hide_completed_on_calendar and self._is_entry_completed_on_day(entry, entry.day):
+            if entry.entry_type != EntryType.TASK and entry.day and self.hide_completed_on_calendar and self._is_entry_completed_on_day(entry, entry.day):
                 continue
             if entry.day:
                 grouped.setdefault(entry.day, []).append(entry)
+
+        allowed_task_statuses = set(self._get_calendar_task_statuses())
 
         cal = calendar.Calendar(firstweekday=6)
         weeks = cal.monthdatescalendar(self.current_year, self.current_month)
@@ -4290,8 +4297,9 @@ class MainWindow(QMainWindow):
             day_entries = grouped.get(current_day, [])
             schedule_entries = [e for e in day_entries if e.entry_type != EntryType.TASK]
             task_entries = [e for e in day_entries if e.entry_type == EntryType.TASK]
+            filtered_tasks = [t for t in task_entries if (t.status or "등록") in allowed_task_statuses]
 
-            show_task_count = getattr(self, "show_task_count_on_calendar", True) and len(task_entries) > 0
+            show_task_count = getattr(self, "show_task_count_on_calendar", True) and len(filtered_tasks) > 0
 
             slots_for_entries = item_capacity
             entry_fg = self.palette.get("badge_selected_fg", self.palette.get("entry_text", self.palette["text"])) if is_selected else self.palette.get("entry_text", self.palette["text"])
@@ -4306,7 +4314,7 @@ class MainWindow(QMainWindow):
             available_schedule_slots = max(0, slots_for_entries - (1 if show_task_count else 0))
 
             if show_task_count:
-                task_badge = self._create_task_count_badge(current_day, task_entries)
+                task_badge = self._create_task_count_badge(current_day, filtered_tasks)
                 cell.items_layout.addWidget(task_badge, 0, Qt.AlignLeft)
 
             # Prefer showing one more real item instead of a lone "+1건" marker.
@@ -5277,6 +5285,8 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("topbar_visible", "1" if getattr(self, "_topbar_visible", True) else "0")
             self.repository.set_setting("hide_completed_on_calendar", "1" if getattr(self, "hide_completed_on_calendar", True) else "0")
             self.repository.set_setting("show_task_count_on_calendar", "1" if getattr(self, "show_task_count_on_calendar", True) else "0")
+            if hasattr(self, "calendar_task_statuses") and self.calendar_task_statuses is not None:
+                self.repository.set_setting("calendar_task_statuses", json.dumps(self.calendar_task_statuses, ensure_ascii=False))
             self.repository.set_setting("show_lunar_calendar", "1" if getattr(self, "show_lunar_calendar", True) else "0")
             self.repository.set_setting("lunar_display_frequency", getattr(self, "lunar_display_frequency", "all"))
             self.repository.set_setting("show_solar_terms", "1" if getattr(self, "show_solar_terms", True) else "0")
@@ -5316,6 +5326,7 @@ class MainWindow(QMainWindow):
         # 2. Lunar & Display preferences
         self.hide_completed_on_calendar = self.repository.get_setting("hide_completed_on_calendar", "1") == "1"
         self.show_task_count_on_calendar = self.repository.get_setting("show_task_count_on_calendar", "1") == "1"
+        self.calendar_task_statuses = self._get_calendar_task_statuses()
         self.show_lunar_calendar = self.repository.get_setting("show_lunar_calendar", "1") == "1"
         self.lunar_display_frequency = self.repository.get_setting("lunar_display_frequency", "all")
         self.show_solar_terms = self.repository.get_setting("show_solar_terms", "1") == "1"
@@ -5848,6 +5859,10 @@ class MainWindow(QMainWindow):
             self._edit_entry(EntryType.SCHEDULE, new_entry)
 
     def _open_settings(self, initial_tab: str = "general") -> None:
+        from taskcalendar.qt_task_manager import get_task_statuses, get_calendar_task_statuses
+        available_statuses = get_task_statuses(self.repository)
+        current_cal_task_statuses = get_calendar_task_statuses(self.repository)
+
         current_auto_start = is_startup_enabled()
         self.repository.set_setting("auto_start", "1" if current_auto_start else "0")
         dialog = SettingsDialog(
@@ -5876,6 +5891,8 @@ class MainWindow(QMainWindow):
             memo_expand_anchor=self.repository.get_setting("memo_expand_anchor", "left"),
             show_window_controls=getattr(self, "_window_controls_visible", True),
             show_task_count_on_calendar=getattr(self, "show_task_count_on_calendar", True),
+            available_task_statuses=available_statuses,
+            calendar_task_statuses=current_cal_task_statuses,
             calendar_sidebar_title_only=getattr(self, "calendar_sidebar_title_only", False),
         )
         if dialog.exec() and dialog.result is not None:
@@ -5918,6 +5935,9 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("hide_completed_on_calendar", "1" if self.hide_completed_on_calendar else "0")
             self.show_task_count_on_calendar = bool(dialog.result.get("show_task_count_on_calendar", True))
             self.repository.set_setting("show_task_count_on_calendar", "1" if self.show_task_count_on_calendar else "0")
+            if "calendar_task_statuses" in dialog.result:
+                self.calendar_task_statuses = list(dialog.result["calendar_task_statuses"])
+                self.repository.set_setting("calendar_task_statuses", json.dumps(self.calendar_task_statuses, ensure_ascii=False))
             self.show_lunar_calendar = bool(dialog.result.get("show_lunar_calendar", True))
             self.repository.set_setting("show_lunar_calendar", "1" if self.show_lunar_calendar else "0")
             self.lunar_display_frequency = str(dialog.result.get("lunar_display_frequency", "all"))

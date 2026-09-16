@@ -5576,11 +5576,19 @@ class SettingsDialog(QDialog):
         memo_expand_anchor: str = "left",
         show_window_controls: bool = True,
         show_task_count_on_calendar: bool = True,
+        available_task_statuses: list[str] | None = None,
+        calendar_task_statuses: list[str] | None = None,
         calendar_sidebar_title_only: bool = False,
     ) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
         self._db_path = db_path
+        if available_task_statuses is None:
+            available_task_statuses = ["등록", "진행중", "완료", "보류", "취소"]
+        if calendar_task_statuses is None:
+            calendar_task_statuses = [s for s in available_task_statuses if s not in ("완료", "취소")]
+        self._available_task_statuses = list(available_task_statuses)
+        self._calendar_task_statuses = list(calendar_task_statuses)
         self.result: dict[str, object] | None = None
         self._current_shortcut = normalize_shortcut(current_shortcut)
         self._current_memo_shortcut = normalize_shortcut(current_memo_shortcut)
@@ -5718,10 +5726,50 @@ class SettingsDialog(QDialog):
         self.hide_completed_on_calendar_check.setChecked(hide_completed_on_calendar)
         cal_view_layout.addWidget(self.hide_completed_on_calendar_check)
 
-        self.show_task_count_on_calendar_check = QCheckBox("캘린더에 업무 건수 표시")
+        self.show_task_count_on_calendar_check = QCheckBox("캘린더에 업무내역 표시하기")
         self.show_task_count_on_calendar_check.setChecked(show_task_count_on_calendar)
-        self.show_task_count_on_calendar_check.setToolTip("체크 시 캘린더 날짜 칸에 해당 날짜의 업무를 '업무 N건' 형태로 요약 표시합니다.")
+        self.show_task_count_on_calendar_check.setToolTip("체크 시 캘린더 날짜 칸에 설정된 처리상태의 업무를 '업무 N건' 형태로 요약 표시합니다.")
         cal_view_layout.addWidget(self.show_task_count_on_calendar_check)
+
+        self.task_status_container = QWidget()
+        task_status_layout = QVBoxLayout(self.task_status_container)
+        task_status_layout.setContentsMargins(22, 0, 0, 4)
+        task_status_layout.setSpacing(6)
+
+        status_sub_row = QHBoxLayout()
+        status_sub_row.setContentsMargins(0, 0, 0, 0)
+        status_sub_row.setSpacing(8)
+
+        status_title_lbl = QLabel("표시할 처리상태:")
+        status_title_lbl.setObjectName("muted")
+        status_title_lbl.setStyleSheet("font-size: 11px;")
+        status_sub_row.addWidget(status_title_lbl)
+
+        grid_widget = QWidget()
+        grid = QGridLayout(grid_widget)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(4)
+
+        self.task_status_checks: dict[str, QCheckBox] = {}
+        col_count = 5
+        for idx, st_name in enumerate(self._available_task_statuses):
+            cb = QCheckBox(st_name)
+            cb.setStyleSheet("font-size: 11px;")
+            cb.setChecked(st_name in self._calendar_task_statuses)
+            self.task_status_checks[st_name] = cb
+            grid.addWidget(cb, idx // col_count, idx % col_count)
+
+        status_sub_row.addWidget(grid_widget)
+        status_sub_row.addStretch(1)
+        task_status_layout.addLayout(status_sub_row)
+        cal_view_layout.addWidget(self.task_status_container)
+
+        def _on_task_count_toggled(checked: bool) -> None:
+            self.task_status_container.setEnabled(checked)
+
+        self.show_task_count_on_calendar_check.toggled.connect(_on_task_count_toggled)
+        self.task_status_container.setEnabled(show_task_count_on_calendar)
 
         self.sticker_animation_check = QCheckBox("스티커 움직임 사용")
         self.sticker_animation_check.setChecked(sticker_animation_enabled)
@@ -6322,6 +6370,9 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "단축키 오류", f"메모 단축키 오류: {memo_message}")
             return
 
+        selected_task_statuses = [
+            st for st, cb in getattr(self, "task_status_checks", {}).items() if cb.isChecked()
+        ]
         self.result = {
             "action": "apply",
             "theme": str(self.theme_combo.currentData()),
@@ -6332,6 +6383,7 @@ class SettingsDialog(QDialog):
             "sticker_animation_enabled": self.sticker_animation_check.isChecked(),
             "hide_completed_on_calendar": self.hide_completed_on_calendar_check.isChecked(),
             "show_task_count_on_calendar": self.show_task_count_on_calendar_check.isChecked(),
+            "calendar_task_statuses": selected_task_statuses,
             "auto_backup_enabled": self.auto_backup_check.isChecked(),
             "auto_backup_interval_days": int(self.auto_backup_interval_combo.currentData() or 0),
             "auto_backup_keep_count": int(self.auto_backup_keep_combo.currentData() or 0),

@@ -202,7 +202,36 @@ def save_task_statuses(repo: EncryptedRepository, statuses: list[str]) -> None:
     clean_statuses = [s for s in statuses if s != "등록"]
     final_statuses = ["등록"] + clean_statuses
     repo.set_setting("custom_task_statuses", json.dumps(final_statuses, ensure_ascii=False))
+
+    # 캘린더 업무 표시 상태 설정에서도 삭제된 상태를 자동으로 제거
+    cal_saved = repo.get_setting("calendar_task_statuses")
+    if cal_saved:
+        try:
+            cal_statuses = json.loads(cal_saved)
+            if isinstance(cal_statuses, list):
+                pruned = [s for s in cal_statuses if s in final_statuses]
+                if pruned != cal_statuses:
+                    repo.set_setting("calendar_task_statuses", json.dumps(pruned, ensure_ascii=False))
+        except Exception:
+            pass
+
     repo.save()
+
+
+def get_calendar_task_statuses(repo: EncryptedRepository) -> list[str]:
+    all_statuses = get_task_statuses(repo)
+    saved = repo.get_setting("calendar_task_statuses")
+    if saved is not None:
+        try:
+            loaded = json.loads(saved)
+            if isinstance(loaded, list):
+                # 현재 존재하는 상태만 유지 (삭제된 상태는 자동 제외)
+                return [s for s in loaded if s in all_statuses]
+        except Exception:
+            pass
+    # 명시적으로 설정되지 않은 초기 기본값: '완료', '취소'를 제외한 활성 상태
+    default_active = [s for s in all_statuses if s not in ("완료", "취소")]
+    return default_active if default_active else all_statuses
 
 
 STATUS_CONFIG = {
@@ -873,6 +902,11 @@ class TaskEditDialog(QDialog):
         )
         if dlg.exec() == QDialog.Accepted:
             self._refresh_statuses()
+            parent = self.parent()
+            if hasattr(parent, "main_window") and getattr(parent, "main_window", None) and hasattr(parent.main_window, "refresh"):
+                parent.main_window.refresh()
+            elif hasattr(parent, "refresh"):
+                parent.refresh()
 
     def _load_data(self) -> None:
         if not self.task:
@@ -1797,6 +1831,8 @@ class TaskManagerDialog(QDialog):
         if dlg.exec() == QDialog.Accepted:
             self._refresh_filter_statuses()
             self._apply_filters()
+            if hasattr(self, "main_window") and getattr(self, "main_window", None) and hasattr(self.main_window, "refresh"):
+                self.main_window.refresh()
 
     def reload_tasks(self) -> None:
         """저장소에서 모든 TASK 타입 엔트리를 불러와 새로고침"""
