@@ -6014,11 +6014,16 @@ class MainWindow(QMainWindow):
                 logger.warning(f"[receive_external_entry] Unknown action: {action}")
                 return
 
-            # Force bring the main window to the foreground immediately before opening dialogs
-            self.showNormal()
-            self.show()
-            self.raise_()
-            self.activateWindow()
+            # Force bring the main window to the foreground preserving maximized/normal state
+            if self.isMinimized() or not self.isVisible():
+                self._restore_window_state()
+            else:
+                if self.isMaximized():
+                    self.showMaximized()
+                else:
+                    self.show()
+                self.raise_()
+                self.activateWindow()
             force_window_to_foreground(int(self.winId()))
 
             entry_type_str = data.get("type", "schedule")
