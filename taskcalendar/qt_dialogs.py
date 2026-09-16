@@ -1010,6 +1010,8 @@ class EntryDialog(QDialog):
             
             # Load remembered geometry, collapse state, and opacity
             has_saved_geo = False
+            saved_col_x: int | None = None
+            exp_x, exp_y = 0, 0
             if entry and entry.entry_id:
                 if repo:
                     geo_str = repo.get_setting(f"memo_geo_{entry.entry_id}", "")
@@ -1019,7 +1021,8 @@ class EntryDialog(QDialog):
                             if len(pts) == 4:
                                 self._expanded_width = max(180, pts[2])
                                 self._expanded_height = max(150, pts[3])
-                                self.setGeometry(pts[0], pts[1], self._expanded_width, self._expanded_height)
+                                exp_x = pts[0]
+                                exp_y = pts[1]
                                 has_saved_geo = True
                         except Exception:
                             pass
@@ -1031,13 +1034,26 @@ class EntryDialog(QDialog):
                             self._collapsed_width = max(180, int(col_w_saved))
                         except Exception:
                             pass
+                    col_x_saved = repo.get_setting(f"memo_col_x_{entry.entry_id}", "")
+                    if col_x_saved:
+                        try:
+                            saved_col_x = int(col_x_saved)
+                        except Exception:
+                            pass
+                    anchored_saved = repo.get_setting(f"memo_anchored_right_{entry.entry_id}", "")
+                    if anchored_saved:
+                        self._anchored_to_right = (anchored_saved == "1")
                     opacity_saved = repo.get_setting(f"memo_opacity_{entry.entry_id}", "")
                     if opacity_saved:
                         try:
                             self.setWindowOpacity(int(opacity_saved) / 100.0)
                         except Exception:
                             pass
-            
+
+            screen = self.screen() or QApplication.primaryScreen()
+            avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+            screen_right = avail.x() + avail.width()
+
             if not has_saved_geo:
                 # Default opacity setting
                 def_op = int(repo.get_setting("memo_default_opacity", "100") if repo else 100)
@@ -1058,22 +1074,29 @@ class EntryDialog(QDialog):
                 self._expanded_width = init_w
                 self._expanded_height = init_h
 
-                screen = self.screen() or QApplication.primaryScreen()
-                if screen:
-                    avail = screen.availableGeometry()
-                    cx = avail.x() + (avail.width() - init_w) // 2
-                    cy = avail.y() + (avail.height() - init_h) // 2
-                    self.setGeometry(cx, cy, init_w, init_h)
-                else:
-                    self.resize(init_w, init_h)
+                cx = avail.x() + (avail.width() - init_w) // 2
+                cy = avail.y() + (avail.height() - init_h) // 2
+                self.setGeometry(cx, cy, init_w, init_h)
             else:
-                screen = self.screen() or QApplication.primaryScreen()
-                if screen:
-                    avail = screen.availableGeometry()
-                    geo = self.geometry()
-                    nx = max(avail.left(), min(geo.x(), avail.right() - 100))
-                    ny = max(avail.top(), min(geo.y(), avail.bottom() - 36))
-                    self.move(nx, ny)
+                if self._is_collapsed:
+                    target_w = self._collapsed_width if self._collapsed_width is not None else 180
+                    if saved_col_x is not None:
+                        init_x = saved_col_x
+                    else:
+                        # Fallback for legacy saved data where pts[0] was shifted left
+                        if self._expand_anchor_right and (exp_x + self._expanded_width <= screen_right + 50):
+                            init_x = exp_x + self._expanded_width - target_w
+                        else:
+                            init_x = exp_x
+                    nx = max(avail.left(), min(init_x, avail.right() - 50))
+                    ny = max(avail.top(), min(exp_y, avail.bottom() - 36))
+                    self.setGeometry(nx, ny, target_w, 36)
+                    self._anchored_to_right = getattr(self, "_anchored_to_right", False) or (nx + self._expanded_width > screen_right) or (nx + target_w >= screen_right - 16)
+                else:
+                    nx = max(avail.left(), min(exp_x, avail.right() - 100))
+                    ny = max(avail.top(), min(exp_y, avail.bottom() - 36))
+                    self.setGeometry(nx, ny, self._expanded_width, self._expanded_height)
+                    self._anchored_to_right = getattr(self, "_anchored_to_right", False) or (nx + self._expanded_width > screen_right) or (nx + self.width() >= screen_right - 16)
 
             self.setMouseTracking(True)
             root.setContentsMargins(0, 0, 0, 0)
@@ -1241,8 +1264,6 @@ class EntryDialog(QDialog):
             # Apply initial collapse state if remembered
             if getattr(self, "_is_collapsed", False):
                 self.content_wrap.hide()
-                target_w = self._collapsed_width if self._collapsed_width is not None else self._expanded_width
-                self._resize_with_anchor(target_w, 36)
                 self.setFixedHeight(36)
                 if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
                     self._collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg"))))
@@ -3193,15 +3214,26 @@ class EntryDialog(QDialog):
             is_col = getattr(self, "_is_collapsed", False)
             w_val = getattr(self, "_expanded_width", curr_geo.width())
             h_val = getattr(self, "_expanded_height", curr_geo.height())
-            save_x = curr_geo.x()
-            if is_col and getattr(self, "_expand_anchor_right", False):
-                screen = self.screen() or QApplication.primaryScreen()
-                avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
-                screen_right = avail.x() + avail.width()
-                if getattr(self, "_anchored_to_right", False) or (curr_geo.x() + w_val > screen_right) or (curr_geo.x() + curr_geo.width() >= screen_right - 16):
-                    save_x = curr_geo.x() + curr_geo.width() - w_val
-            parent.repository.set_setting(f"memo_geo_{self.entry.entry_id}", f"{save_x},{curr_geo.y()},{w_val},{h_val}")
+
+            if is_col:
+                col_x = curr_geo.x()
+                if getattr(self, "_expand_anchor_right", False) and getattr(self, "_anchored_to_right", False):
+                    exp_x = curr_geo.x() + curr_geo.width() - w_val
+                else:
+                    exp_x = curr_geo.x()
+                parent.repository.set_setting(f"memo_col_x_{self.entry.entry_id}", str(col_x))
+            else:
+                exp_x = curr_geo.x()
+                if getattr(self, "_expand_anchor_right", False) and getattr(self, "_anchored_to_right", False):
+                    col_w = getattr(self, "_collapsed_width", None) or 180
+                    col_x = curr_geo.x() + curr_geo.width() - col_w
+                else:
+                    col_x = curr_geo.x()
+                parent.repository.set_setting(f"memo_col_x_{self.entry.entry_id}", str(col_x))
+
+            parent.repository.set_setting(f"memo_geo_{self.entry.entry_id}", f"{exp_x},{curr_geo.y()},{w_val},{h_val}")
             parent.repository.set_setting(f"memo_collapsed_{self.entry.entry_id}", "1" if is_col else "0")
+            parent.repository.set_setting(f"memo_anchored_right_{self.entry.entry_id}", "1" if getattr(self, "_anchored_to_right", False) else "0")
             if getattr(self, "_collapsed_width", None) is not None:
                 parent.repository.set_setting(f"memo_collapsed_w_{self.entry.entry_id}", str(self._collapsed_width))
             if hasattr(self, "attachment_bar"):
@@ -3952,40 +3984,55 @@ class FloatingGroupDialog(QDialog):
         # Load saved geo or default
         geo_str = self.group_dict.get("geo", "")
         has_geo = False
+        exp_x, exp_y = 0, 0
         if geo_str:
             try:
                 pts = [int(p) for p in geo_str.split(",")]
                 if len(pts) == 4:
                     self._expanded_width = max(250, pts[2])
                     self._expanded_height = max(180, pts[3])
-                    self.setGeometry(pts[0], pts[1], self._expanded_width, self._expanded_height)
+                    exp_x = pts[0]
+                    exp_y = pts[1]
                     has_geo = True
             except Exception:
                 pass
+
+        saved_col_x = self.group_dict.get("col_x", None)
+        if "anchored_to_right" in self.group_dict:
+            self._anchored_to_right = bool(self.group_dict["anchored_to_right"])
+
+        screen = self.screen() or QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        screen_right = avail.x() + avail.width()
+
         if has_geo:
-            screen = self.screen() or QApplication.primaryScreen()
-            if screen:
-                avail = screen.availableGeometry()
-                geo = self.geometry()
-                nx = max(avail.left(), min(geo.x(), avail.right() - 100))
-                ny = max(avail.top(), min(geo.y(), avail.bottom() - 36))
-                self.move(nx, ny)
-        else:
-            screen = self.screen() or QApplication.primaryScreen()
-            if screen:
-                avail = screen.availableGeometry()
-                cx = avail.x() + (avail.width() - 360) // 2 + 50
-                cy = avail.y() + (avail.height() - 420) // 2 + 50
-                self.setGeometry(cx, cy, 360, 420)
+            if self._is_collapsed:
+                target_w = self._collapsed_width if self._collapsed_width is not None else 250
+                if saved_col_x is not None:
+                    init_x = int(saved_col_x)
+                else:
+                    if self._expand_anchor_right and (exp_x + self._expanded_width <= screen_right + 50):
+                        init_x = exp_x + self._expanded_width - target_w
+                    else:
+                        init_x = exp_x
+                nx = max(avail.left(), min(init_x, avail.right() - 50))
+                ny = max(avail.top(), min(exp_y, avail.bottom() - 36))
+                self.setGeometry(nx, ny, target_w, 36)
+                self._anchored_to_right = getattr(self, "_anchored_to_right", False) or (nx + self._expanded_width > screen_right) or (nx + target_w >= screen_right - 16)
             else:
-                self.resize(360, 420)
+                nx = max(avail.left(), min(exp_x, avail.right() - 100))
+                ny = max(avail.top(), min(exp_y, avail.bottom() - 36))
+                self.setGeometry(nx, ny, self._expanded_width, self._expanded_height)
+                self._anchored_to_right = getattr(self, "_anchored_to_right", False) or (nx + self._expanded_width > screen_right) or (nx + self.width() >= screen_right - 16)
+        else:
+            cx = avail.x() + (avail.width() - 360) // 2 + 50
+            cy = avail.y() + (avail.height() - 420) // 2 + 50
+            self.setGeometry(cx, cy, 360, 420)
 
         self._build_ui()
         self._apply_theme(self.group_color)
         if self._is_collapsed:
             self.content_wrap.hide()
-            target_w = self._collapsed_width if self._collapsed_width is not None else self._expanded_width
-            self._resize_with_anchor(target_w, 36)
             self.setFixedHeight(36)
             self._update_collapse_btn()
             self._apply_theme(self.group_color)
@@ -4729,18 +4776,29 @@ class FloatingGroupDialog(QDialog):
             is_col = getattr(self, "_is_collapsed", False)
             w_val = getattr(self, "_expanded_width", curr_geo.width())
             h_val = getattr(self, "_expanded_height", curr_geo.height())
-            save_x = curr_geo.x()
-            if is_col and getattr(self, "_expand_anchor_right", False):
-                screen = self.screen() or QApplication.primaryScreen()
-                avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
-                screen_right = avail.x() + avail.width()
-                if getattr(self, "_anchored_to_right", False) or (curr_geo.x() + w_val > screen_right) or (curr_geo.x() + curr_geo.width() >= screen_right - 16):
-                    save_x = curr_geo.x() + curr_geo.width() - w_val
-            self.group_dict["geo"] = f"{save_x},{curr_geo.y()},{w_val},{h_val}"
+
+            if is_col:
+                col_x = curr_geo.x()
+                if getattr(self, "_expand_anchor_right", False) and getattr(self, "_anchored_to_right", False):
+                    exp_x = curr_geo.x() + curr_geo.width() - w_val
+                else:
+                    exp_x = curr_geo.x()
+                self.group_dict["col_x"] = col_x
+            else:
+                exp_x = curr_geo.x()
+                if getattr(self, "_expand_anchor_right", False) and getattr(self, "_anchored_to_right", False):
+                    col_w = getattr(self, "_collapsed_width", None) or 250
+                    col_x = curr_geo.x() + curr_geo.width() - col_w
+                else:
+                    col_x = curr_geo.x()
+                self.group_dict["col_x"] = col_x
+
+            self.group_dict["geo"] = f"{exp_x},{curr_geo.y()},{w_val},{h_val}"
             self.group_dict["color"] = self.group_color
             self.group_dict["is_floating"] = self._is_floating
             self.group_dict["view_mode"] = self.view_mode
             self.group_dict["is_collapsed"] = self._is_collapsed
+            self.group_dict["anchored_to_right"] = getattr(self, "_anchored_to_right", False)
             if getattr(self, "_collapsed_width", None) is not None:
                 self.group_dict["collapsed_width"] = self._collapsed_width
             parent.repository.upsert_memo_group(self.group_dict, persist=persist)
