@@ -83,7 +83,13 @@ from taskcalendar.qt_dialogs import (
 from taskcalendar.storage import EncryptedRepository
 from taskcalendar.themes import THEMES
 from taskcalendar.qt_styles import dialog_stylesheet, _shade
-from taskcalendar.lunar import get_lunar_date, get_solar_term
+from taskcalendar.lunar import (
+    get_lunar_date,
+    get_solar_term,
+    get_korean_holiday_name,
+    get_korean_holidays_for_year,
+    FIXED_KR_HOLIDAYS,
+)
 
 logger = logging.getLogger(__name__)
 ALERT_BOX_WIDTH = 300
@@ -3474,8 +3480,8 @@ class MainWindow(QMainWindow):
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(raw, dict):
                     yearly = raw.get("yearly", {})
-                    # "2030-02-03" (Lunar New Year 2030) is the indicator for 2030 holiday completeness
-                    if "2030-02-03" not in yearly:
+                    # "2030-02-03" (Lunar New Year 2030) and "2026-09-25" (Chuseok 2026) check for completeness
+                    if "2030-02-03" not in yearly or "2026-09-25" not in yearly:
                         should_copy = True
             except Exception:
                 should_copy = True
@@ -3483,34 +3489,42 @@ class MainWindow(QMainWindow):
         if should_copy:
             path.parent.mkdir(parents=True, exist_ok=True)
             copied = False
+            # 1. First attempt: asset_path("holidays_kr.json")
             try:
-                if getattr(sys, "frozen", False):
+                asset_hols = asset_path("holidays_kr.json")
+                if asset_hols.exists():
+                    shutil.copy2(asset_hols, path)
+                    copied = True
+            except Exception:
+                pass
+
+            # 2. Second attempt: packaged data directory
+            if not copied and getattr(sys, "frozen", False):
+                try:
                     meipass = getattr(sys, "_MEIPASS", "")
                     if meipass:
                         packaged_path = Path(meipass) / "data" / "holidays_kr.json"
                         if packaged_path.exists():
                             shutil.copy2(packaged_path, path)
                             copied = True
-            except Exception:
-                pass
-            
-            if not copied and not path.exists():
-                sample = {
-                    "fixed": {
-                        "01-01": "신정",
-                        "03-01": "삼일절",
-                        "05-05": "어린이날",
-                        "06-06": "현충일",
-                        "08-15": "광복절",
-                        "10-03": "개천절",
-                        "10-09": "한글날",
-                        "12-25": "성탄절",
-                    },
-                    "yearly": {
-                        "2026-03-02": "삼일절 대체공휴일",
-                    },
-                }
-                path.write_text(json.dumps(sample, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+
+            # 3. Third attempt: dynamically generate comprehensive holidays using lunar module
+            if not copied:
+                try:
+                    gen_yearly = {}
+                    for y in range(2020, 2036):
+                        for d, n in get_korean_holidays_for_year(y).items():
+                            gen_yearly[d.isoformat()] = n
+                    gen_fixed = {f"{m:02d}-{d:02d}": n for (m, d), n in FIXED_KR_HOLIDAYS.items()}
+                    path.write_text(
+                        json.dumps({"fixed": gen_fixed, "yearly": gen_yearly}, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    copied = True
+                except Exception:
+                    pass
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -3557,7 +3571,16 @@ class MainWindow(QMainWindow):
         if iso in self._holidays_yearly:
             return self._holidays_yearly[iso]
         mmdd = target_day.strftime("%m-%d")
-        return self._holidays_fixed.get(mmdd, "")
+        if mmdd in self._holidays_fixed:
+            return self._holidays_fixed[mmdd]
+        # Dynamic fallback from lunar module (guarantees holidays like Chuseok/Seollal always show)
+        try:
+            dyn = get_korean_holiday_name(target_day)
+            if dyn:
+                return dyn
+        except Exception:
+            pass
+        return ""
 
     def _load_sticker_store(self) -> dict[str, list[dict[str, object]]]:
         raw = self.repository.get_setting("sticker_layout_v1", "{}")

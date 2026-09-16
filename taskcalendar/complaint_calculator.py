@@ -56,6 +56,13 @@ class ComplaintCalculator:
         mmdd = target_date.strftime("%m-%d")
         if mmdd in self.holidays_fixed:
             return True, self.holidays_fixed[mmdd]
+        try:
+            from taskcalendar.lunar import get_korean_holiday_name
+            dyn = get_korean_holiday_name(target_date)
+            if dyn:
+                return True, dyn
+        except Exception:
+            pass
         if target_date.weekday() == 5:
             return True, "토요일"
         if target_date.weekday() == 6:

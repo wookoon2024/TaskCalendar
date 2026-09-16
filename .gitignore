@@ -40,7 +40,8 @@ peutils.py
 
 # Local directories
 db/
-data/
+data/*
+!data/holidays_kr.json
 backups/
 run_log.txt
 
