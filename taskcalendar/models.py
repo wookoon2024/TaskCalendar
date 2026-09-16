@@ -38,6 +38,7 @@ class CalendarEntry:
     end_time: str = ""
     all_day: bool = False
     assignee: str = ""
+    department: str = ""
     status: str = ""
     attachments: list[str] = field(default_factory=list)
     recurrence_enabled: bool = False

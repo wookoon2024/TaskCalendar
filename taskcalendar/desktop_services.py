@@ -261,6 +261,55 @@ def set_startup_enabled(enabled: bool) -> bool:
         return False
 
 
+def set_native_window_icon(hwnd: int) -> None:
+    """Set native Win32 window icon (WM_SETICON & GCLP_HICON) so that Task Manager,
+    taskbar, and Alt+Tab display the application icon reliably.
+    """
+    if sys.platform != "win32" or not hwnd:
+        return
+    try:
+        from taskcalendar.paths import asset_path
+        ico_path = asset_path("app_icon.ico")
+        if not ico_path.exists():
+            return
+
+        user32 = ctypes.windll.user32
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x0010
+
+        sm_w = user32.GetSystemMetrics(49)  # SM_CXSMICON
+        sm_h = user32.GetSystemMetrics(50)  # SM_CYSMICON
+        big_w = user32.GetSystemMetrics(11) # SM_CXICON
+        big_h = user32.GetSystemMetrics(12) # SM_CYICON
+
+        h_icon_sm = user32.LoadImageW(None, str(ico_path), IMAGE_ICON, sm_w, sm_h, LR_LOADFROMFILE)
+        h_icon_big = user32.LoadImageW(None, str(ico_path), IMAGE_ICON, big_w, big_h, LR_LOADFROMFILE)
+
+        WM_SETICON = 0x0080
+        ICON_SMALL = 0
+        ICON_BIG = 1
+
+        if h_icon_sm:
+            user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, h_icon_sm)
+        if h_icon_big:
+            user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, h_icon_big)
+
+        GCLP_HICON = -14
+        GCLP_HICONSM = -34
+        if hasattr(user32, "SetClassLongPtrW"):
+            if h_icon_big:
+                user32.SetClassLongPtrW(hwnd, GCLP_HICON, h_icon_big)
+            if h_icon_sm:
+                user32.SetClassLongPtrW(hwnd, GCLP_HICONSM, h_icon_sm)
+        else:
+            if h_icon_big:
+                user32.SetClassLongW(hwnd, GCLP_HICON, h_icon_big)
+            if h_icon_sm:
+                user32.SetClassLongW(hwnd, GCLP_HICONSM, h_icon_sm)
+    except Exception:
+        pass
+
+
 def register_protocol_handler() -> bool:
     """Register taskcalendar:// URL protocol handler in Windows registry (HKCU)."""
     try:
@@ -275,6 +324,16 @@ def register_protocol_handler() -> bool:
             command = f'"{exe_path}" "%1"'
 
         protocol_key = r"Software\Classes\taskcalendar"
+
+        # Register DefaultIcon in registry
+        from taskcalendar.paths import asset_path
+        ico_path = asset_path("app_icon.ico")
+        icon_str = f'"{exe_path}",0' if exe_path else f'"{ico_path}"'
+        try:
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, protocol_key + r"\DefaultIcon", 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, icon_str)
+        except Exception:
+            pass
 
         # Check if already registered with the correct command
         try:

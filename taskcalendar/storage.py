@@ -221,6 +221,7 @@ class EncryptedRepository:
                 end_time TEXT NOT NULL DEFAULT '',
                 all_day INTEGER NOT NULL DEFAULT 0,
                 assignee TEXT NOT NULL DEFAULT '',
+                department TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT '',
                 attachments_json TEXT NOT NULL DEFAULT '[]',
                 recurrence_enabled INTEGER NOT NULL DEFAULT 0,
@@ -277,6 +278,7 @@ class EncryptedRepository:
         existing = {row["name"] for row in self.connection.execute("PRAGMA table_info(entries)").fetchall()}
         additions = {
             "all_day": "ALTER TABLE entries ADD COLUMN all_day INTEGER NOT NULL DEFAULT 0",
+            "department": "ALTER TABLE entries ADD COLUMN department TEXT NOT NULL DEFAULT ''",
             "recurrence_enabled": "ALTER TABLE entries ADD COLUMN recurrence_enabled INTEGER NOT NULL DEFAULT 0",
             "recurrence_type": "ALTER TABLE entries ADD COLUMN recurrence_type TEXT NOT NULL DEFAULT 'none'",
             "recurrence_interval": "ALTER TABLE entries ADD COLUMN recurrence_interval INTEGER NOT NULL DEFAULT 1",
@@ -623,6 +625,7 @@ class EncryptedRepository:
             entry.end_time,
             int(entry.all_day),
             entry.assignee,
+            getattr(entry, "department", "") or "",
             entry.status,
             json.dumps(entry.attachments, ensure_ascii=False),
             int(entry.recurrence_enabled),
@@ -644,11 +647,11 @@ class EncryptedRepository:
                 """
                 INSERT INTO entries(
                     entry_type, title, description, day, start_date, end_date,
-                    start_time, end_time, all_day, assignee, status, attachments_json,
+                    start_time, end_time, all_day, assignee, department, status, attachments_json,
                     recurrence_enabled, recurrence_type, recurrence_interval,
                     recurrence_weekdays_json, recurrence_month_day, recurrence_month_week, recurrence_month_end, completed_dates_json, icon_type, bg_color, alert_type, alert_offset, memo_group, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values + (now, now),
             )
@@ -661,7 +664,7 @@ class EncryptedRepository:
                     """
                     UPDATE entries
                     SET entry_type=?, title=?, description=?, day=?, start_date=?, end_date=?,
-                        start_time=?, end_time=?, all_day=?, assignee=?, status=?, attachments_json=?,
+                        start_time=?, end_time=?, all_day=?, assignee=?, department=?, status=?, attachments_json=?,
                         recurrence_enabled=?, recurrence_type=?, recurrence_interval=?,
                         recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, created_at=?, updated_at=?
                     WHERE id = ?
@@ -673,7 +676,7 @@ class EncryptedRepository:
                     """
                     UPDATE entries
                     SET entry_type=?, title=?, description=?, day=?, start_date=?, end_date=?,
-                        start_time=?, end_time=?, all_day=?, assignee=?, status=?, attachments_json=?,
+                        start_time=?, end_time=?, all_day=?, assignee=?, department=?, status=?, attachments_json=?,
                         recurrence_enabled=?, recurrence_type=?, recurrence_interval=?,
                         recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, updated_at=?
                     WHERE id = ?
@@ -876,6 +879,7 @@ class EncryptedRepository:
             end_time=row["end_time"] or "",
             all_day=bool(row["all_day"]),
             assignee=row["assignee"] or "",
+            department=row["department"] if "department" in row.keys() and row["department"] else "",
             status=row["status"] or "",
             attachments=json.loads(row["attachments_json"] or "[]"),
             recurrence_enabled=bool(row["recurrence_enabled"]),

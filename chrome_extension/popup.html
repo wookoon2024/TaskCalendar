@@ -144,7 +144,19 @@
       gap: 6px;
       padding: 4px 0;
     }
-    .field-row.field-desc-row,
+    .field-row.field-desc-row {
+      align-items: flex-start;
+      margin-top: 1px;
+    }
+    .field-row.field-desc-row .field-label {
+      padding-top: 4px;
+    }
+    .field-row.field-desc-row input[type="checkbox"] {
+      margin-top: 4px;
+    }
+    .field-row.field-desc-row .btn-field-pick {
+      margin-top: 2px;
+    }
     .field-row.field-url-row {
       display: none !important;
       align-items: flex-start;
@@ -199,6 +211,38 @@
       line-height: 1.45;
       box-sizing: border-box;
       transition: height 0.15s ease;
+    }
+    .btn-field-pick {
+      background: #F3F0FF;
+      border: 1px solid #DDD6FE;
+      color: var(--primary);
+      border-radius: 4px;
+      padding: 0 4px;
+      font-size: 11px;
+      cursor: pointer;
+      height: 22px;
+      line-height: 20px;
+      flex-shrink: 0;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-field-pick:hover, .btn-field-pick.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+      transform: scale(1.05);
+    }
+    .btn-config-toggle.field-targeted {
+      background: var(--primary) !important;
+      color: white !important;
+      border-color: var(--primary) !important;
+      box-shadow: 0 0 0 2px rgba(108, 92, 231, 0.25);
+    }
+    .field-row.field-pick-selected {
+      background: #F5F3FF;
+      border-radius: 4px;
     }
 
     /* 하단 액션 버튼 (공통) */
@@ -546,13 +590,23 @@
         <input type="checkbox" id="chk-title" checked>
         <span class="field-label">제목</span>
         <input type="text" class="field-input" id="val-title" placeholder="제목" maxlength="50">
+        <button type="button" class="btn-field-pick" data-pick="title" title="웹페이지에서 제목 직접 찍기">🎯</button>
       </div>
 
-      <!-- 2. 기안자 / 작성자 (업무 탭, 최대 50자) -->
+      <!-- 2. 부서 (업무 탭, 최대 50자) -->
+      <div class="field-row" id="item-department" style="display: none;">
+        <input type="checkbox" id="chk-department" checked>
+        <span class="field-label">부서</span>
+        <input type="text" class="field-input" id="val-department" placeholder="담당/기안부서 또는 관련근거" maxlength="50">
+        <button type="button" class="btn-field-pick" data-pick="department" title="웹페이지에서 부서 직접 찍기">🎯</button>
+      </div>
+
+      <!-- 3. 기안자 / 작성자 (업무 탭, 최대 50자) -->
       <div class="field-row" id="item-author" style="display: none;">
         <input type="checkbox" id="chk-author" checked>
         <span class="field-label">기안자</span>
-        <input type="text" class="field-input" id="val-author" placeholder="기안자 성명/부서" maxlength="50">
+        <input type="text" class="field-input" id="val-author" placeholder="기안자 성명" maxlength="50">
+        <button type="button" class="btn-field-pick" data-pick="author" title="웹페이지에서 기안자 직접 찍기">🎯</button>
       </div>
 
       <!-- 3. 날짜 (일정/업무/메모 탭) -->
@@ -560,6 +614,7 @@
         <input type="checkbox" id="chk-date" checked>
         <span class="field-label">날짜</span>
         <input type="date" class="field-input" id="val-date">
+        <button type="button" class="btn-field-pick" data-pick="date" title="웹페이지에서 날짜 직접 찍기">🎯</button>
       </div>
 
       <!-- 4. 분류 및 상태 (업무 탭, 2개 1줄 배치) -->
@@ -568,6 +623,7 @@
           <input type="checkbox" id="chk-category" checked>
           <span class="field-label">분류</span>
           <input type="text" class="field-input" id="val-category" list="category-options" placeholder="일반, 공문 등" maxlength="50">
+          <button type="button" class="btn-field-pick" data-pick="category" title="웹페이지에서 분류 직접 찍기">🎯</button>
           <datalist id="category-options">
             <option value="일반">
             <option value="공문">
@@ -583,14 +639,16 @@
           <input type="checkbox" id="chk-status" checked>
           <span class="field-label" style="width: 28px;">상태</span>
           <input type="text" class="field-input" id="val-status" value="등록" maxlength="50">
+          <button type="button" class="btn-field-pick" data-pick="status" title="웹페이지에서 상태 직접 찍기">🎯</button>
         </div>
       </div>
 
-      <!-- 5. 내용 (보안 및 전자결재 문서 보호를 위해 기본 숨김/미등록) -->
-      <div class="field-row field-desc-row" style="display: none !important;">
-        <input type="checkbox" id="chk-desc">
-        <span class="field-label">내용</span>
-        <textarea class="field-input" id="val-desc" placeholder="세부내용"></textarea>
+      <!-- 5. 비고 (업무 탭) -->
+      <div class="field-row field-desc-row" id="item-desc" style="display: none;">
+        <input type="checkbox" id="chk-desc" checked>
+        <span class="field-label">비고</span>
+        <textarea class="field-input" id="val-desc" placeholder="비고 / 세부내용" style="height: 46px;"></textarea>
+        <button type="button" class="btn-field-pick" data-pick="desc" title="웹페이지에서 비고 직접 찍기">🎯</button>
       </div>
 
       <!-- 6. 출처 URL (보안상 기본 숨김) -->
@@ -636,6 +694,7 @@
           <div class="cfg-chips-row">
             <span class="cfg-chip-label">치환 태그:</span>
             <button type="button" class="cfg-chip" data-field="title" data-tag="{제목}">{제목}</button>
+            <button type="button" class="cfg-chip" data-field="title" data-tag="{부서}">{부서}</button>
             <button type="button" class="cfg-chip" data-field="title" data-tag="{기안자}">{기안자}</button>
             <button type="button" class="cfg-chip" data-field="title" data-tag="{날짜}">{날짜}</button>
             <button type="button" class="cfg-chip" data-field="title" data-tag="{분류}">{분류}</button>
@@ -648,7 +707,36 @@
         </div>
       </div>
 
-      <!-- 2. 기안자 / 작성자 -->
+      <!-- 2. 부서 -->
+      <div class="cfg-card" data-field="department">
+        <div class="cfg-card-header">
+          <span class="cfg-card-label">부서</span>
+          <span class="cfg-status-pill pill-empty" id="cfg-status-department">미설정</span>
+        </div>
+        <div class="cfg-input-group">
+          <input type="text" class="cfg-input" id="cfg-sample-department" placeholder="예: 고객지원과, 총무팀, 기안부서 등" maxlength="50">
+          <button type="button" class="btn-cfg-search" data-field="department">검색</button>
+          <button type="button" class="btn-cfg-none" data-field="department">없음</button>
+          <button type="button" class="btn-cfg-custom" data-field="department">사용자정의</button>
+        </div>
+        <!-- 사용자정의 서식 패널 -->
+        <div class="cfg-template-panel" id="cfg-tpl-panel-department" style="display: none;">
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-department" placeholder="치환 서식 입력 (예: {부서})" maxlength="50">
+          <div class="cfg-chips-row">
+            <span class="cfg-chip-label">치환 태그:</span>
+            <button type="button" class="cfg-chip" data-field="department" data-tag="{부서}">{부서}</button>
+            <button type="button" class="cfg-chip" data-field="department" data-tag="{기안자}">{기안자}</button>
+            <button type="button" class="cfg-chip" data-field="department" data-tag="{분류}">{분류}</button>
+            <button type="button" class="cfg-chip" data-field="department" data-tag="{제목}">{제목}</button>
+          </div>
+        </div>
+        <div class="cfg-preview-box" id="cfg-prev-department" style="display: none;">
+          <span class="cfg-prev-text" id="cfg-prev-text-department"></span>
+          <span class="cfg-prev-sel" id="cfg-prev-sel-department"></span>
+        </div>
+      </div>
+
+      <!-- 3. 기안자 / 작성자 -->
       <div class="cfg-card" data-field="author">
         <div class="cfg-card-header">
           <span class="cfg-card-label">기안자 / 작성자</span>
@@ -665,6 +753,7 @@
           <input type="text" class="cfg-tpl-input" id="cfg-tpl-author" placeholder="치환 서식 입력 (예: {기안자})" maxlength="50">
           <div class="cfg-chips-row">
             <span class="cfg-chip-label">치환 태그:</span>
+            <button type="button" class="cfg-chip" data-field="author" data-tag="{부서}">{부서}</button>
             <button type="button" class="cfg-chip" data-field="author" data-tag="{기안자}">{기안자}</button>
             <button type="button" class="cfg-chip" data-field="author" data-tag="{분류}">{분류}</button>
             <button type="button" class="cfg-chip" data-field="author" data-tag="{제목}">{제목}</button>
@@ -759,20 +848,30 @@
         </div>
       </div>
 
-      <!-- 6. 내용 (숨김) -->
-      <div class="cfg-card" data-field="desc" style="display: none !important;">
+      <!-- 6. 비고 -->
+      <div class="cfg-card" data-field="desc">
         <div class="cfg-card-header">
-          <span class="cfg-card-label">내용</span>
+          <span class="cfg-card-label">비고</span>
           <span class="cfg-status-pill pill-empty" id="cfg-status-desc">미설정</span>
         </div>
         <div class="cfg-input-group">
-          <input type="text" class="cfg-input" id="cfg-sample-desc" placeholder="예: 담당업무 세부 내용 등" maxlength="50">
+          <input type="text" class="cfg-input" id="cfg-sample-desc" placeholder="예: 세부내용, 비고, 조회수 등" maxlength="50">
           <button type="button" class="btn-cfg-search" data-field="desc">검색</button>
           <button type="button" class="btn-cfg-none" data-field="desc">없음</button>
           <button type="button" class="btn-cfg-custom" data-field="desc">사용자정의</button>
         </div>
+        <!-- 사용자정의 서식 패널 -->
         <div class="cfg-template-panel" id="cfg-tpl-panel-desc" style="display: none;">
-          <textarea class="cfg-tpl-input" id="cfg-tpl-desc" rows="3"></textarea>
+          <input type="text" class="cfg-tpl-input" id="cfg-tpl-desc" placeholder="치환 서식 입력 (예: {부서} / {상태})" maxlength="100">
+          <div class="cfg-chips-row">
+            <span class="cfg-chip-label">치환 태그:</span>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{제목}">{제목}</button>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{부서}">{부서}</button>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{기안자}">{기안자}</button>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{날짜}">{날짜}</button>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{분류}">{분류}</button>
+            <button type="button" class="cfg-chip" data-field="desc" data-tag="{상태}">{상태}</button>
+          </div>
         </div>
         <div class="cfg-preview-box" id="cfg-prev-desc" style="display: none;">
           <span class="cfg-prev-text" id="cfg-prev-text-desc"></span>

@@ -87,9 +87,38 @@
   var isPickerActive = false;
   var pickerHighlightEl = null;
   var pickerBanner = null;
+  var activeTargetField = 'all';
 
-  function startElementPicker() {
-    if (isPickerActive) return;
+  function getBannerGuideText() {
+    var fieldNames = {
+      'department': '부서',
+      'author': '기안자(작성자)',
+      'title': '제목',
+      'date': '날짜',
+      'category': '분류',
+      'status': '상태',
+      'desc': '비고'
+    };
+    var label = fieldNames[activeTargetField];
+    return label
+      ? (label + '로 등록할 항목을 마우스로 클릭하세요')
+      : '등록할 메일이나 게시글 행을 마우스로 클릭하세요';
+  }
+
+  function updateBannerText() {
+    if (!pickerBanner) return;
+    var textEl = pickerBanner.querySelector('.tc-picker-guide-text');
+    if (textEl) {
+      textEl.textContent = getBannerGuideText();
+    }
+  }
+
+  function startElementPicker(targetField) {
+    activeTargetField = targetField || 'all';
+    if (isPickerActive) {
+      updateBannerText();
+      return;
+    }
     isPickerActive = true;
 
     // 상단 안내 배너 생성 (최상위 창에서만 1개 노출)
@@ -98,7 +127,7 @@
       pickerBanner.id = '__tc_picker_banner';
       pickerBanner.innerHTML = '<div style="display:flex;align-items:center;gap:12px;">' +
         '<span style="font-size:18px;">🎯</span>' +
-        '<span style="font-weight:bold;font-size:13px;color:#fff;">등록할 메일이나 게시글 행을 마우스로 클릭하세요</span>' +
+        '<span class="tc-picker-guide-text" style="font-weight:bold;font-size:13px;color:#fff;">' + getBannerGuideText() + '</span>' +
         '<span style="font-size:11px;color:#e0e7ff;background:rgba(255,255,255,0.2);padding:2px 8px;border-radius:4px;">취소: ESC</span>' +
         '</div>';
       Object.assign(pickerBanner.style, {
@@ -159,9 +188,16 @@
   function onPickerMouseMove(e) {
     if (!isPickerActive || !pickerHighlightEl) return;
     var target = e.target;
-    if (target === pickerBanner || target === pickerHighlightEl) return;
-    var container = findRowContainer(target) || target;
-    var rect = container.getBoundingClientRect();
+    if (target === pickerBanner || target === pickerHighlightEl || (pickerBanner && pickerBanner.contains(target))) return;
+
+    var highlightTarget = target;
+    if (activeTargetField === 'all') {
+      highlightTarget = findRowContainer(target) || target;
+    } else {
+      highlightTarget = target;
+    }
+
+    var rect = highlightTarget.getBoundingClientRect();
     if (rect.width > 0 && rect.height > 0) {
       pickerHighlightEl.style.display = 'block';
       pickerHighlightEl.style.top = (rect.top + window.scrollY) + 'px';
@@ -169,6 +205,60 @@
       pickerHighlightEl.style.width = rect.width + 'px';
       pickerHighlightEl.style.height = rect.height + 'px';
     }
+  }
+
+  function buildElementSelector(el, container) {
+    if (!el || el === document.body || el === document.documentElement) return '';
+
+    // 1. 전역 고유 ID 검사
+    if (el.id && !/^\d+$/.test(el.id)) {
+      try {
+        var idSel = '#' + CSS.escape(el.id);
+        if (document.querySelectorAll(idSel).length === 1) return idSel;
+      } catch(e) {}
+    }
+
+    var boundary = (container && container.contains && container.contains(el) && container !== document.body && container !== document.documentElement)
+      ? container
+      : document.body;
+
+    // 2. 클래스 기반 고유 선택자
+    if (el.className && typeof el.className === 'string') {
+      var classes = el.className.trim().split(/\s+/).filter(function(c) {
+        return c && !c.startsWith('tc-') && !c.includes(':') && !c.includes('/') && !/^\d+$/.test(c);
+      });
+      for (var k = 0; k < classes.length; k++) {
+        var cls = '.' + CSS.escape(classes[k]);
+        try {
+          if (boundary !== document.body && boundary.querySelectorAll(cls).length === 1) return cls;
+          if (document.querySelectorAll(cls).length === 1) return cls;
+        } catch(e) {}
+      }
+      if (classes.length > 0) {
+        var tagCls = el.tagName.toLowerCase() + '.' + classes.map(function(c) { return CSS.escape(c); }).join('.');
+        try {
+          if (boundary !== document.body && boundary.querySelectorAll(tagCls).length === 1) return tagCls;
+          if (document.querySelectorAll(tagCls).length === 1) return tagCls;
+        } catch(e) {}
+      }
+    }
+
+    // 3. 계층 경로 탐색
+    var path = [];
+    var curr = el;
+    while (curr && curr !== boundary && curr !== document.body && curr !== document.documentElement) {
+      var tag = curr.tagName.toLowerCase();
+      var parent = curr.parentElement;
+      if (!parent) break;
+      var siblings = Array.from(parent.children).filter(function(ch) { return ch.tagName === curr.tagName; });
+      if (siblings.length > 1) {
+        var idx = siblings.indexOf(curr) + 1;
+        tag += ':nth-of-type(' + idx + ')';
+      }
+      path.unshift(tag);
+      curr = parent;
+    }
+    return path.join(' > ');
   }
 
   function onPickerClick(e) {
@@ -188,6 +278,41 @@
     }
     document.__tcLink = a;
 
+    // 만약 사용자가 본문 내부의 작은 텍스트(span, font, p, div 등)를 찍은 경우 본문 컨테이너로 승격
+    var contentAncestor = target.closest ? target.closest(
+      'td.board-contents, .board-contents, td.han, .view_content, .article_content, .post_content, .doc_content, [class*="board-contents"], [class*="view_content"], [class*="post_content"], [class*="article_body"], #articleBody, #board_content, #view_content'
+    ) : null;
+    var effectiveTarget = (contentAncestor && contentAncestor.contains(target)) ? contentAncestor : target;
+
+    var pickedText = '';
+    if (effectiveTarget) {
+      if (effectiveTarget.value !== undefined && (effectiveTarget.tagName === 'INPUT' || effectiveTarget.tagName === 'TEXTAREA')) {
+        pickedText = (effectiveTarget.value || '').trim();
+      }
+      if (!pickedText && effectiveTarget.querySelector) {
+        var inputChild = effectiveTarget.querySelector('input, textarea');
+        if (inputChild && inputChild.value) {
+          pickedText = (inputChild.value || '').trim();
+        }
+      }
+      if (!pickedText) {
+        pickedText = (effectiveTarget.innerText || effectiveTarget.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
+      }
+      if (!pickedText) {
+        pickedText = effectiveTarget.getAttribute('title') || effectiveTarget.getAttribute('alt') || effectiveTarget.getAttribute('placeholder') || '';
+      }
+    }
+
+    if (contentAncestor && contentAncestor !== effectiveTarget) {
+      var fullContentText = (contentAncestor.innerText || contentAncestor.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
+      if (fullContentText && fullContentText.length > pickedText.length) {
+        pickedText = fullContentText;
+        effectiveTarget = contentAncestor;
+      }
+    }
+
+    var pickedSelector = buildElementSelector(effectiveTarget, container);
+
     // 블록 드래그 텍스트 해제 (내용 수집 원천 차단)
     try {
       if (window.getSelection) {
@@ -195,12 +320,16 @@
       }
     } catch(err) {}
 
+    var completedField = activeTargetField;
     stopElementPicker();
 
     // 백그라운드에 선택 완료 알림
     try {
       chrome.runtime.sendMessage({
         action: "elementPickerCompleted",
+        targetField: completedField,
+        pickedText: pickedText,
+        pickedSelector: pickedSelector,
         linkUrl: a ? a.href : "",
         frameUrl: window.location.href
       });
@@ -219,7 +348,7 @@
   // 메시지 리스너
   chrome.runtime.onMessage.addListener(function(msg, sender, sendResponse) {
     if (msg.action === "startElementPicker") {
-      startElementPicker();
+      startElementPicker(msg.targetField);
       sendResponse({ success: true });
       return true;
     } else if (msg.action === "stopElementPicker") {

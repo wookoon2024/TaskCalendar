@@ -23,6 +23,7 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
     linkUrl: targetLinkUrl || '',
     metaText: '',
     author: '',
+    department: '',
     category: '',
     status: '등록',
     postNo: '',
@@ -34,6 +35,11 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
     lastActivity: Math.max(document.__tcLastContextMenuTime || 0, document.__tcLastMouseMoveTime || 0),
     hasTarget: !!(document.__tcTarget || document.__tcHoverTarget || document.__tcContainer)
   };
+
+  if (targetSelection && typeof targetSelection === 'string' && targetSelection.trim()) {
+    result.selectedText = targetSelection.trim();
+    result.desc = targetSelection.trim();
+  }
 
   // 대상 요소 스마트 해결 (명시적 타겟 > 드래그 텍스트 노드 > 체크된 행 > 마우스 호버 대상 > :hover 행)
   var target = document.__tcTarget;
@@ -228,6 +234,15 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
     return str;
   }
 
+  // [헬퍼] 부서/관련근거 검증 및 정제 함수
+  function cleanDepartment(str) {
+    if (!str) return '';
+    str = str.replace(/[\s\n\r\t]+/g, ' ').trim();
+    str = str.replace(/^(부서|기안부서|담당부서|소속|소속부서|부서명|발신부서|수신부서|관련근거)[:\s]*/i, '').trim();
+    if (str.length < 1 || str.length > 50) return '';
+    return str;
+  }
+
   // [헬퍼] 말머리/카테고리 추출
   function extractCategory(str) {
     if (!str) return '';
@@ -267,6 +282,7 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
     }
 
     var authorCellIdx = -1;
+    var departmentCellIdx = -1;
     var dateCellIdx = -1;
     var titleCellIdx = -1;
     var postNoCellIdx = -1;
@@ -278,6 +294,8 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
       var ht = headerTexts[col];
       if (/^(글쓴이|작성자|기안자|담당자|작성인|등록자|이름|작성|author|writer|nick|user)$/i.test(ht)) {
         authorCellIdx = col;
+      } else if (/^(부서|기안부서|담당부서|소속|소속부서|부서명|발신부서|수신부서|dept|department)$/i.test(ht)) {
+        departmentCellIdx = col;
       } else if (/^(등록일|작성일|일자|날짜|기안일|일시|등록일시|date|time)$/i.test(ht)) {
         dateCellIdx = col;
       } else if (/^(제목|과제명|안건|문서제목|건명|게시물|subject|title)$/i.test(ht)) {
@@ -295,6 +313,9 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
 
     if (authorCellIdx >= 0 && authorCellIdx < cells.length) {
       result.author = cleanAuthor(cells[authorCellIdx].innerText || cells[authorCellIdx].textContent || '');
+    }
+    if (departmentCellIdx >= 0 && departmentCellIdx < cells.length) {
+      result.department = cleanDepartment(cells[departmentCellIdx].innerText || cells[departmentCellIdx].textContent || '');
     }
     if (dateCellIdx >= 0 && dateCellIdx < cells.length) {
       result.detectedDate = normalizeDate(cells[dateCellIdx].innerText || cells[dateCellIdx].textContent || '');
@@ -368,6 +389,10 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
       var aEl = container.querySelector('[class*="author"], [class*="writer"], [class*="nick"], [class*="member"], [class*="user"], [class*="name"]');
       if (aEl) result.author = cleanAuthor(aEl.innerText || aEl.textContent || '');
     }
+    if (!result.department) {
+      var deptEl = container.querySelector('[class*="dept"], [class*="department"], [class*="group"], [class*="team"], [class*="part"]');
+      if (deptEl) result.department = cleanDepartment(deptEl.innerText || deptEl.textContent || '');
+    }
     if (!result.detectedDate) {
       var dEl = container.querySelector('time, [class*="date"], [class*="time"], span.info');
       if (dEl) result.detectedDate = normalizeDate(dEl.innerText || dEl.textContent || '');
@@ -409,12 +434,18 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
   }
 
   // [전략 3] 상세 본문 페이지 및 전자결재/온나라 본문 탐색
-  if (!result.author || !result.detectedDate || !result.linkText) {
+  if (!result.author || !result.detectedDate || !result.linkText || !result.department) {
     try {
       if (!result.linkText) {
         var titleElem = document.querySelector('h1.title, h2.title, .view_title, .art_title, .board_view_title, .subject, h3.title, .top_title, #docTitle, #subject, #txtTitle, .doc_title, .docTitle, .viewTitle, .view-title, td.subject, span.subject, div.view_subject, p.subject');
         if (titleElem) {
           result.linkText = (titleElem.innerText || '').replace(/[\s\n\r\t]+/g, ' ').trim();
+        }
+      }
+      if (!result.department) {
+        var deptElem = document.querySelector('.dept, .department, .drafter_dept, .user_dept, [class*="dept"], [class*="department"], #dept, #department, #drafterDept, td.dept, span.dept, .org_name');
+        if (deptElem) {
+          result.department = cleanDepartment(deptElem.innerText || deptElem.textContent || '');
         }
       }
       if (!result.author) {
@@ -517,6 +548,10 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
       try {
         var docFound = document.querySelector(selector);
         if (docFound) return docFound;
+        if (lastPart && lastPart !== selector) {
+          var docLast = document.querySelector(lastPart);
+          if (docLast) return docLast;
+        }
       } catch(e) {}
     }
 
@@ -549,6 +584,17 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
       if (cEl) {
         var cText = (cEl.innerText || cEl.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
         if (cText) result.category = cText.substring(0, 50);
+      }
+    }
+
+    // 부서 맞춤 규칙
+    if (ruleSelectors.department === '__none__') {
+      result.department = '';
+    } else if (ruleSelectors.department) {
+      var dEl = queryCustomElement(rootEl, ruleSelectors.department);
+      if (dEl) {
+        var dText = cleanDepartment(dEl.innerText || dEl.textContent || '');
+        if (dText) result.department = dText.substring(0, 50);
       }
     }
 
@@ -585,10 +631,11 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
       }
     }
 
-    // 내용 맞춤 규칙
+    // 내용/비고 맞춤 규칙
     if (ruleSelectors.desc === '__none__') {
       result.selectedText = '';
       result.descOverride = '';
+      result.desc = '';
     } else if (ruleSelectors.desc) {
       var deEl = queryCustomElement(rootEl, ruleSelectors.desc);
       if (deEl) {
@@ -596,6 +643,7 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
         if (deText) {
           result.selectedText = deText;
           result.descOverride = deText;
+          result.desc = deText;
         }
       }
     }
@@ -622,12 +670,16 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
       '기안자': result.author || '',
       '작성자': result.author || '',
       'author': result.author || '',
+      '부서': result.department || '',
+      'department': result.department || '',
+      'dept': result.department || '',
       '상태': result.status || '',
       'status': result.status || '',
       '날짜': result.detectedDate || '',
       'date': result.detectedDate || '',
-      '내용': result.descOverride || result.selectedText || '',
-      'desc': result.descOverride || result.selectedText || '',
+      '비고': result.desc || result.descOverride || result.selectedText || '',
+      '내용': result.desc || result.descOverride || result.selectedText || '',
+      'desc': result.desc || result.descOverride || result.selectedText || '',
       '출처': result.linkUrl || '',
       'url': result.linkUrl || ''
     };
@@ -639,9 +691,10 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
         if (k === '제목' || k === 'title') return baseValues.title;
         if (k === '분류' || k === 'category') return baseValues.category;
         if (k === '기안자' || k === '작성자' || k === 'author') return baseValues.author;
+        if (k === '부서' || k === 'department' || k === 'dept') return baseValues.department;
         if (k === '상태' || k === 'status') return baseValues.status;
         if (k === '날짜' || k === 'date') return baseValues.date;
-        if (k === '내용' || k === '본문' || k === 'desc') return baseValues.desc;
+        if (k === '내용' || k === '본문' || k === '비고' || k === 'desc') return baseValues.desc;
         if (k === '출처' || k === '링크' || k === 'url') return baseValues.url;
         return match;
       });
@@ -652,6 +705,9 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
     }
     if (ruleTemplates.category && ruleTemplates.category.trim()) {
       result.category = resolveTemplate(ruleTemplates.category.trim());
+    }
+    if (ruleTemplates.department && ruleTemplates.department.trim()) {
+      result.department = resolveTemplate(ruleTemplates.department.trim());
     }
     if (ruleTemplates.author && ruleTemplates.author.trim()) {
       result.author = resolveTemplate(ruleTemplates.author.trim());
@@ -665,6 +721,7 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
     if (ruleTemplates.desc && ruleTemplates.desc.trim()) {
       result.descOverride = resolveTemplate(ruleTemplates.desc.trim());
       result.selectedText = result.descOverride;
+      result.desc = result.descOverride;
     }
     if (ruleTemplates.url && ruleTemplates.url.trim()) {
       result.linkUrl = resolveTemplate(ruleTemplates.url.trim());
@@ -699,6 +756,7 @@ function extractRowData(targetLinkUrl, targetSelection, customRule) {
 
   result.linkText = limit50(result.linkText);
   result.author = limit50(result.author);
+  result.department = limit50(result.department);
   result.category = limit50(result.category);
   result.status = limit50(result.status || '등록');
   result.postNo = limit50(result.postNo);
@@ -974,7 +1032,7 @@ function findOrCreatePopup() {
         url: "popup.html",
         type: "popup",
         width: 470,
-        height: 360,
+        height: 460,
         focused: true
       },
       (newWin) => {
@@ -1012,7 +1070,7 @@ function selectBestResult(results, targetFrameId) {
     for (var i = 0; i < results.length; i++) {
       if (results[i].frameId === targetFrameId) {
         var r0 = results[i].result;
-        if (r0 && (r0.linkText || r0.selectedText || r0.hasTarget || r0.author || r0.detectedDate)) {
+        if (r0 && (r0.linkText || r0.selectedText || r0.hasTarget || r0.author || r0.department || r0.detectedDate)) {
           return results[i];
         }
       }
@@ -1047,8 +1105,9 @@ function selectBestResult(results, targetFrameId) {
       if (r.linkText.trim().length >= 4 && r.linkText.trim().length <= 150) score += 50;
     }
 
-    // 작성자 또는 날짜 감지
+    // 작성자 또는 부서 또는 날짜 감지
     if (r.author && r.author.trim()) score += 40;
+    if (r.department && r.department.trim()) score += 40;
     if (r.detectedDate && r.detectedDate.trim()) score += 40;
 
     // 최근 마우스/컨텍스트메뉴 활동 (10초 이내)
@@ -1071,6 +1130,69 @@ function selectBestResult(results, targetFrameId) {
   }
 
   return bestItem || results[0];
+}
+
+// 백그라운드 전용 텍스트 정제 헬퍼
+function bgLimit50(str) {
+  if (!str || typeof str !== 'string') return '';
+  let s = str.replace(/[\s\n\r\t]+/g, ' ').trim();
+  s = s.replace(/\s+["'”’`]+$/g, '').trim();
+  s = s.replace(/\s*(&(quot|#34|#39|apos);)+\s*$/gi, '').trim();
+  const dQuotes = (s.match(/"/g) || []).length;
+  if (dQuotes % 2 !== 0 && s.endsWith('"')) s = s.slice(0, -1).trim();
+  const sQuotes = (s.match(/'/g) || []).length;
+  if (sQuotes % 2 !== 0 && s.endsWith("'")) s = s.slice(0, -1).trim();
+  return s.substring(0, 50).trim();
+}
+
+function bgCleanAuthor(str) {
+  if (!str) return '';
+  str = str.replace(/[\s\n\r\t]+/g, ' ').trim();
+  str = str.replace(/^(글쓴이|작성자|기안자|담당자|작성인|등록자|닉네임|by)[:\s]*/i, '').trim();
+  str = str.replace(/^(?:\[?\d{1,3}\]?|LV\.?\s*\d{1,3})\s+/i, '').trim();
+  if (/^\d+$/.test(str.replace(/,/g, ''))) return '';
+  if (/^\d{1,4}[-./]\d{1,2}[-./]\d{1,2}/.test(str)) return '';
+  if (/^\d{1,2}:\d{2}/.test(str)) return '';
+  if (/^(공지|알림|선택|새창|삭제|수정|답글|댓글|조회|추천|비추|다운로드|목록|전체|인기|Hit|No|IP|PC|모바일|추천수|조회수|글쓴이|작성자|기안자|상태|일반)$/i.test(str)) return '';
+  if (/^\d+\s*(KB|MB|GB|B|건|개|원|명|페이지)$/i.test(str)) return '';
+  return str.substring(0, 50);
+}
+
+function bgCleanDepartment(str) {
+  if (!str) return '';
+  str = str.replace(/[\s\n\r\t]+/g, ' ').trim();
+  str = str.replace(/^(부서|기안부서|담당부서|소속|소속부서|부서명|발신부서|수신부서|관련근거)[:\s]*/i, '').trim();
+  return str.substring(0, 50);
+}
+
+function bgNormalizeDate(raw) {
+  if (!raw) return '';
+  raw = raw.replace(/[\s\n\r\t]+/g, ' ').trim();
+  var m4 = raw.match(/\b(20\d{2}|19\d{2})[-./](\d{1,2})[-./](\d{1,2})\b/);
+  if (m4) {
+    return m4[1] + '-' + String(m4[2]).padStart(2, '0') + '-' + String(m4[3]).padStart(2, '0');
+  }
+  var m2 = raw.match(/\b(\d{2})[-./](\d{1,2})[-./](\d{1,2})\b/);
+  if (m2) {
+    var yr = parseInt(m2[1], 10);
+    var fullYr = yr <= 60 ? (2000 + yr) : (1900 + yr);
+    return fullYr + '-' + String(m2[2]).padStart(2, '0') + '-' + String(m2[3]).padStart(2, '0');
+  }
+  var mMd = raw.match(/\b(\d{1,2})[-./](\d{1,2})\b/);
+  if (mMd && parseInt(mMd[1], 10) >= 1 && parseInt(mMd[1], 10) <= 12 && parseInt(mMd[2], 10) >= 1 && parseInt(mMd[2], 10) <= 31) {
+    var curY = new Date().getFullYear();
+    return curY + '-' + String(mMd[1]).padStart(2, '0') + '-' + String(mMd[2]).padStart(2, '0');
+  }
+  if (/\b\d{1,2}:\d{2}(:\d{2})?\b|\b\d+\s*분\s*전\b|\b\d+\s*시간\s*전\b|\b(오늘|방금)\b/.test(raw)) {
+    var td = new Date();
+    return td.getFullYear() + '-' + String(td.getMonth() + 1).padStart(2, '0') + '-' + String(td.getDate()).padStart(2, '0');
+  }
+  if (/\b어제\b/.test(raw)) {
+    var yd = new Date();
+    yd.setDate(yd.getDate() - 1);
+    return yd.getFullYear() + '-' + String(yd.getMonth() + 1).padStart(2, '0') + '-' + String(yd.getDate()).padStart(2, '0');
+  }
+  return '';
 }
 
 // 팝업과의 통신 메시지 리스너 (DOM 검색 및 재추출)
@@ -1163,10 +1285,149 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "elementPickerCompleted") {
     var pTab = sender.tab;
     if (pTab) {
-      // 모든 프레임의 피커 하이라이트/배너 정리
       chrome.tabs.sendMessage(pTab.id, { action: "stopElementPicker" }).catch(() => {});
-      triggerCapture(pTab, request.linkUrl || "", "", request.frameUrl || pTab.url || "", sender.frameId);
     }
+
+    var targetField = request.targetField || 'all';
+    var pickedText = (request.pickedText || '').trim();
+    var pickedSelector = (request.pickedSelector || '').trim();
+
+    chrome.storage.local.get(['tcPreservedFormData'], (res) => {
+      var preserved = (res && res.tcPreservedFormData) || null;
+      if (preserved) {
+        var fieldToAssign = (targetField && targetField !== 'all') ? targetField : 'desc';
+        if (targetField === 'all') {
+          // 상단 '🎯 항목 직접 찍기'를 누른 경우:
+          // 비고가 비어있거나, 찍은 내용이 본문/비고인 경우 비고(desc)로 자동 배정
+          if (!preserved.desc || (pickedText && pickedText !== preserved.title)) {
+            fieldToAssign = 'desc';
+          } else {
+            fieldToAssign = 'title';
+          }
+        }
+
+        if (fieldToAssign === 'department') {
+          var cDept = bgCleanDepartment(pickedText);
+          preserved.department = bgLimit50(cDept || pickedText);
+          preserved.departmentChecked = true;
+        } else if (fieldToAssign === 'author') {
+          var cAuth = bgCleanAuthor(pickedText);
+          preserved.author = bgLimit50(cAuth || pickedText);
+          preserved.authorChecked = true;
+        } else if (fieldToAssign === 'title') {
+          preserved.title = bgLimit50(pickedText);
+          preserved.linkText = preserved.title;
+          preserved.titleChecked = true;
+        } else if (fieldToAssign === 'category') {
+          preserved.category = bgLimit50(pickedText);
+          preserved.categoryChecked = true;
+        } else if (fieldToAssign === 'date') {
+          var nd = bgNormalizeDate(pickedText);
+          preserved.detectedDate = nd || bgLimit50(pickedText);
+          preserved.date = preserved.detectedDate;
+          preserved.dateChecked = true;
+        } else if (fieldToAssign === 'status') {
+          preserved.status = bgLimit50(pickedText) || '등록';
+          preserved.statusChecked = true;
+        } else if (fieldToAssign === 'desc') {
+          preserved.desc = pickedText.replace(/[\r\t]+/g, ' ').trim().substring(0, 1000);
+          preserved.descChecked = true;
+        }
+
+        if (!preserved.pendingRuleUpdates) preserved.pendingRuleUpdates = {};
+        if (pickedSelector) {
+          preserved.pendingRuleUpdates[fieldToAssign] = {
+            selector: pickedSelector,
+            sample: pickedText.substring(0, 50)
+          };
+        }
+
+        var restoredData = {
+          selectedText: '',
+          linkText: preserved.title || preserved.linkText || '',
+          linkUrl: preserved.url || preserved.linkUrl || '',
+          metaText: '',
+          author: preserved.author || '',
+          department: preserved.department || '',
+          category: preserved.category || '',
+          status: preserved.status || '등록',
+          detectedDate: preserved.date || preserved.detectedDate || '',
+          desc: preserved.desc || '',
+          pageTitle: preserved.title || preserved.pageTitle || '',
+          pageUrl: preserved.url || preserved.pageUrl || '',
+          siteDomain: preserved.siteDomain || '',
+          hasCustomRule: !!preserved.hasCustomRule,
+          originTabId: preserved.originTabId,
+          originFrameId: preserved.originFrameId || 0,
+          checkedStates: {
+            title: preserved.titleChecked !== false,
+            department: preserved.departmentChecked !== false,
+            author: preserved.authorChecked !== false,
+            category: preserved.categoryChecked !== false,
+            status: preserved.statusChecked !== false,
+            date: preserved.dateChecked !== false,
+            desc: preserved.descChecked !== false,
+            url: preserved.urlChecked === true
+          },
+          selectedType: preserved.selectedType || preserved.type || 'task',
+          targetPickField: fieldToAssign,
+          pendingRuleUpdates: preserved.pendingRuleUpdates || {}
+        };
+
+        chrome.storage.local.remove(['tcPreservedFormData', 'tcPickTargetField'], () => {
+          openOrFocusPopup(restoredData);
+        });
+        sendResponse({ success: true });
+        return;
+      }
+
+      if (pTab) {
+        triggerCapture(pTab, request.linkUrl || "", pickedText, request.frameUrl || pTab.url || "", sender.frameId);
+      }
+      sendResponse({ success: true });
+    });
+    return true;
+  }
+
+  if (request.action === "elementPickerCancelled") {
+    chrome.storage.local.get(['tcPreservedFormData'], (res) => {
+      var preserved = (res && res.tcPreservedFormData) || null;
+      if (preserved) {
+        var restoredData = {
+          selectedText: '',
+          linkText: preserved.title || preserved.linkText || '',
+          linkUrl: preserved.url || preserved.linkUrl || '',
+          metaText: '',
+          author: preserved.author || '',
+          department: preserved.department || '',
+          category: preserved.category || '',
+          status: preserved.status || '등록',
+          detectedDate: preserved.date || preserved.detectedDate || '',
+          desc: preserved.desc || '',
+          pageTitle: preserved.title || preserved.pageTitle || '',
+          pageUrl: preserved.url || preserved.pageUrl || '',
+          siteDomain: preserved.siteDomain || '',
+          hasCustomRule: !!preserved.hasCustomRule,
+          originTabId: preserved.originTabId,
+          originFrameId: preserved.originFrameId || 0,
+          checkedStates: {
+            title: preserved.titleChecked !== false,
+            department: preserved.departmentChecked !== false,
+            author: preserved.authorChecked !== false,
+            category: preserved.categoryChecked !== false,
+            status: preserved.statusChecked !== false,
+            date: preserved.dateChecked !== false,
+            desc: preserved.descChecked !== false,
+            url: preserved.urlChecked === true
+          },
+          selectedType: preserved.selectedType || preserved.type || 'task',
+          targetPickField: preserved.targetPickField || 'all'
+        };
+        chrome.storage.local.remove(['tcPreservedFormData', 'tcPickTargetField'], () => {
+          openOrFocusPopup(restoredData);
+        });
+      }
+    });
     sendResponse({ success: true });
     return true;
   }
@@ -1203,15 +1464,25 @@ function handleCaptureResults(results, tab, linkUrl, selection, pageUrl, domain,
   var effectivePageUrl = captured.frameUrl || finalLinkUrl || pageUrl;
   var effectiveDomain = getDomainFromUrl(effectivePageUrl) || domain;
 
+  var finalDesc = (captured.desc || captured.descOverride || captured.selectedText || "").replace(/[\r\t]+/g, ' ').trim().substring(0, 1000);
+  if (!finalDesc && selection && typeof selection === 'string') {
+    var selText = selection.replace(/[\r\t]+/g, ' ').trim();
+    if (selText && selText !== finalLinkText) {
+      finalDesc = selText.substring(0, 1000);
+    }
+  }
+
   const data = {
     selectedText: finalSelectedText,
     linkText: finalLinkText,
     linkUrl: finalLinkUrl,
     metaText: limit50(captured.metaText || ""),
     author: limit50(captured.author || ""),
+    department: limit50(captured.department || ""),
     category: limit50(captured.category || ""),
     status: limit50(captured.status || "등록"),
     detectedDate: limit50(captured.detectedDate || ""),
+    desc: finalDesc,
     pageTitle: limit50(tab.title || ""),
     pageUrl: effectivePageUrl,
     siteDomain: effectiveDomain,
@@ -1237,6 +1508,7 @@ function triggerCapture(tab, clickedLinkUrl, clickedSelection, fallbackUrl, targ
       linkUrl: linkUrl,
       metaText: "",
       author: "",
+      department: "",
       category: "",
       status: "등록",
       detectedDate: "",

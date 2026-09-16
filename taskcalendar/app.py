@@ -37,11 +37,15 @@ def _set_windows_app_id() -> None:
 
 
 def _configure_logging() -> None:
-    log_file = runtime_root() / "debug_run.log"
+    handlers: list[logging.Handler] = []
+    if sys.stderr:
+        handlers.append(logging.StreamHandler(sys.stderr))
+    else:
+        handlers.append(logging.NullHandler())
     logging.basicConfig(
-        filename=str(log_file),
-        level=logging.DEBUG,
+        level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=handlers,
         force=True,
     )
 
@@ -73,6 +77,7 @@ def _parse_protocol_url(argv: list[str]) -> dict | None:
                     "action": parsed.netloc or "add",
                     "type": params.get("type", ["schedule"])[0],
                     "title": unquote(params.get("title", [""])[0]),
+                    "department": unquote(params.get("department", [""])[0] or params.get("dept", [""])[0]),
                     "author": unquote(params.get("author", [""])[0]),
                     "category": unquote(params.get("category", [""])[0]),
                     "status": unquote(params.get("status", [""])[0]),
@@ -202,6 +207,11 @@ def run() -> None:
         QTimer.singleShot(500, lambda: window.receive_external_entry(url_data))
 
     window.show()
+    try:
+        from taskcalendar.desktop_services import set_native_window_icon
+        set_native_window_icon(int(window.winId()))
+    except Exception:
+        pass
     window.raise_()
     window.activateWindow()
     app.exec()

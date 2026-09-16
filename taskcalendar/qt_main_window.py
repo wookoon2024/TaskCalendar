@@ -1225,6 +1225,14 @@ class MainWindow(QMainWindow):
         if app_inst:
             app_inst.aboutToQuit.connect(self._on_app_about_to_quit)
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        try:
+            from taskcalendar.desktop_services import set_native_window_icon
+            set_native_window_icon(int(self.winId()))
+        except Exception:
+            pass
+
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if hasattr(self, "sidebar_panel") and watched == self.sidebar_panel and event.type() == QEvent.Type.Resize:
             self._sync_topbar_sidebar_alignment()
@@ -1275,21 +1283,6 @@ class MainWindow(QMainWindow):
         topbar_layout = QHBoxLayout(topbar)
         topbar_layout.setContentsMargins(12, 8, 12, 8)
         topbar_layout.setSpacing(6)
-
-        brand_layout = QHBoxLayout()
-        brand_layout.setSpacing(6)
-        brand_icon = QLabel()
-        ico = app_icon()
-        if not ico.isNull():
-            brand_icon.setPixmap(ico.pixmap(18, 18))
-        brand_layout.addWidget(brand_icon)
-        brand_label = QLabel("캘린더")
-        brand_label.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {self.palette['text']};")
-        ver_label = QLabel(APP_VERSION)
-        ver_label.setStyleSheet(f"font-size: 10px; font-weight: bold; color: {self.palette['muted']}; padding: 1px 5px; background: rgba(0,0,0,0.06); border-radius: 4px;")
-        brand_layout.addWidget(brand_label)
-        brand_layout.addWidget(ver_label)
-        topbar_layout.addLayout(brand_layout)
 
         left = QHBoxLayout()
         left.setSpacing(6)
@@ -6032,6 +6025,7 @@ class MainWindow(QMainWindow):
             url = data.get("url", "").strip()
             date_str = data.get("date", "").strip()
             author = data.get("author", "").strip()
+            department = data.get("department", "").strip() or data.get("dept", "").strip()
             category = data.get("category", "").strip()
 
             # Build description: numbered fields without emoji icons
@@ -6039,6 +6033,9 @@ class MainWindow(QMainWindow):
             idx = 1
             if title:
                 desc_parts.append(f"{idx}. 제목: {title}")
+                idx += 1
+            if department:
+                desc_parts.append(f"{idx}. 부서: {department}")
                 idx += 1
             if author:
                 desc_parts.append(f"{idx}. 기안자: {author}")
@@ -6093,6 +6090,7 @@ class MainWindow(QMainWindow):
                     day=target_day,
                     start_date=target_day,
                     assignee=author,
+                    department=department,
                     memo_group=category or "일반",
                     status=status,
                 )
@@ -6130,7 +6128,8 @@ class MainWindow(QMainWindow):
                 from taskcalendar.qt_task_manager import TaskEditDialog
                 all_tasks = [e for e in self.repository.list_all_entries() if e.entry_type == EntryType.TASK]
                 known_authors = [t.assignee for t in all_tasks if t.assignee]
-                dlg = TaskEditDialog(self, self.repository, edit_entry, known_authors)
+                known_depts = [t.department for t in all_tasks if getattr(t, "department", "")]
+                dlg = TaskEditDialog(self, self.repository, edit_entry, known_authors, known_depts=known_depts)
                 if force_top:
                     from taskcalendar.desktop_services import force_window_to_foreground
                     QTimer.singleShot(50, lambda d=dlg: force_window_to_foreground(int(d.winId())))

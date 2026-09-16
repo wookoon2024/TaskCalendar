@@ -39,9 +39,12 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QRadioButton,
+    QButtonGroup,
 )
 
 from taskcalendar.models import CalendarEntry, EntryType
@@ -498,12 +501,14 @@ class TaskEditDialog(QDialog):
         task: CalendarEntry | None = None,
         known_authors: list[str] | None = None,
         palette: dict[str, str] | None = None,
+        known_depts: list[str] | None = None,
     ) -> None:
         super().__init__(parent)
         self.palette = palette or get_dialog_palette(parent, repository)
         self.repository = repository
         self.task = task
         self.known_authors = known_authors or []
+        self.known_depts = known_depts or []
 
         is_new = (task is None or task.entry_id is None)
         self.setWindowTitle("새 업무 등록" if is_new else "업무 정보 수정")
@@ -675,23 +680,36 @@ class TaskEditDialog(QDialog):
         """)
         grid.addWidget(self.title_input, 1, 1, 1, 3)
 
-        # 3. 기안자 (2,0~2,1) & 처리상태 (2,2~2,3) 한 줄 배치
+        # 3. 부서 (2,0~2,1) & 기안자 (2,2~2,3) 한 줄 배치
+        lbl_dept = QLabel("부서:")
+        lbl_dept.setStyleSheet(lbl_style)
+        lbl_dept.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        grid.addWidget(lbl_dept, 2, 0)
+
+        self.department_input = QLineEdit()
+        self.department_input.setPlaceholderText("부서명 또는 관련근거 (예: 고객과-123)")
+        self.department_input.setFixedHeight(30)
+        self.department_input.setStyleSheet(input_style)
+        self._setup_dept_completer()
+        grid.addWidget(self.department_input, 2, 1)
+
         lbl_author = QLabel("기안자:")
         lbl_author.setStyleSheet(lbl_style)
         lbl_author.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        grid.addWidget(lbl_author, 2, 0)
+        grid.addWidget(lbl_author, 2, 2)
 
         self.author_input = QLineEdit()
-        self.author_input.setPlaceholderText("기안자 성명/부서 (예: 홍길동)")
+        self.author_input.setPlaceholderText("기안자 성명 (예: 홍길동)")
         self.author_input.setFixedHeight(30)
         self.author_input.setStyleSheet(input_style)
         self._setup_author_completer()
-        grid.addWidget(self.author_input, 2, 1)
+        grid.addWidget(self.author_input, 2, 3)
 
+        # 4. 처리상태 (3,0~3,1)
         lbl_status = QLabel("처리상태:")
         lbl_status.setStyleSheet(lbl_style)
         lbl_status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        grid.addWidget(lbl_status, 2, 2)
+        grid.addWidget(lbl_status, 3, 0)
 
         status_layout = QHBoxLayout()
         status_layout.setContentsMargins(0, 0, 0, 0)
@@ -707,13 +725,13 @@ class TaskEditDialog(QDialog):
         btn_status_mgr.setStyleSheet(sub_btn_style)
         btn_status_mgr.clicked.connect(self._open_status_manager)
         status_layout.addWidget(btn_status_mgr)
-        grid.addLayout(status_layout, 2, 3)
+        grid.addLayout(status_layout, 3, 1)
 
-        # 4. 비고 / 세부내용 (남은 수직 공간을 모두 차지하여 시원하게 확장)
+        # 5. 비고 / 세부내용 (4,0~4,3)
         lbl_desc = QLabel("비고/내용:")
         lbl_desc.setStyleSheet(lbl_style)
         lbl_desc.setAlignment(Qt.AlignRight | Qt.AlignTop)
-        grid.addWidget(lbl_desc, 3, 0)
+        grid.addWidget(lbl_desc, 4, 0)
 
         self.desc_input = QTextEdit()
         self.desc_input.setPlaceholderText("결재 요지, 업무 세부내용, 지시사항 등")
@@ -732,20 +750,20 @@ class TaskEditDialog(QDialog):
                 border-color: {accent};
             }}
         """)
-        grid.addWidget(self.desc_input, 3, 1, 1, 3)
-        grid.setRowStretch(3, 1)
+        grid.addWidget(self.desc_input, 4, 1, 1, 3)
+        grid.setRowStretch(4, 1)
 
-        # 5. 출처 URL (4,0~4,3)
+        # 6. 출처 URL (5,0~5,3)
         lbl_url = QLabel("출처 URL:")
         lbl_url.setStyleSheet(lbl_style)
         lbl_url.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        grid.addWidget(lbl_url, 4, 0)
+        grid.addWidget(lbl_url, 5, 0)
 
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("온나라 문서 링크 또는 웹사이트 URL")
         self.url_input.setFixedHeight(28)
         self.url_input.setStyleSheet(input_style)
-        grid.addWidget(self.url_input, 4, 1, 1, 3)
+        grid.addWidget(self.url_input, 5, 1, 1, 3)
 
         layout.addLayout(grid, 1)
 
@@ -797,6 +815,14 @@ class TaskEditDialog(QDialog):
         btn_box.addWidget(btn_save)
 
         layout.addLayout(btn_box)
+
+    def _setup_dept_completer(self) -> None:
+        """기존 부서 목록으로 자동완성 세팅"""
+        clean_depts = sorted(list({d.strip() for d in self.known_depts if d and d.strip()}))
+        completer = QCompleter(clean_depts, self)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        self.department_input.setCompleter(completer)
 
     def _setup_author_completer(self) -> None:
         """기존 기안자 목록으로 자동완성 세팅"""
@@ -857,6 +883,7 @@ class TaskEditDialog(QDialog):
         load_date = self.task.day or self.task.start_date or (self.task.created_at.date() if self.task.created_at else date.today())
         self.date_edit.setDate(load_date)
         self.title_input.setText(self.task.title or "")
+        self.department_input.setText(getattr(self.task, "department", "") or "")
         self.author_input.setText(self.task.assignee or "")
 
         cat = self.task.memo_group or "일반"
@@ -903,6 +930,7 @@ class TaskEditDialog(QDialog):
 
         target_date = self.date_edit.date().toPython()
         category = self.category_combo.currentText().strip() or "일반"
+        department = self.department_input.text().strip()
         author = self.author_input.text().strip()
         status = self.status_combo.currentText().strip() or "등록"
         desc = self.desc_input.toPlainText().strip()
@@ -921,6 +949,7 @@ class TaskEditDialog(QDialog):
                 day=target_date,
                 start_date=target_date,
                 assignee=author,
+                department=department,
                 memo_group=category,
                 status=status,
                 created_at=datetime.combine(target_date, now.time()),
@@ -936,6 +965,7 @@ class TaskEditDialog(QDialog):
             else:
                 self.task.created_at = datetime.combine(target_date, now.time())
             self.task.assignee = author
+            self.task.department = department
             self.task.memo_group = category
             self.task.status = status
             self.task.updated_at = now
@@ -1153,16 +1183,16 @@ class TaskManagerDialog(QDialog):
 
         table_container.addWidget(self.tabs_widget)
 
-        # 4. 하단 리스트 테이블 (QTableWidget) - 7개 컬럼 구성
+        # 4. 하단 리스트 테이블 (QTableWidget) - 8개 컬럼 구성
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(8)
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setShowGrid(True)
 
-        self.HEADER_COLUMNS = ["등록일자", "분류", "업무 제목", "기안자 / 작성자", "상태", "비고 / 세부내용", "편집"]
+        self.HEADER_COLUMNS = ["등록일자", "분류", "업무 제목", "부서", "기안자 / 작성자", "상태", "비고 / 세부내용", "편집"]
         self._sort_column: int = 0
         self._sort_order: Qt.SortOrder = Qt.DescendingOrder
         self._update_header_labels()
@@ -1174,9 +1204,9 @@ class TaskManagerDialog(QDialog):
 
         # 헤더 좌우 드래그로 모든 셀/컬럼 크기 조절 가능하도록 Interactive 모드로 설정
         header.setSectionResizeMode(QHeaderView.Interactive)
-        header.setSectionResizeMode(6, QHeaderView.Fixed)  # 편집 아이콘 열은 55px 고정
+        header.setSectionResizeMode(7, QHeaderView.Fixed)  # 편집 아이콘 열은 55px 고정
 
-        self._default_col_widths = [110, 95, 280, 130, 95, 270, 55]
+        self._default_col_widths = [110, 90, 240, 110, 110, 90, 220, 55]
         self._restore_column_widths()
 
         self._save_columns_timer = QTimer(self)
@@ -1813,13 +1843,14 @@ class TaskManagerDialog(QDialog):
                 if not (start_d <= t_day <= end_d):
                     continue
 
-            # 5. 검색어 필터 (제목, 기안자, 세부내용, 분류)
+            # 5. 검색어 필터 (제목, 부서, 기안자, 세부내용, 분류)
             if query:
                 title_match = query in (task.title or "").lower()
+                dept_match = query in (getattr(task, "department", "") or "").lower()
                 author_match = query in (task.assignee or "").lower()
                 desc_match = query in (task.description or "").lower()
                 cat_match = query in (task.memo_group or "").lower()
-                if not (title_match or author_match or desc_match or cat_match):
+                if not (title_match or dept_match or author_match or desc_match or cat_match):
                     continue
 
             filtered.append(task)
@@ -1841,7 +1872,7 @@ class TaskManagerDialog(QDialog):
 
     def _on_header_clicked(self, col: int) -> None:
         """컬럼 헤더 클릭 시 해당 열 기준 오름차순/내림차순 정렬 (편집 컬럼 제외)"""
-        if col >= 6:
+        if col >= 7:
             return
 
         if self._sort_column == col:
@@ -1864,10 +1895,10 @@ class TaskManagerDialog(QDialog):
         total_w = sum(self.table.columnWidth(i) for i in range(self.table.columnCount()))
 
         # 사용자가 컬럼을 줄여서 오른쪽에 빈 공간이 생길 경우(total_w < viewport_w),
-        # 비고(col 5) 또는 제목(col 2)이 빈 공간을 채워 100% 가로 너비를 항상 유지
+        # 비고(col 6) 또는 제목(col 2)이 빈 공간을 채워 100% 가로 너비를 항상 유지
         if total_w < viewport_w:
             gap = viewport_w - total_w
-            target_col = 5 if logicalIndex != 5 else 2
+            target_col = 6 if logicalIndex != 6 else 2
             self._restoring_columns = True
             try:
                 self.table.setColumnWidth(target_col, self.table.columnWidth(target_col) + gap)
@@ -1899,24 +1930,24 @@ class TaskManagerDialog(QDialog):
 
         if diff != 0:
             col2_w = self.table.columnWidth(2)
-            col5_w = self.table.columnWidth(5)
+            col6_w = self.table.columnWidth(6)
 
             add_col2 = int(diff * 0.4)
-            add_col5 = diff - add_col2
+            add_col6 = diff - add_col2
 
             new_col2 = max(160, col2_w + add_col2)
-            new_col5 = max(120, col5_w + add_col5)
+            new_col6 = max(120, col6_w + add_col6)
 
             self._restoring_columns = True
             try:
                 self.table.setColumnWidth(2, new_col2)
-                self.table.setColumnWidth(5, new_col5)
+                self.table.setColumnWidth(6, new_col6)
 
                 current_total = sum(self.table.columnWidth(i) for i in range(self.table.columnCount()))
                 remaining = viewport_w - current_total
                 if remaining != 0:
-                    final_col5 = max(100, self.table.columnWidth(5) + remaining)
-                    self.table.setColumnWidth(5, final_col5)
+                    final_col6 = max(100, self.table.columnWidth(6) + remaining)
+                    self.table.setColumnWidth(6, final_col6)
             finally:
                 self._restoring_columns = False
 
@@ -1930,7 +1961,7 @@ class TaskManagerDialog(QDialog):
                 widths = json.loads(raw)
             if widths and isinstance(widths, list) and len(widths) == self.table.columnCount():
                 for i, w in enumerate(widths):
-                    if i == 6:
+                    if i == 7:
                         self.table.setColumnWidth(i, 55)
                     else:
                         self.table.setColumnWidth(i, max(40, int(w)))
@@ -1974,16 +2005,19 @@ class TaskManagerDialog(QDialog):
         elif self._sort_column == 2:  # 업무 제목
             def key_fn(t):
                 return ((t.title or "").strip().lower(), t.day or date.min)
-        elif self._sort_column == 3:  # 기안자 / 작성자
+        elif self._sort_column == 3:  # 부서
+            def key_fn(t):
+                return ((getattr(t, "department", "") or "").strip().lower(), t.day or date.min)
+        elif self._sort_column == 4:  # 기안자 / 작성자
             def key_fn(t):
                 return ((t.assignee or "").strip().lower(), t.day or date.min)
-        elif self._sort_column == 4:  # 상태
+        elif self._sort_column == 5:  # 상태
             statuses = get_task_statuses(self.repository)
             status_order = {s: i for i, s in enumerate(statuses)}
             def key_fn(t):
                 st = t.status or "등록"
                 return (status_order.get(st, 999), st, t.day or date.min)
-        elif self._sort_column == 5:  # 비고 / 세부내용
+        elif self._sort_column == 6:  # 비고 / 세부내용
             def key_fn(t):
                 return ((t.description or "").strip().lower(), t.day or date.min)
         else:
@@ -2245,7 +2279,7 @@ class TaskManagerDialog(QDialog):
                 self._render_table()
 
     def _render_table(self) -> None:
-        """필터링 및 페이징된 작업 목록을 7개 컬럼으로 렌더링하고 인라인 수정 지원"""
+        """필터링 및 페이징된 작업 목록을 8개 컬럼으로 렌더링하고 인라인 수정 지원"""
         if hasattr(self, "hover_delegate"):
             self.hover_delegate.hovered_row = -1
         self.table.blockSignals(True)
@@ -2284,7 +2318,7 @@ class TaskManagerDialog(QDialog):
             item_date.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
             self.table.setItem(row_idx, 0, item_date)
 
-            # 1: 분류 (알약 뱃지 버튼 클릭 드롭다운) - 1줄 전체 호버/선택 배경 유지를 위해 QTableWidgetItem 삽입
+            # 1: 분류 (알약 뱃지 버튼 클릭 드롭다운)
             item_cat = QTableWidgetItem()
             item_cat.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
             self.table.setItem(row_idx, 1, item_cat)
@@ -2308,19 +2342,28 @@ class TaskManagerDialog(QDialog):
             item_title.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
             self.table.setItem(row_idx, 2, item_title)
 
-            # 3: 기안자 / 작성자 (직접 편집 가능)
+            # 3: 부서 (직접 편집 가능)
+            dept_str = getattr(task, "department", "") or ""
+            item_dept = QTableWidgetItem(dept_str)
+            item_dept.setTextAlignment(Qt.AlignCenter)
+            item_dept.setForeground(text_color)
+            item_dept.setFont(f)
+            item_dept.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+            self.table.setItem(row_idx, 3, item_dept)
+
+            # 4: 기안자 / 작성자 (직접 편집 가능)
             author_str = task.assignee or ""
             item_author = QTableWidgetItem(author_str)
             item_author.setTextAlignment(Qt.AlignCenter)
             item_author.setForeground(text_color)
             item_author.setFont(f)
             item_author.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
-            self.table.setItem(row_idx, 3, item_author)
+            self.table.setItem(row_idx, 4, item_author)
 
-            # 4: 상태 (알약 뱃지 버튼 클릭 드롭다운) - 1줄 전체 호버/선택 배경 유지를 위해 QTableWidgetItem 삽입
+            # 5: 상태 (알약 뱃지 버튼 클릭 드롭다운)
             item_status = QTableWidgetItem()
             item_status.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-            self.table.setItem(row_idx, 4, item_status)
+            self.table.setItem(row_idx, 5, item_status)
             status_str = task.status or "등록"
             status_widget = PillBadgeWidget(
                 status_str,
@@ -2332,21 +2375,21 @@ class TaskManagerDialog(QDialog):
             status_widget.btn.setProperty("row_idx", row_idx)
             status_widget.installEventFilter(self)
             status_widget.btn.installEventFilter(self)
-            self.table.setCellWidget(row_idx, 4, status_widget)
+            self.table.setCellWidget(row_idx, 5, status_widget)
 
-            # 5: 비고 / 세부내용 (직접 편집 가능)
+            # 6: 비고 / 세부내용 (직접 편집 가능)
             desc_preview = (task.description or "").replace("\n", "  ").strip()
             item_desc = QTableWidgetItem(desc_preview)
             item_desc.setToolTip(task.description or "")
             item_desc.setForeground(text_color)
             item_desc.setFont(f)
             item_desc.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
-            self.table.setItem(row_idx, 5, item_desc)
+            self.table.setItem(row_idx, 6, item_desc)
 
-            # 6: 편집 (아이콘 클릭 시 수정 창 열기) - 1줄 전체 호버/선택 배경 유지를 위해 QTableWidgetItem 삽입
+            # 7: 편집 (아이콘 클릭 시 수정 창 열기)
             item_edit = QTableWidgetItem()
             item_edit.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-            self.table.setItem(row_idx, 6, item_edit)
+            self.table.setItem(row_idx, 7, item_edit)
 
             btn_edit = QPushButton("✏️")
             btn_edit.setToolTip("업무 상세 수정")
@@ -2386,7 +2429,7 @@ class TaskManagerDialog(QDialog):
             edit_container.installEventFilter(self)
             btn_edit.installEventFilter(self)
 
-            self.table.setCellWidget(row_idx, 6, edit_container)
+            self.table.setCellWidget(row_idx, 7, edit_container)
 
             self.table.setRowHeight(row_idx, 38)
 
@@ -2428,7 +2471,7 @@ class TaskManagerDialog(QDialog):
         f = QFont(row_font)
         if is_done:
             f.setStrikeOut(True)
-        for col in (0, 2, 3, 5):
+        for col in (0, 2, 3, 4, 6):
             it = self.table.item(row, col)
             if it:
                 it.setFont(f)
@@ -2450,7 +2493,7 @@ class TaskManagerDialog(QDialog):
         col = item.column()
         if row < 0 or row >= len(self._displayed_tasks):
             return
-        if col not in (0, 2, 3, 5):
+        if col not in (0, 2, 3, 4, 6):
             return
 
         task = self._displayed_tasks[row]
@@ -2487,11 +2530,15 @@ class TaskManagerDialog(QDialog):
             task.title = new_val
             task.updated_at = now
 
-        elif col == 3:  # 기안자 / 작성자
+        elif col == 3:  # 부서
+            task.department = new_val
+            task.updated_at = now
+
+        elif col == 4:  # 기안자 / 작성자
             task.assignee = new_val
             task.updated_at = now
 
-        elif col == 5:  # 비고 / 세부내용
+        elif col == 6:  # 비고 / 세부내용
             task.description = item.text()
             item.setToolTip(task.description)
             task.updated_at = now
@@ -2713,7 +2760,8 @@ class TaskManagerDialog(QDialog):
     def _edit_task(self, task: CalendarEntry | None) -> None:
         """업무 상세 편집 다이얼로그 열기 (기안자 자동완성 포함)"""
         known_authors = [t.assignee for t in self._all_tasks if t.assignee]
-        dlg = TaskEditDialog(self, self.repository, task, known_authors, palette=self.palette)
+        known_depts = [t.department for t in self._all_tasks if getattr(t, "department", "")]
+        dlg = TaskEditDialog(self, self.repository, task, known_authors, palette=self.palette, known_depts=known_depts)
         if dlg.exec() == QDialog.Accepted:
             self.repository.save()
             if self.main_window and hasattr(self.main_window, "refresh"):
@@ -2776,19 +2824,973 @@ class TaskManagerDialog(QDialog):
 
         self._delete_tasks(tasks)
 
+        self._delete_tasks(tasks)
+
     def _export_to_excel(self) -> None:
-        """현재 필터링된 업무 목록을 깔끔한 서식의 엑셀 파일로 내보내기"""
+        """업무 목록 내보내기 대화상자 (공문 맞춤형 / 엑셀) 실행"""
         if not self._filtered_tasks:
             QMessageBox.information(self, "안내", "내보낼 업무 항목이 없습니다.")
             return
 
-        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_name = f"업무관리대장_{now_str}.xlsx"
+        dlg = TaskExportDialog(self, self.repository, self._filtered_tasks, palette=self.palette)
+        dlg.exec()
 
+
+def format_korean_sequence(idx: int, style: str) -> str:
+    """순번 기호 서식 변환 헬퍼 (행정업무 규정에 따른 한글/숫자/원문자 순번 생성)"""
+    korean_chars = [
+        "가", "나", "다", "라", "마", "바", "사", "아", "자", "차", "카", "타", "파", "하",
+        "거", "너", "더", "러", "머", "버", "서", "어", "저", "처", "커", "터", "퍼", "허",
+        "고", "노", "도", "로", "모", "보", "소", "오", "조", "초", "코", "토", "포", "호"
+    ]
+    circled_nums = [
+        "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩",
+        "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳"
+    ]
+    if style in ("가, 나, 다...", "가"):
+        return korean_chars[idx - 1] if 1 <= idx <= len(korean_chars) else f"가{idx - len(korean_chars)}"
+    elif style == "가.":
+        k = korean_chars[idx - 1] if 1 <= idx <= len(korean_chars) else f"가{idx - len(korean_chars)}"
+        return f"{k}."
+    elif style == "가)":
+        k = korean_chars[idx - 1] if 1 <= idx <= len(korean_chars) else f"가{idx - len(korean_chars)}"
+        return f"{k})"
+    elif style in ("1, 2, 3...", "1"):
+        return str(idx)
+    elif style == "1.":
+        return f"{idx}."
+    elif style == "1)":
+        return f"{idx})"
+    elif style == "(1)":
+        return f"({idx})"
+    elif style in ("①, ②, ③...", "①"):
+        return circled_nums[idx - 1] if 1 <= idx <= len(circled_nums) else f"({idx})"
+    elif style == "○":
+        return "○"
+    elif style in ("- (대시)", "-"):
+        return "-"
+    elif style == "없음":
+        return ""
+    return str(idx)
+
+
+class TaskExportDialog(QDialog):
+    """
+    공문 맞춤형 및 엑셀 내보내기 대화상자:
+    1. 공문 본문 나열형 (가. 부서 제목... 한 줄 텍스트 클립보드 복사 / 엑셀 저장)
+    2. 공문 붙임 표 형식 (표 헤더명/컬럼 구성 커스텀, 한글/엑셀 즉시 붙여넣기용 TSV 복사, 엑셀 표 저장)
+    3. 표준 업무관리대장 (전체 8개 열 기본 서식)
+    """
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        repository: EncryptedRepository,
+        tasks: list[CalendarEntry],
+        palette: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.repository = repository
+        self.tasks = tasks
+        self.palette = palette or get_dialog_palette(parent, repository)
+
+        self.setWindowTitle("업무 목록 내보내기 (공문 맞춤형 / 엑셀)")
+        self.resize(840, 640)
+        self.setMinimumSize(720, 520)
+        self.setStyleSheet(f"QDialog {{ background-color: {self.palette['bg']}; color: {self.palette['text']}; }}")
+
+        self._available_columns = [
+            ("seq", "순번", "순번", True),
+            ("dept", "부서", "관련근거", True),
+            ("title", "업무제목", "처리내역 / 자료명", True),
+            ("cat", "분류", "처리구분", True),
+            ("author", "기안자", "요청자", True),
+            ("desc", "비고", "비고", True),
+            ("date", "등록일자", "등록일자", False),
+            ("status", "상태", "처리상태", False),
+        ]
+
+        self._init_ui()
+        self._load_saved_config()
+        self._update_list_preview()
+        self._update_table_preview()
+
+    def _init_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        panel = self.palette.get("panel", "#FFFFFF")
+        panel_alt = self.palette.get("panel_alt", "#F8FAFC")
+        text = self.palette.get("text", "#1F2328")
+        line = self.palette.get("line", "#CBD5E0")
+        accent = self.palette.get("accent", "#1F7A67")
+        accent_soft = self.palette.get("accent_soft", "#EEF2FF")
+        btn_text = self.palette.get("button_text", "#FFFFFF")
+
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border: 1px solid {line};
+                border-radius: 6px;
+                background-color: {panel};
+                padding: 12px;
+            }}
+            QTabBar::tab {{
+                background-color: {panel_alt};
+                color: {text};
+                border: 1px solid {line};
+                border-bottom: none;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                padding: 6px 16px;
+                font-size: 12px;
+                font-weight: 600;
+                margin-right: 2px;
+            }}
+            QTabBar::tab:selected {{
+                background-color: {panel};
+                color: {accent};
+                border-bottom: 2px solid {accent};
+            }}
+            QTabBar::tab:hover:!selected {{
+                background-color: {_shade(panel_alt, -0.04)};
+            }}
+        """)
+
+        # Tab 1: 공문 본문 나열형
+        tab_list = QWidget()
+        self._setup_list_tab(tab_list)
+        self.tab_widget.addTab(tab_list, "📝  공문 본문 나열형")
+
+        # Tab 2: 공문 붙임 표 형식
+        tab_table = QWidget()
+        self._setup_table_tab(tab_table)
+        self.tab_widget.addTab(tab_table, "📊  공문 붙임 표 형식")
+
+        # Tab 3: 표준 업무관리대장
+        tab_standard = QWidget()
+        self._setup_standard_tab(tab_standard)
+        self.tab_widget.addTab(tab_standard, "📁  표준 업무관리대장")
+
+        layout.addWidget(self.tab_widget, 1)
+
+    # ------------------ Tab 1: 공문 본문 나열형 ------------------
+    def _setup_list_tab(self, parent_widget: QWidget) -> None:
+        vbox = QVBoxLayout(parent_widget)
+        vbox.setContentsMargins(4, 4, 4, 4)
+        vbox.setSpacing(10)
+
+        panel = self.palette.get("panel", "#FFFFFF")
+        panel_alt = self.palette.get("panel_alt", "#F8FAFC")
+        text = self.palette.get("text", "#1F2328")
+        line = self.palette.get("line", "#CBD5E0")
+        accent = self.palette.get("accent", "#1F7A67")
+        btn_text = self.palette.get("button_text", "#FFFFFF")
+
+        # 상단 안내 배너
+        lbl_guide = QLabel("💡 <b>공문 본문 작성 시 바로 붙여넣거나(Ctrl+V)</b> 엑셀로 저장할 수 있도록 서식에 맞춰 한 줄씩 나열합니다.")
+        lbl_guide.setStyleSheet(f"background: {panel_alt}; border: 1px solid {line}; border-radius: 6px; padding: 8px 10px; font-size: 12px; color: {text};")
+        vbox.addWidget(lbl_guide)
+
+        # 설정 그리드
+        ctrl_frame = QFrame()
+        ctrl_frame.setStyleSheet(f"QFrame {{ background: {panel_alt}; border: 1px solid {line}; border-radius: 6px; }}")
+        ctrl_layout = QVBoxLayout(ctrl_frame)
+        ctrl_layout.setContentsMargins(10, 8, 10, 8)
+        ctrl_layout.setSpacing(6)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(8)
+
+        lbl_seq = QLabel("순번 기호:")
+        lbl_seq.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {text};")
+        row1.addWidget(lbl_seq)
+
+        self.combo_list_seq = QComboBox()
+        self.combo_list_seq.setFixedHeight(28)
+        self.combo_list_seq.addItems(["가, 나, 다...", "1, 2, 3...", "①, ②, ③...", "가)", "1)", "(1)", "○", "- (대시)", "없음"])
+        self.combo_list_seq.currentIndexChanged.connect(self._update_list_preview)
+        row1.addWidget(self.combo_list_seq)
+
+        row1.addSpacing(14)
+
+        lbl_tpl = QLabel("나열 템플릿:")
+        lbl_tpl.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {text};")
+        row1.addWidget(lbl_tpl)
+
+        self.input_list_template = QLineEdit()
+        self.input_list_template.setFixedHeight(28)
+        self.input_list_template.setText("{순번}. {부서} {제목}")
+        self.input_list_template.textChanged.connect(self._update_list_preview)
+        row1.addWidget(self.input_list_template, 1)
+
+        ctrl_layout.addLayout(row1)
+
+        # 치환 태그 칩스
+        chips_row = QHBoxLayout()
+        chips_row.setSpacing(4)
+        lbl_chips = QLabel("치환 태그:")
+        lbl_chips.setStyleSheet(f"font-size: 11px; color: {text}; font-weight: bold;")
+        chips_row.addWidget(lbl_chips)
+
+        tags = ["{순번}", "{부서}", "{제목}", "{기안자}", "{분류}", "{상태}", "{일자}", "{비고}"]
+        chip_style = f"""
+            QPushButton {{
+                background: {panel};
+                color: {accent};
+                border: 1px solid {line};
+                border-radius: 4px;
+                padding: 2px 7px;
+                font-size: 11px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background: {accent};
+                color: {btn_text};
+                border-color: {accent};
+            }}
+        """
+        for t in tags:
+            btn_t = QPushButton(t)
+            btn_t.setStyleSheet(chip_style)
+            btn_t.setCursor(Qt.PointingHandCursor)
+            btn_t.clicked.connect(lambda _, tag=t: self._insert_list_tag(tag))
+            chips_row.addWidget(btn_t)
+        chips_row.addStretch(1)
+        ctrl_layout.addLayout(chips_row)
+
+        vbox.addWidget(ctrl_frame)
+
+        # 실시간 미리보기
+        self.lbl_list_preview_title = QLabel(f"실시간 본문 미리보기 (총 {len(self.tasks)}건)")
+        self.lbl_list_preview_title.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {text}; margin-top: 4px;")
+        vbox.addWidget(self.lbl_list_preview_title)
+
+        self.txt_list_preview = QTextEdit()
+        self.txt_list_preview.setReadOnly(True)
+        self.txt_list_preview.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 10px;
+                font-family: 'Malgun Gothic', monospace;
+                font-size: 12px;
+                line-height: 1.5;
+            }}
+        """)
+        vbox.addWidget(self.txt_list_preview, 1)
+
+        # 하단 액션 버튼
+        btn_bar = QHBoxLayout()
+        btn_bar.setSpacing(8)
+
+        self.lbl_list_status = QLabel("")
+        self.lbl_list_status.setStyleSheet("color: #10B981; font-weight: bold; font-size: 12px;")
+        btn_bar.addWidget(self.lbl_list_status)
+        btn_bar.addStretch(1)
+
+        self.btn_copy_list = QPushButton("📋  본문 텍스트 복사 (클립보드)")
+        self.btn_copy_list.setFixedHeight(32)
+        self.btn_copy_list.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {accent};
+                color: {btn_text};
+                border: 1px solid {accent};
+                border-radius: 6px;
+                padding: 0 16px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {_shade(accent, -0.12)};
+            }}
+        """)
+        self.btn_copy_list.clicked.connect(self._copy_list_to_clipboard)
+        btn_bar.addWidget(self.btn_copy_list)
+
+        self.btn_excel_list = QPushButton("📊  엑셀로 저장 (.xlsx)")
+        self.btn_excel_list.setFixedHeight(32)
+        self.btn_excel_list.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {panel_alt};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 0 14px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {panel};
+                border-color: {accent};
+            }}
+        """)
+        self.btn_excel_list.clicked.connect(self._export_list_to_excel)
+        btn_bar.addWidget(self.btn_excel_list)
+
+        btn_close = QPushButton("닫기")
+        btn_close.setFixedHeight(32)
+        btn_close.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 0 14px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt};
+            }}
+        """)
+        btn_close.clicked.connect(self.close)
+        btn_bar.addWidget(btn_close)
+
+        vbox.addLayout(btn_bar)
+
+    def _insert_list_tag(self, tag: str) -> None:
+        self.input_list_template.insert(tag)
+        self.input_list_template.setFocus()
+
+    def _generate_list_lines(self) -> list[str]:
+        seq_style = self.combo_list_seq.currentText()
+        template = self.input_list_template.text()
+        lines = []
+
+        for idx, task in enumerate(self.tasks, 1):
+            seq_val = format_korean_sequence(idx, seq_style)
+            dept_val = (getattr(task, "department", "") or "").strip()
+            title_val = (task.title or "").strip()
+            author_val = (task.assignee or "").strip()
+            cat_val = (task.memo_group or "일반").strip()
+            status_val = (task.status or "등록").strip()
+            d_val = task.day or task.start_date or (task.created_at.date() if task.created_at else None)
+            date_val = d_val.strftime("%Y-%m-%d") if d_val else ""
+            desc_val = (task.description or "").replace("\n", " ").strip()
+
+            line = template
+            if seq_val:
+                line = line.replace("{순번}", seq_val)
+            else:
+                line = line.replace("{순번}.", "").replace("{순번}", "")
+
+            line = line.replace("{부서}", dept_val)
+            line = line.replace("{제목}", title_val)
+            line = line.replace("{기안자}", author_val)
+            line = line.replace("{작성자}", author_val)
+            line = line.replace("{분류}", cat_val)
+            line = line.replace("{상태}", status_val)
+            line = line.replace("{일자}", date_val)
+            line = line.replace("{날짜}", date_val)
+            line = line.replace("{비고}", desc_val)
+            line = line.replace("{내용}", desc_val)
+
+            # 불필요한 연속 공백 정리
+            line = re.sub(r' +', ' ', line).strip()
+            lines.append(line)
+
+        return lines
+
+    def _update_list_preview(self) -> None:
+        lines = self._generate_list_lines()
+        self.txt_list_preview.setPlainText("\n".join(lines))
+        self.lbl_list_preview_title.setText(f"실시간 본문 미리보기 (총 {len(lines)}건)")
+        self._save_current_config()
+
+    def _copy_list_to_clipboard(self) -> None:
+        lines = self._generate_list_lines()
+        text = "\n".join(lines)
+        QApplication.clipboard().setText(text)
+        self.lbl_list_status.setText("✅ 클립보드에 복사되었습니다! 공문 본문에 바로 붙여넣기(Ctrl+V)하세요.")
+        QTimer.singleShot(3500, lambda: self.lbl_list_status.setText(""))
+
+    def _export_list_to_excel(self) -> None:
+        lines = self._generate_list_lines()
+        if not lines:
+            QMessageBox.information(self, "안내", "내보낼 항목이 없습니다.")
+            return
+
+        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "업무 목록 엑셀 내보내기",
-            default_name,
+            "공문 본문 엑셀 저장",
+            f"공문본문_{now_str}.xlsx",
+            "Excel Files (*.xlsx)",
+        )
+        if not file_path:
+            return
+
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "공문본문"
+
+            ws.append(["공문 본문 내역"])
+            h_cell = ws.cell(row=1, column=1)
+            h_cell.font = Font(name="Malgun Gothic", size=11, bold=True, color="FFFFFF")
+            h_cell.fill = PatternFill(start_color="4A5568", end_color="4A5568", fill_type="solid")
+            h_cell.alignment = Alignment(horizontal="center", vertical="center")
+            ws.row_dimensions[1].height = 26
+
+            thin_border = Border(
+                left=Side(style="thin", color="E2E8F0"),
+                right=Side(style="thin", color="E2E8F0"),
+                top=Side(style="thin", color="E2E8F0"),
+                bottom=Side(style="thin", color="E2E8F0"),
+            )
+            h_cell.border = thin_border
+
+            for r_idx, line in enumerate(lines, start=2):
+                c = ws.cell(row=r_idx, column=1, value=line)
+                c.font = Font(name="Malgun Gothic", size=10)
+                c.border = thin_border
+                c.alignment = Alignment(vertical="center")
+                ws.row_dimensions[r_idx].height = 22
+
+            ws.column_dimensions["A"].width = 85
+            wb.save(file_path)
+
+            reply = QMessageBox.question(
+                self,
+                "엑셀 저장 완료",
+                f"총 {len(lines)}건의 공문 본문 목록이 저장되었습니다.\n\n파일을 지금 열어보시겠습니까?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply == QMessageBox.Yes:
+                os.startfile(file_path)
+
+        except Exception as e:
+            QMessageBox.critical(self, "저장 실패", f"엑셀 파일 저장 중 오류가 발생했습니다:\n{e}")
+
+    # ------------------ Tab 2: 공문 붙임 표 형식 ------------------
+    def _setup_table_tab(self, parent_widget: QWidget) -> None:
+        vbox = QVBoxLayout(parent_widget)
+        vbox.setContentsMargins(4, 4, 4, 4)
+        vbox.setSpacing(10)
+
+        panel = self.palette.get("panel", "#FFFFFF")
+        panel_alt = self.palette.get("panel_alt", "#F8FAFC")
+        text = self.palette.get("text", "#1F2328")
+        line = self.palette.get("line", "#CBD5E0")
+        accent = self.palette.get("accent", "#1F7A67")
+        btn_text = self.palette.get("button_text", "#FFFFFF")
+
+        lbl_guide = QLabel("💡 <b>공문서 붙임(첨부물)용 표 서식</b>의 열(Column)과 제목을 원하는 형태로 자유롭게 구성합니다.")
+        lbl_guide.setStyleSheet(f"background: {panel_alt}; border: 1px solid {line}; border-radius: 6px; padding: 8px 10px; font-size: 12px; color: {text};")
+        vbox.addWidget(lbl_guide)
+
+        # 프리셋 및 순번 선택 바
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(8)
+
+        lbl_preset = QLabel("서식 프리셋:")
+        lbl_preset.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {text};")
+        top_bar.addWidget(lbl_preset)
+
+        self.combo_table_preset = QComboBox()
+        self.combo_table_preset.setFixedHeight(28)
+        self.combo_table_preset.addItems([
+            "📌 공문 붙임 표 기본 (관련근거 | 처리내역/자료명 | 처리구분 | 요청자 | 비고)",
+            "📌 업무 처리 대장 (순번 | 등록일자 | 부서 | 업무제목 | 기안자 | 상태)",
+            "📌 간편 목록 (순번 | 업무제목 | 비고)",
+            "✏️ 사용자 직접 지정",
+        ])
+        self.combo_table_preset.currentIndexChanged.connect(self._on_table_preset_changed)
+        top_bar.addWidget(self.combo_table_preset, 1)
+
+        top_bar.addSpacing(14)
+
+        lbl_seq = QLabel("순번 기호:")
+        lbl_seq.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {text};")
+        top_bar.addWidget(lbl_seq)
+
+        self.combo_table_seq = QComboBox()
+        self.combo_table_seq.setFixedHeight(28)
+        self.combo_table_seq.addItems(["가, 나, 다...", "1, 2, 3...", "①, ②, ③...", "가)", "1)", "없음"])
+        self.combo_table_seq.currentIndexChanged.connect(self._update_table_preview)
+        top_bar.addWidget(self.combo_table_seq)
+
+        vbox.addLayout(top_bar)
+
+        # 컬럼 체크박스 및 헤더 제목 입력 그리드
+        col_frame = QFrame()
+        col_frame.setStyleSheet(f"QFrame {{ background: {panel_alt}; border: 1px solid {line}; border-radius: 6px; }}")
+        col_grid = QGridLayout(col_frame)
+        col_grid.setContentsMargins(10, 8, 10, 8)
+        col_grid.setHorizontalSpacing(14)
+        col_grid.setVerticalSpacing(6)
+
+        self.col_checks: dict[str, QCheckBox] = {}
+        self.col_edits: dict[str, QLineEdit] = {}
+
+        for idx, (col_key, original_name, default_title, default_chk) in enumerate(self._available_columns):
+            r = idx // 4
+            c = (idx % 4) * 2
+
+            chk = QCheckBox(original_name)
+            chk.setChecked(default_chk)
+            chk.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {text};")
+            chk.stateChanged.connect(self._on_table_column_modified)
+            col_grid.addWidget(chk, r, c)
+            self.col_checks[col_key] = chk
+
+            edit = QLineEdit(default_title)
+            edit.setFixedHeight(26)
+            edit.setPlaceholderText("표 헤더명")
+            edit.setStyleSheet(f"background: {panel}; color: {text}; border: 1px solid {line}; border-radius: 4px; padding: 2px 6px; font-size: 11px;")
+            edit.textChanged.connect(self._on_table_column_modified)
+            col_grid.addWidget(edit, r, c + 1)
+            self.col_edits[col_key] = edit
+
+        vbox.addWidget(col_frame)
+
+        # 실시간 표 미리보기
+        self.lbl_table_preview_title = QLabel(f"실시간 표 미리보기 (총 {len(self.tasks)}건)")
+        self.lbl_table_preview_title.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {text}; margin-top: 2px;")
+        vbox.addWidget(self.lbl_table_preview_title)
+
+        self.tbl_table_preview = QTableWidget()
+        self.tbl_table_preview.setAlternatingRowColors(False)
+        self.tbl_table_preview.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {panel};
+                border: 1px solid {line};
+                border-radius: 6px;
+                gridline-color: {line};
+                font-size: 12px;
+            }}
+            QHeaderView::section {{
+                background-color: {panel_alt};
+                color: {text};
+                font-size: 11px;
+                font-weight: bold;
+                padding: 6px;
+                border: none;
+                border-bottom: 1px solid {line};
+                border-right: 1px solid {line};
+            }}
+        """)
+        vbox.addWidget(self.tbl_table_preview, 1)
+
+        # 하단 액션 버튼
+        btn_bar = QHBoxLayout()
+        btn_bar.setSpacing(8)
+
+        self.lbl_table_status = QLabel("")
+        self.lbl_table_status.setStyleSheet("color: #10B981; font-weight: bold; font-size: 12px;")
+        btn_bar.addWidget(self.lbl_table_status)
+        btn_bar.addStretch(1)
+
+        self.btn_copy_table_tsv = QPushButton("📋  표 텍스트 복사 (한글/엑셀 붙여넣기용)")
+        self.btn_copy_table_tsv.setFixedHeight(32)
+        self.btn_copy_table_tsv.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {accent};
+                color: {btn_text};
+                border: 1px solid {accent};
+                border-radius: 6px;
+                padding: 0 16px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {_shade(accent, -0.12)};
+            }}
+        """)
+        self.btn_copy_table_tsv.clicked.connect(self._copy_table_tsv)
+        btn_bar.addWidget(self.btn_copy_table_tsv)
+
+        self.btn_excel_table = QPushButton("📊  엑셀로 저장 (.xlsx)")
+        self.btn_excel_table.setFixedHeight(32)
+        self.btn_excel_table.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {panel_alt};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 0 14px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {panel};
+                border-color: {accent};
+            }}
+        """)
+        self.btn_excel_table.clicked.connect(self._export_table_to_excel)
+        btn_bar.addWidget(self.btn_excel_table)
+
+        btn_close = QPushButton("닫기")
+        btn_close.setFixedHeight(32)
+        btn_close.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 0 14px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt};
+            }}
+        """)
+        btn_close.clicked.connect(self.close)
+        btn_bar.addWidget(btn_close)
+
+        vbox.addLayout(btn_bar)
+
+    def _on_table_preset_changed(self, idx: int) -> None:
+        if idx == 0:  # 공문 붙임 표 기본
+            preset = {
+                "seq": (True, "순번"),
+                "dept": (True, "관련근거"),
+                "title": (True, "처리내역 / 자료명"),
+                "cat": (True, "처리구분"),
+                "author": (True, "요청자"),
+                "desc": (True, "비고"),
+                "date": (False, "등록일자"),
+                "status": (False, "상태"),
+            }
+        elif idx == 1:  # 업무 처리 대장
+            preset = {
+                "seq": (True, "순번"),
+                "date": (True, "등록일자"),
+                "dept": (True, "부서"),
+                "title": (True, "업무제목"),
+                "author": (True, "기안자"),
+                "status": (True, "상태"),
+                "cat": (False, "분류"),
+                "desc": (False, "비고"),
+            }
+        elif idx == 2:  # 간편 목록
+            preset = {
+                "seq": (True, "순번"),
+                "title": (True, "업무제목"),
+                "desc": (True, "비고"),
+                "dept": (False, "부서"),
+                "cat": (False, "분류"),
+                "author": (False, "기안자"),
+                "date": (False, "등록일자"),
+                "status": (False, "상태"),
+            }
+        else:
+            return
+
+        self._applying_preset = True
+        try:
+            for col_key, (chk_val, title_val) in preset.items():
+                if col_key in self.col_checks:
+                    self.col_checks[col_key].setChecked(chk_val)
+                if col_key in self.col_edits:
+                    self.col_edits[col_key].setText(title_val)
+        finally:
+            self._applying_preset = False
+
+        self._update_table_preview()
+
+    def _on_table_column_modified(self) -> None:
+        if getattr(self, "_applying_preset", False):
+            return
+        if self.combo_table_preset.currentIndex() != 3:
+            self.combo_table_preset.blockSignals(True)
+            self.combo_table_preset.setCurrentIndex(3)  # 사용자 직접 지정
+            self.combo_table_preset.blockSignals(False)
+        self._update_table_preview()
+
+    def _get_active_table_columns(self) -> list[tuple[str, str]]:
+        """현재 체크된 열 키와 사용자 정의 헤더명 목록 반환"""
+        active = []
+        for col_key, _, _, _ in self._available_columns:
+            chk = self.col_checks.get(col_key)
+            edit = self.col_edits.get(col_key)
+            if chk and chk.isChecked():
+                title = edit.text().strip() if edit else col_key
+                active.append((col_key, title or col_key))
+        return active
+
+    def _get_task_field_value(self, task: CalendarEntry, col_key: str, row_idx: int, seq_style: str) -> str:
+        if col_key == "seq":
+            return format_korean_sequence(row_idx, seq_style)
+        elif col_key == "dept":
+            return getattr(task, "department", "") or ""
+        elif col_key == "title":
+            return task.title or ""
+        elif col_key == "cat":
+            return task.memo_group or "일반"
+        elif col_key == "author":
+            return task.assignee or ""
+        elif col_key == "desc":
+            return (task.description or "").replace("\n", " ").strip()
+        elif col_key == "date":
+            d_val = task.day or task.start_date or (task.created_at.date() if task.created_at else None)
+            return d_val.strftime("%Y-%m-%d") if d_val else ""
+        elif col_key == "status":
+            return task.status or "등록"
+        return ""
+
+    def _update_table_preview(self) -> None:
+        active_cols = self._get_active_table_columns()
+        seq_style = self.combo_table_seq.currentText()
+
+        self.tbl_table_preview.setColumnCount(len(active_cols))
+        self.tbl_table_preview.setHorizontalHeaderLabels([title for _, title in active_cols])
+        self.tbl_table_preview.setRowCount(len(self.tasks))
+
+        for r_idx, task in enumerate(self.tasks):
+            for c_idx, (col_key, _) in enumerate(active_cols):
+                val = self._get_task_field_value(task, col_key, r_idx + 1, seq_style)
+                item = QTableWidgetItem(val)
+                if col_key in ("seq", "cat", "author", "date", "status"):
+                    item.setTextAlignment(Qt.AlignCenter)
+                else:
+                    item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                self.tbl_table_preview.setItem(r_idx, c_idx, item)
+
+        self.tbl_table_preview.resizeColumnsToContents()
+        self.lbl_table_preview_title.setText(f"실시간 표 미리보기 (총 {len(self.tasks)}건, {len(active_cols)}개 열)")
+        self._save_current_config()
+
+    def _copy_table_tsv(self) -> None:
+        active_cols = self._get_active_table_columns()
+        if not active_cols:
+            QMessageBox.information(self, "안내", "선택된 열이 없습니다.")
+            return
+
+        seq_style = self.combo_table_seq.currentText()
+        lines = []
+
+        # 헤더 행
+        headers = [title for _, title in active_cols]
+        lines.append("\t".join(headers))
+
+        # 데이터 행
+        for r_idx, task in enumerate(self.tasks, 1):
+            row_vals = [self._get_task_field_value(task, col_key, r_idx, seq_style).replace("\t", " ") for col_key, _ in active_cols]
+            lines.append("\t".join(row_vals))
+
+        tsv_text = "\n".join(lines)
+        QApplication.clipboard().setText(tsv_text)
+        self.lbl_table_status.setText("✅ 표가 복사되었습니다! 한글(HWP)이나 엑셀에 바로 붙여넣기(Ctrl+V)하세요.")
+        QTimer.singleShot(3500, lambda: self.lbl_table_status.setText(""))
+
+    def _export_table_to_excel(self) -> None:
+        active_cols = self._get_active_table_columns()
+        if not active_cols:
+            QMessageBox.information(self, "안내", "선택된 열이 없습니다.")
+            return
+
+        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "공문 표 엑셀 저장",
+            f"공문붙임표_{now_str}.xlsx",
+            "Excel Files (*.xlsx)",
+        )
+        if not file_path:
+            return
+
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+            from openpyxl.utils import get_column_letter
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "붙임표"
+
+            headers = [title for _, title in active_cols]
+            ws.append(headers)
+
+            h_fill = PatternFill(start_color="4A5568", end_color="4A5568", fill_type="solid")
+            h_font = Font(name="Malgun Gothic", size=11, bold=True, color="FFFFFF")
+            thin_border = Border(
+                left=Side(style="thin", color="CBD5E0"),
+                right=Side(style="thin", color="CBD5E0"),
+                top=Side(style="thin", color="CBD5E0"),
+                bottom=Side(style="thin", color="CBD5E0"),
+            )
+
+            for col_idx in range(1, len(headers) + 1):
+                c = ws.cell(row=1, column=col_idx)
+                c.fill = h_fill
+                c.font = h_font
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border = thin_border
+            ws.row_dimensions[1].height = 28
+
+            seq_style = self.combo_table_seq.currentText()
+            for r_idx, task in enumerate(self.tasks, 1):
+                row_vals = [self._get_task_field_value(task, col_key, r_idx, seq_style) for col_key, _ in active_cols]
+                ws.append(row_vals)
+                row_num = r_idx + 1
+
+                for col_idx, (col_key, _) in enumerate(active_cols, 1):
+                    cell = ws.cell(row=row_num, column=col_idx)
+                    cell.font = Font(name="Malgun Gothic", size=10)
+                    cell.border = thin_border
+                    if col_key in ("seq", "cat", "author", "date", "status"):
+                        cell.alignment = Alignment(horizontal="center", vertical="center")
+                    else:
+                        cell.alignment = Alignment(vertical="center")
+
+                ws.row_dimensions[row_num].height = 22
+
+            # 열 너비 자동 조정
+            for col_idx, (col_key, title) in enumerate(active_cols, 1):
+                col_letter = get_column_letter(col_idx)
+                if col_key == "seq":
+                    ws.column_dimensions[col_letter].width = 8
+                elif col_key in ("title", "desc"):
+                    ws.column_dimensions[col_letter].width = 35
+                elif col_key == "dept":
+                    ws.column_dimensions[col_letter].width = 24
+                elif col_key in ("cat", "author", "status"):
+                    ws.column_dimensions[col_letter].width = 14
+                elif col_key == "date":
+                    ws.column_dimensions[col_letter].width = 14
+                else:
+                    ws.column_dimensions[col_letter].width = 18
+
+            wb.save(file_path)
+
+            reply = QMessageBox.question(
+                self,
+                "엑셀 저장 완료",
+                f"총 {len(self.tasks)}건의 붙임 표가 성공적으로 저장되었습니다.\n\n파일을 지금 열어보시겠습니까?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply == QMessageBox.Yes:
+                os.startfile(file_path)
+
+        except Exception as e:
+            QMessageBox.critical(self, "저장 실패", f"엑셀 파일 저장 중 오류가 발생했습니다:\n{e}")
+
+    # ------------------ Tab 3: 표준 업무관리대장 ------------------
+    def _setup_standard_tab(self, parent_widget: QWidget) -> None:
+        vbox = QVBoxLayout(parent_widget)
+        vbox.setContentsMargins(4, 4, 4, 4)
+        vbox.setSpacing(10)
+
+        panel = self.palette.get("panel", "#FFFFFF")
+        panel_alt = self.palette.get("panel_alt", "#F8FAFC")
+        text = self.palette.get("text", "#1F2328")
+        line = self.palette.get("line", "#CBD5E0")
+        accent = self.palette.get("accent", "#1F7A67")
+        btn_text = self.palette.get("button_text", "#FFFFFF")
+
+        lbl_guide = QLabel("💡 <b>전체 8개 열</b>(번호, 상태, 등록일자, 분류, 부서, 업무제목, 기안자, 비고/세부내용)을 모두 포함하는 표준 업무관리대장 서식입니다.")
+        lbl_guide.setStyleSheet(f"background: {panel_alt}; border: 1px solid {line}; border-radius: 6px; padding: 8px 10px; font-size: 12px; color: {text};")
+        vbox.addWidget(lbl_guide)
+
+        # 미리보기 테이블
+        std_headers = ["번호", "상태", "등록일자", "분류", "부서", "업무제목", "기안자", "비고/세부내용"]
+        self.tbl_standard_preview = QTableWidget()
+        self.tbl_standard_preview.setColumnCount(len(std_headers))
+        self.tbl_standard_preview.setHorizontalHeaderLabels(std_headers)
+        self.tbl_standard_preview.setRowCount(len(self.tasks))
+        self.tbl_standard_preview.setStyleSheet(f"""
+            QTableWidget {{
+                background-color: {panel};
+                border: 1px solid {line};
+                border-radius: 6px;
+                gridline-color: {line};
+                font-size: 12px;
+            }}
+            QHeaderView::section {{
+                background-color: {panel_alt};
+                color: {text};
+                font-size: 11px;
+                font-weight: bold;
+                padding: 6px;
+                border: none;
+                border-bottom: 1px solid {line};
+                border-right: 1px solid {line};
+            }}
+        """)
+
+        for r_idx, task in enumerate(self.tasks, 1):
+            d_val = task.day or task.start_date or (task.created_at.date() if task.created_at else None)
+            d_str = d_val.strftime("%Y-%m-%d") if d_val else ""
+            row_vals = [
+                str(r_idx),
+                task.status or "등록",
+                d_str,
+                task.memo_group or "일반",
+                getattr(task, "department", "") or "",
+                task.title or "",
+                task.assignee or "",
+                (task.description or "").replace("\n", " ").strip(),
+            ]
+            for c_idx, val in enumerate(row_vals):
+                it = QTableWidgetItem(val)
+                if c_idx in (0, 1, 2, 3, 6):
+                    it.setTextAlignment(Qt.AlignCenter)
+                else:
+                    it.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                self.tbl_standard_preview.setItem(r_idx - 1, c_idx, it)
+
+        self.tbl_standard_preview.resizeColumnsToContents()
+        vbox.addWidget(self.tbl_standard_preview, 1)
+
+        # 하단 액션 버튼
+        btn_bar = QHBoxLayout()
+        btn_bar.setSpacing(8)
+        btn_bar.addStretch(1)
+
+        btn_excel_std = QPushButton("📊  표준 대장 엑셀로 저장 (.xlsx)")
+        btn_excel_std.setFixedHeight(32)
+        btn_excel_std.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {accent};
+                color: {btn_text};
+                border: 1px solid {accent};
+                border-radius: 6px;
+                padding: 0 16px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {_shade(accent, -0.12)};
+            }}
+        """)
+        btn_excel_std.clicked.connect(self._export_standard_to_excel)
+        btn_bar.addWidget(btn_excel_std)
+
+        btn_close = QPushButton("닫기")
+        btn_close.setFixedHeight(32)
+        btn_close.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 0 14px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt};
+            }}
+        """)
+        btn_close.clicked.connect(self.close)
+        btn_bar.addWidget(btn_close)
+
+        vbox.addLayout(btn_bar)
+
+    def _export_standard_to_excel(self) -> None:
+        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "표준 업무관리대장 엑셀 저장",
+            f"업무관리대장_{now_str}.xlsx",
             "Excel Files (*.xlsx)",
         )
         if not file_path:
@@ -2803,43 +3805,40 @@ class TaskManagerDialog(QDialog):
             ws = wb.active
             ws.title = "업무관리대장"
 
-            headers = ["번호", "상태", "등록일자", "업무분류", "업무제목", "기안자/작성자", "세부내용/출처"]
+            headers = ["번호", "상태", "등록일자", "분류", "부서", "업무제목", "기안자/작성자", "세부내용/출처"]
             ws.append(headers)
 
-            header_fill = PatternFill(start_color="4A5568", end_color="4A5568", fill_type="solid")
-            header_font = Font(name="Malgun Gothic", size=11, bold=True, color="FFFFFF")
+            h_fill = PatternFill(start_color="4A5568", end_color="4A5568", fill_type="solid")
+            h_font = Font(name="Malgun Gothic", size=11, bold=True, color="FFFFFF")
             thin_border = Border(
-                left=Side(style="thin", color="E2E8F0"),
-                right=Side(style="thin", color="E2E8F0"),
-                top=Side(style="thin", color="E2E8F0"),
-                bottom=Side(style="thin", color="E2E8F0"),
+                left=Side(style="thin", color="CBD5E0"),
+                right=Side(style="thin", color="CBD5E0"),
+                top=Side(style="thin", color="CBD5E0"),
+                bottom=Side(style="thin", color="CBD5E0"),
             )
 
             for col_idx in range(1, len(headers) + 1):
-                cell = ws.cell(row=1, column=col_idx)
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-                cell.border = thin_border
+                c = ws.cell(row=1, column=col_idx)
+                c.fill = h_fill
+                c.font = h_font
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border = thin_border
             ws.row_dimensions[1].height = 28
 
-            for idx, task in enumerate(self._filtered_tasks, 1):
+            for idx, task in enumerate(self.tasks, 1):
                 is_done = (task.status == "완료")
                 d_val = task.day or task.start_date or (task.created_at.date() if task.created_at else None)
                 d_str = d_val.strftime("%Y-%m-%d") if d_val else ""
-                cat_str = task.memo_group or "일반"
-                author_str = task.assignee or ""
-                status_str = task.status or "등록"
-                desc_str = task.description or ""
 
                 row_values = [
                     idx,
-                    status_str,
+                    task.status or "등록",
                     d_str,
-                    cat_str,
-                    task.title,
-                    author_str,
-                    desc_str,
+                    task.memo_group or "일반",
+                    getattr(task, "department", "") or "",
+                    task.title or "",
+                    task.assignee or "",
+                    task.description or "",
                 ]
                 ws.append(row_values)
                 row_idx = idx + 1
@@ -2850,18 +3849,18 @@ class TaskManagerDialog(QDialog):
                     c.border = thin_border
                     c.alignment = Alignment(vertical="center")
 
-                    if col_idx in (1, 2, 3, 6):
+                    if col_idx in (1, 2, 3, 4, 7):
                         c.alignment = Alignment(horizontal="center", vertical="center")
-                    elif col_idx == 4:
+                    elif col_idx == 5:
                         c.alignment = Alignment(horizontal="center", vertical="center")
-                        c.font = Font(name="Malgun Gothic", size=10, bold=True, color="6C5CE7" if not is_done else "718096")
+                        c.font = Font(name="Malgun Gothic", size=10, bold=True, color="4F46E5" if not is_done else "718096")
 
-                    if is_done and col_idx == 5:
+                    if is_done and col_idx == 6:
                         c.font = Font(name="Malgun Gothic", size=10, strike=True, color="A0AEC0")
 
                 ws.row_dimensions[row_idx].height = 22
 
-            col_widths = {1: 8, 2: 12, 3: 14, 4: 12, 5: 35, 6: 18, 7: 40}
+            col_widths = {1: 8, 2: 12, 3: 14, 4: 12, 5: 22, 6: 35, 7: 16, 8: 40}
             for col_idx, width in col_widths.items():
                 col_letter = get_column_letter(col_idx)
                 ws.column_dimensions[col_letter].width = width
@@ -2871,7 +3870,7 @@ class TaskManagerDialog(QDialog):
             reply = QMessageBox.question(
                 self,
                 "엑셀 저장 완료",
-                f"총 {len(self._filtered_tasks)}건의 업무 목록이 성공적으로 저장되었습니다.\n\n파일을 지금 열어보시겠습니까?",
+                f"총 {len(self.tasks)}건의 업무 목록이 성공적으로 저장되었습니다.\n\n파일을 지금 열어보시겠습니까?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
             )
@@ -2879,5 +3878,61 @@ class TaskManagerDialog(QDialog):
                 os.startfile(file_path)
 
         except Exception as e:
-            logger.exception("Task excel export failed")
             QMessageBox.critical(self, "저장 실패", f"엑셀 파일 저장 중 오류가 발생했습니다:\n{e}")
+
+    # ------------------ 설정 저장 및 복원 ------------------
+    def _save_current_config(self) -> None:
+        try:
+            config = {
+                "list_seq": self.combo_list_seq.currentText(),
+                "list_template": self.input_list_template.text(),
+                "table_preset": self.combo_table_preset.currentIndex(),
+                "table_seq": self.combo_table_seq.currentText(),
+                "table_cols": {k: (self.col_checks[k].isChecked(), self.col_edits[k].text()) for k in self.col_checks},
+            }
+            self.repository.set_setting("task_export_config", json.dumps(config, ensure_ascii=False))
+            self.repository.save()
+        except Exception:
+            pass
+
+    def _load_saved_config(self) -> None:
+        try:
+            raw = self.repository.get_setting("task_export_config")
+            if not raw:
+                return
+            config = json.loads(raw)
+            if not isinstance(config, dict):
+                return
+
+            if "list_seq" in config:
+                idx = self.combo_list_seq.findText(config["list_seq"])
+                if idx >= 0:
+                    self.combo_list_seq.setCurrentIndex(idx)
+            if "list_template" in config and config["list_template"]:
+                self.input_list_template.setText(config["list_template"])
+
+            if "table_seq" in config:
+                idx = self.combo_table_seq.findText(config["table_seq"])
+                if idx >= 0:
+                    self.combo_table_seq.setCurrentIndex(idx)
+
+            if "table_cols" in config and isinstance(config["table_cols"], dict):
+                self._applying_preset = True
+                try:
+                    for k, val in config["table_cols"].items():
+                        if isinstance(val, (list, tuple)) and len(val) >= 2:
+                            if k in self.col_checks:
+                                self.col_checks[k].setChecked(bool(val[0]))
+                            if k in self.col_edits:
+                                self.col_edits[k].setText(str(val[1]))
+                finally:
+                    self._applying_preset = False
+
+            if "table_preset" in config:
+                p_idx = int(config["table_preset"])
+                if 0 <= p_idx < self.combo_table_preset.count():
+                    self.combo_table_preset.blockSignals(True)
+                    self.combo_table_preset.setCurrentIndex(p_idx)
+                    self.combo_table_preset.blockSignals(False)
+        except Exception:
+            pass

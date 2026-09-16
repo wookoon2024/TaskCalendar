@@ -2,7 +2,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const today = new Date();
   const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
-  const FIELDS = ['title', 'author', 'date', 'category', 'status', 'desc', 'url'];
+  const FIELDS = ['title', 'department', 'author', 'date', 'category', 'status', 'desc', 'url'];
 
   // DOM 요소 참조
   const els = {
@@ -19,11 +19,14 @@ document.addEventListener('DOMContentLoaded', () => {
     btnSchedule: document.getElementById('btn-schedule'),
     btnTask: document.getElementById('btn-task'),
     btnMemo: document.getElementById('btn-memo'),
+    itemDepartment: document.getElementById('item-department'),
     itemAuthor: document.getElementById('item-author'),
     itemDate: document.getElementById('item-date'),
     itemCategoryStatus: document.getElementById('item-category-status'),
+    itemDesc: document.getElementById('item-desc'),
     chkTitle: document.getElementById('chk-title'),
     chkCategory: document.getElementById('chk-category'),
+    chkDepartment: document.getElementById('chk-department'),
     chkAuthor: document.getElementById('chk-author'),
     chkStatus: document.getElementById('chk-status'),
     chkDesc: document.getElementById('chk-desc'),
@@ -31,6 +34,7 @@ document.addEventListener('DOMContentLoaded', () => {
     chkUrl: document.getElementById('chk-url'),
     valTitle: document.getElementById('val-title'),
     valCategory: document.getElementById('val-category'),
+    valDepartment: document.getElementById('val-department'),
     valAuthor: document.getElementById('val-author'),
     valStatus: document.getElementById('val-status'),
     valDesc: document.getElementById('val-desc'),
@@ -69,18 +73,24 @@ document.addEventListener('DOMContentLoaded', () => {
     els.btnMemo.classList.toggle('active', val === 'memo');
 
     if (val === 'schedule') {
-      els.itemAuthor.style.display = 'none';
+      if (els.itemDepartment) els.itemDepartment.style.display = 'none';
+      if (els.itemAuthor) els.itemAuthor.style.display = 'none';
       els.itemDate.style.display = 'flex';
       if (els.itemCategoryStatus) els.itemCategoryStatus.style.display = 'none';
+      if (els.itemDesc) els.itemDesc.style.display = 'none';
     } else if (val === 'task') {
-      els.itemAuthor.style.display = 'flex';
+      if (els.itemDepartment) els.itemDepartment.style.display = 'flex';
+      if (els.itemAuthor) els.itemAuthor.style.display = 'flex';
       els.itemDate.style.display = 'flex';
       if (els.itemCategoryStatus) els.itemCategoryStatus.style.display = 'flex';
+      if (els.itemDesc) els.itemDesc.style.display = 'flex';
     } else {
       // 메모 탭: 날짜 표시
-      els.itemAuthor.style.display = 'none';
+      if (els.itemDepartment) els.itemDepartment.style.display = 'none';
+      if (els.itemAuthor) els.itemAuthor.style.display = 'none';
       els.itemDate.style.display = 'flex';
       if (els.itemCategoryStatus) els.itemCategoryStatus.style.display = 'none';
+      if (els.itemDesc) els.itemDesc.style.display = 'none';
     }
 
     if (save) {
@@ -123,11 +133,11 @@ document.addEventListener('DOMContentLoaded', () => {
       els.viewConfig.style.display = 'none';
       updateRuleBadgeVisibility(!!currentData.hasCustomRule);
 
-      // 등록 화면으로 복귀 시 360으로 복원
+      // 등록 화면으로 복귀 시 420으로 복원
       try {
         chrome.windows.getCurrent((win) => {
           if (win && win.id) {
-            chrome.windows.update(win.id, { height: 360 });
+            chrome.windows.update(win.id, { height: 420 });
           }
         });
       } catch (e) {}
@@ -137,19 +147,163 @@ document.addEventListener('DOMContentLoaded', () => {
   els.btnToggleConfig.addEventListener('click', () => switchView('config'));
   els.btnCfgCancel.addEventListener('click', () => switchView('register'));
 
-  // 🎯 화면에서 직접 찍기 (Element Picker) 실행
-  if (els.btnPickElement) {
-    els.btnPickElement.addEventListener('click', () => {
+  // 🎯 타겟 필드 선택 및 헤더 버튼 상태 연동
+  let targetPickField = 'all';
+
+  function selectPickField(field) {
+    targetPickField = field || 'all';
+    document.querySelectorAll('.field-row').forEach(r => r.classList.remove('field-pick-selected'));
+    document.querySelectorAll('.btn-field-pick').forEach(b => b.classList.remove('active'));
+
+    const labels = {
+      'department': '부서',
+      'author': '기안자',
+      'title': '제목',
+      'date': '날짜',
+      'category': '분류',
+      'status': '상태',
+      'desc': '비고'
+    };
+
+    if (field && labels[field]) {
+      els.btnPickElement.textContent = `🎯 ${labels[field]} 직접 찍기`;
+      els.btnPickElement.title = `웹페이지에서 ${labels[field]} 항목을 마우스로 직접 클릭하여 선택합니다`;
+      els.btnPickElement.classList.add('field-targeted');
+
+      const rowMap = {
+        'department': els.itemDepartment,
+        'author': els.itemAuthor,
+        'title': document.getElementById('item-title'),
+        'date': els.itemDate,
+        'category': els.itemCategoryStatus,
+        'status': els.itemCategoryStatus,
+        'desc': els.itemDesc
+      };
+      if (rowMap[field]) rowMap[field].classList.add('field-pick-selected');
+
+      const btnPick = document.querySelector(`.btn-field-pick[data-pick="${field}"]`);
+      if (btnPick) btnPick.classList.add('active');
+    } else {
+      targetPickField = 'all';
+      els.btnPickElement.textContent = '🎯 항목 직접 찍기';
+      els.btnPickElement.title = '웹페이지에서 원하는 메일/게시글을 마우스로 직접 클릭하여 선택합니다';
+      els.btnPickElement.classList.remove('field-targeted');
+    }
+  }
+
+  // 필드 포커스 및 행 클릭 시 찍기 대상 자동 설정
+  if (els.valDepartment) {
+    els.valDepartment.addEventListener('focus', () => selectPickField('department'));
+    els.valDepartment.addEventListener('click', () => selectPickField('department'));
+  }
+  if (els.itemDepartment) {
+    els.itemDepartment.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('btn-field-pick')) selectPickField('department');
+    });
+  }
+  if (els.valAuthor) {
+    els.valAuthor.addEventListener('focus', () => selectPickField('author'));
+    els.valAuthor.addEventListener('click', () => selectPickField('author'));
+  }
+  if (els.itemAuthor) {
+    els.itemAuthor.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('btn-field-pick')) selectPickField('author');
+    });
+  }
+  if (els.valTitle) {
+    els.valTitle.addEventListener('focus', () => selectPickField('title'));
+    els.valTitle.addEventListener('click', () => selectPickField('title'));
+  }
+  const itemTitleEl = document.getElementById('item-title');
+  if (itemTitleEl) {
+    itemTitleEl.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('btn-field-pick')) selectPickField('title');
+    });
+  }
+  if (els.valDate) {
+    els.valDate.addEventListener('focus', () => selectPickField('date'));
+    els.valDate.addEventListener('click', () => selectPickField('date'));
+  }
+  if (els.itemDate) {
+    els.itemDate.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('btn-field-pick')) selectPickField('date');
+    });
+  }
+  if (els.valCategory) {
+    els.valCategory.addEventListener('focus', () => selectPickField('category'));
+    els.valCategory.addEventListener('click', () => selectPickField('category'));
+  }
+  if (els.valStatus) {
+    els.valStatus.addEventListener('focus', () => selectPickField('status'));
+    els.valStatus.addEventListener('click', () => selectPickField('status'));
+  }
+  if (els.valDesc) {
+    els.valDesc.addEventListener('focus', () => selectPickField('desc'));
+    els.valDesc.addEventListener('click', () => selectPickField('desc'));
+  }
+  if (els.itemDesc) {
+    els.itemDesc.addEventListener('click', (e) => {
+      if (!e.target.classList.contains('btn-field-pick')) selectPickField('desc');
+    });
+  }
+
+  // 각 필드별 🎯 직접 찍기 버튼 클릭 리스너
+  document.querySelectorAll('.btn-field-pick').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const field = btn.getAttribute('data-pick');
+      selectPickField(field);
+      triggerFieldPicker(field);
+    });
+  });
+
+  function triggerFieldPicker(field) {
+    const pickTarget = field || targetPickField || 'all';
+
+    // 현재 폼에 입력된 값들 및 체크 상태를 온전히 보존
+    const preservedData = {
+      selectedType: currentType,
+      title: els.valTitle.value,
+      linkText: els.valTitle.value,
+      titleChecked: els.chkTitle.checked,
+      department: els.valDepartment ? els.valDepartment.value : '',
+      departmentChecked: els.chkDepartment ? els.chkDepartment.checked : true,
+      author: els.valAuthor.value,
+      authorChecked: els.chkAuthor.checked,
+      date: els.valDate.value,
+      detectedDate: els.valDate.value,
+      dateChecked: els.chkDate.checked,
+      category: els.valCategory.value,
+      categoryChecked: els.chkCategory.checked,
+      status: els.valStatus.value,
+      statusChecked: els.chkStatus.checked,
+      desc: els.valDesc.value,
+      descChecked: els.chkDesc.checked,
+      url: els.valUrl.value,
+      linkUrl: els.valUrl.value,
+      pageUrl: (currentData && currentData.pageUrl) || els.valUrl.value,
+      pageTitle: (currentData && currentData.pageTitle) || els.valTitle.value,
+      urlChecked: els.chkUrl.checked,
+      siteDomain: currentDomain,
+      hasCustomRule: !!(currentData && currentData.hasCustomRule),
+      originTabId: originTabId,
+      originFrameId: (currentData && currentData.originFrameId) || 0,
+      targetPickField: pickTarget
+    };
+
+    chrome.storage.local.set({
+      tcPreservedFormData: preservedData,
+      tcPickTargetField: pickTarget
+    }, () => {
       function startPickerOnTab(tabId) {
-        chrome.tabs.sendMessage(tabId, { action: "startElementPicker" }, (res) => {
+        chrome.tabs.sendMessage(tabId, { action: "startElementPicker", targetField: pickTarget }, (res) => {
           if (chrome.runtime.lastError) {
-            // content.js 동적 주입 후 재시도
             chrome.scripting.executeScript({
               target: { tabId: tabId, allFrames: true },
               files: ["content.js"]
             }, () => {
               setTimeout(() => {
-                chrome.tabs.sendMessage(tabId, { action: "startElementPicker" });
+                chrome.tabs.sendMessage(tabId, { action: "startElementPicker", targetField: pickTarget });
               }, 100);
             });
           }
@@ -166,6 +320,17 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         });
       }
+    });
+  }
+
+  // 상단 헤더의 🎯 항목 직접 찍기 버튼 클릭 시
+  if (els.btnPickElement) {
+    els.btnPickElement.addEventListener('click', () => {
+      let pickTarget = targetPickField;
+      if (pickTarget === 'all' && currentType === 'task' && els.valTitle.value.trim() && !els.valDesc.value.trim()) {
+        pickTarget = 'desc';
+      }
+      triggerFieldPicker(pickTarget);
     });
   }
 
@@ -187,12 +352,16 @@ document.addEventListener('DOMContentLoaded', () => {
       '기안자': currentData.author || '',
       '작성자': currentData.author || '',
       'author': currentData.author || '',
+      '부서': currentData.department || '',
+      'department': currentData.department || '',
+      'dept': currentData.department || '',
       '상태': currentData.status || '등록',
       'status': currentData.status || '등록',
       '날짜': currentData.detectedDate || els.valDate.value || dateStr,
       'date': currentData.detectedDate || els.valDate.value || dateStr,
-      '내용': currentData.selectedText || currentData.descOverride || '',
-      'desc': currentData.selectedText || currentData.descOverride || '',
+      '내용': currentData.selectedText || currentData.descOverride || currentData.desc || '',
+      '비고': currentData.desc || currentData.descOverride || currentData.selectedText || '',
+      'desc': currentData.desc || currentData.descOverride || currentData.selectedText || '',
       '출처': currentData.linkUrl || currentData.pageUrl || '',
       'url': currentData.linkUrl || currentData.pageUrl || ''
     };
@@ -202,9 +371,10 @@ document.addEventListener('DOMContentLoaded', () => {
       if (k === '제목' || k === 'title') return base.title;
       if (k === '분류' || k === 'category') return base.category;
       if (k === '기안자' || k === '작성자' || k === 'author') return base.author;
+      if (k === '부서' || k === 'department' || k === 'dept') return base.department;
       if (k === '상태' || k === 'status') return base.status;
       if (k === '날짜' || k === 'date') return base.date;
-      if (k === '내용' || k === '본문' || k === 'desc') return base.desc;
+      if (k === '내용' || k === '본문' || k === '비고' || k === 'desc') return base.desc;
       if (k === '출처' || k === '링크' || k === 'url') return base.url;
       return match;
     });
@@ -236,72 +406,148 @@ document.addEventListener('DOMContentLoaded', () => {
       return s.substring(0, 50).trim();
     }
 
-    // 제목 (최대 50자)
-    if (activeRules.title === '__none__') {
-      els.valTitle.value = '';
-      els.chkTitle.checked = false;
-    } else if (data.linkText) {
-      els.valTitle.value = limit50(data.linkText);
-      els.chkTitle.checked = true;
+    if (data.checkedStates) {
+      // 복원/피커 선택된 데이터: 보존된 이전 입력값 및 체크박스 상태 복원
+      if (data.linkText !== undefined) {
+        els.valTitle.value = limit50(data.linkText);
+        els.chkTitle.checked = data.checkedStates.title !== false;
+      }
+      if (data.department !== undefined && els.valDepartment) {
+        els.valDepartment.value = limit50(data.department);
+        if (els.chkDepartment) els.chkDepartment.checked = data.checkedStates.department !== false;
+      }
+      if (data.author !== undefined) {
+        els.valAuthor.value = limit50(data.author);
+        els.chkAuthor.checked = data.checkedStates.author !== false;
+      }
+      if (data.category !== undefined) {
+        els.valCategory.value = limit50(data.category);
+        els.chkCategory.checked = data.checkedStates.category !== false;
+      }
+      if (data.status !== undefined) {
+        els.valStatus.value = limit50(data.status);
+        els.chkStatus.checked = data.checkedStates.status !== false;
+      }
+      if (data.detectedDate !== undefined) {
+        els.valDate.value = data.detectedDate;
+        els.chkDate.checked = data.checkedStates.date !== false;
+      }
+      if (data.desc !== undefined) {
+        els.valDesc.value = data.desc;
+        els.chkDesc.checked = data.checkedStates.desc !== false;
+      }
+      if (data.linkUrl !== undefined) {
+        els.valUrl.value = data.linkUrl;
+        els.chkUrl.checked = data.checkedStates.url === true;
+      }
     } else {
-      els.valTitle.value = limit50(data.pageTitle || '');
-      els.chkTitle.checked = true;
+      // 제목 (최대 50자)
+      if (activeRules.title === '__none__') {
+        els.valTitle.value = '';
+        els.chkTitle.checked = false;
+      } else if (data.linkText) {
+        els.valTitle.value = limit50(data.linkText);
+        els.chkTitle.checked = (userSavedCheckedStates && userSavedCheckedStates.title !== undefined) ? userSavedCheckedStates.title : true;
+      } else {
+        els.valTitle.value = limit50(data.pageTitle || '');
+        els.chkTitle.checked = (userSavedCheckedStates && userSavedCheckedStates.title !== undefined) ? userSavedCheckedStates.title : true;
+      }
+
+      // 부서 (최대 50자)
+      if (els.valDepartment) {
+        if (activeRules.department === '__none__') {
+          els.valDepartment.value = '';
+          if (els.chkDepartment) els.chkDepartment.checked = false;
+        } else {
+          els.valDepartment.value = limit50(data.department || '');
+          if (els.chkDepartment) {
+            els.chkDepartment.checked = (userSavedCheckedStates && userSavedCheckedStates.department !== undefined)
+              ? userSavedCheckedStates.department
+              : !!els.valDepartment.value;
+          }
+        }
+      }
+
+      // 작성자 / 기안자 (최대 50자)
+      if (activeRules.author === '__none__') {
+        els.valAuthor.value = '';
+        els.chkAuthor.checked = false;
+      } else {
+        els.valAuthor.value = limit50(data.author || '');
+        els.chkAuthor.checked = (userSavedCheckedStates && userSavedCheckedStates.author !== undefined)
+          ? userSavedCheckedStates.author
+          : !!els.valAuthor.value;
+      }
+
+      // 분류 (최대 50자)
+      if (activeRules.category === '__none__') {
+        els.valCategory.value = '';
+        els.chkCategory.checked = false;
+      } else {
+        els.valCategory.value = limit50(data.category || '일반');
+        els.chkCategory.checked = (userSavedCheckedStates && userSavedCheckedStates.category !== undefined)
+          ? userSavedCheckedStates.category
+          : true;
+      }
+
+      // 상태 (텍스트박스 기본값 "등록", 최대 50자)
+      if (activeRules.status === '__none__') {
+        els.valStatus.value = '';
+        els.chkStatus.checked = false;
+      } else {
+        els.valStatus.value = limit50(data.status || '등록');
+        els.chkStatus.checked = (userSavedCheckedStates && userSavedCheckedStates.status !== undefined)
+          ? userSavedCheckedStates.status
+          : true;
+      }
+
+      // 비고 (최대 1000자)
+      if (activeRules.desc === '__none__') {
+        els.valDesc.value = '';
+        els.chkDesc.checked = false;
+      } else if (data.desc || data.descOverride || data.selectedText) {
+        els.valDesc.value = (data.desc || data.descOverride || data.selectedText || '').substring(0, 1000);
+        els.chkDesc.checked = (userSavedCheckedStates && userSavedCheckedStates.desc !== undefined)
+          ? userSavedCheckedStates.desc
+          : true;
+      } else {
+        els.valDesc.value = '';
+        els.chkDesc.checked = (userSavedCheckedStates && userSavedCheckedStates.desc !== undefined)
+          ? userSavedCheckedStates.desc
+          : true;
+      }
+
+      // 날짜
+      if (activeRules.date === '__none__') {
+        els.valDate.value = '';
+        els.chkDate.checked = false;
+      } else if (data.detectedDate) {
+        els.valDate.value = data.detectedDate;
+        els.chkDate.checked = (userSavedCheckedStates && userSavedCheckedStates.date !== undefined)
+          ? userSavedCheckedStates.date
+          : true;
+      } else {
+        els.valDate.value = dateStr;
+        els.chkDate.checked = (userSavedCheckedStates && userSavedCheckedStates.date !== undefined)
+          ? userSavedCheckedStates.date
+          : true;
+      }
+
+      // 출처 URL: 보안 및 전자결재 URL 보호를 위해 기본 숨김 및 미입력 처리
+      els.valUrl.value = '';
+      els.chkUrl.checked = (userSavedCheckedStates && userSavedCheckedStates.url !== undefined)
+        ? userSavedCheckedStates.url
+        : false;
     }
-
-    // 작성자 / 기안자 (최대 50자)
-    if (activeRules.author === '__none__') {
-      els.valAuthor.value = '';
-      els.chkAuthor.checked = false;
-    } else {
-      els.valAuthor.value = limit50(data.author || '');
-      els.chkAuthor.checked = !!els.valAuthor.value;
-    }
-
-    // 분류 (최대 50자)
-    if (activeRules.category === '__none__') {
-      els.valCategory.value = '';
-      els.chkCategory.checked = false;
-    } else {
-      els.valCategory.value = limit50(data.category || '일반');
-      els.chkCategory.checked = true;
-    }
-
-    // 상태 (텍스트박스 기본값 "등록", 최대 50자)
-    if (activeRules.status === '__none__') {
-      els.valStatus.value = '';
-      els.chkStatus.checked = false;
-    } else {
-      els.valStatus.value = limit50(data.status || '등록');
-      els.chkStatus.checked = true;
-    }
-
-    // 내용: 보안 및 전자결재 문서 보호를 위해 절대 수집하지 않음 (항목 직접 찍기 시에도 미입력)
-    data.selectedText = '';
-    data.descOverride = '';
-    data.desc = '';
-    els.valDesc.value = '';
-    els.chkDesc.checked = false;
-
-    // 날짜
-    if (activeRules.date === '__none__') {
-      els.valDate.value = '';
-      els.chkDate.checked = false;
-    } else if (data.detectedDate) {
-      els.valDate.value = data.detectedDate;
-      els.chkDate.checked = true;
-    } else {
-      els.valDate.value = dateStr;
-      els.chkDate.checked = true;
-    }
-
-    // 출처 URL: 보안 및 전자결재 URL 보호를 위해 기본 숨김 및 미입력 처리
-    els.valUrl.value = '';
-    els.chkUrl.checked = false;
 
     // 맞춤 규칙 적용 배지 표시 여부
     updateRuleBadgeVisibility(!!data.hasCustomRule);
 
     syncCheckboxState();
+
+    if (data.targetPickField) {
+      selectPickField(data.targetPickField);
+    }
   }
 
   function updateRuleBadgeVisibility(hasRule) {
@@ -318,15 +564,35 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  let userSavedCheckedStates = null;
+
+  function saveCurrentCheckboxStates() {
+    const states = Object.assign({}, userSavedCheckedStates || {});
+    if (els.chkTitle) states.title = els.chkTitle.checked;
+    if (els.chkDate) states.date = els.chkDate.checked;
+    if (els.chkUrl) states.url = els.chkUrl.checked;
+
+    if (currentType === 'task') {
+      if (els.chkDepartment) states.department = els.chkDepartment.checked;
+      if (els.chkAuthor) states.author = els.chkAuthor.checked;
+      if (els.chkCategory) states.category = els.chkCategory.checked;
+      if (els.chkStatus) states.status = els.chkStatus.checked;
+      if (els.chkDesc) states.desc = els.chkDesc.checked;
+    }
+    userSavedCheckedStates = states;
+    chrome.storage.local.set({ userCheckedStates: states });
+  }
+
   function loadFormData() {
-    chrome.storage.local.get(['taskCalendarData', 'lastSelectedType', 'tc_site_rules'], (result) => {
-      const savedType = result.lastSelectedType || 'schedule';
+    chrome.storage.local.get(['taskCalendarData', 'lastSelectedType', 'tc_site_rules', 'userCheckedStates'], (result) => {
+      userSavedCheckedStates = result.userCheckedStates || null;
+      const data = result.taskCalendarData;
+      const savedType = (data && data.selectedType) || result.lastSelectedType || 'schedule';
       switchType(savedType, false);
 
       const allSiteRules = result.tc_site_rules || {};
 
-      if (!result.taskCalendarData) return;
-      const data = result.taskCalendarData;
+      if (!data) return;
 
       currentDomain = data.siteDomain || '';
       if (currentDomain && allSiteRules[currentDomain]) {
@@ -364,14 +630,18 @@ document.addEventListener('DOMContentLoaded', () => {
   function syncCheckboxState() {
     els.valTitle.disabled = !els.chkTitle.checked;
     els.valCategory.disabled = !els.chkCategory.checked;
+    if (els.valDepartment && els.chkDepartment) els.valDepartment.disabled = !els.chkDepartment.checked;
     els.valAuthor.disabled = !els.chkAuthor.checked;
     els.valStatus.disabled = !els.chkStatus.checked;
     els.valDesc.disabled = !els.chkDesc.checked;
     els.valDate.disabled = !els.chkDate.checked;
     els.valUrl.disabled = !els.chkUrl.checked;
   }
-  [els.chkTitle, els.chkCategory, els.chkAuthor, els.chkStatus, els.chkDesc, els.chkDate, els.chkUrl].forEach(chk => {
-    chk.addEventListener('change', syncCheckboxState);
+  [els.chkTitle, els.chkCategory, els.chkDepartment, els.chkAuthor, els.chkStatus, els.chkDesc, els.chkDate, els.chkUrl].filter(Boolean).forEach(chk => {
+    chk.addEventListener('change', () => {
+      syncCheckboxState();
+      saveCurrentCheckboxStates();
+    });
   });
 
   // ========== 사이트 맞춤 설정 뷰 렌더링 & 서식 상태 갱신 ==========
@@ -441,9 +711,11 @@ document.addEventListener('DOMContentLoaded', () => {
       } else if (!sampleInput.value.trim()) {
         if (field === 'title') sampleInput.value = els.valTitle.value.trim();
         else if (field === 'category' && els.valCategory.value !== '일반') sampleInput.value = els.valCategory.value.trim();
+        else if (field === 'department') sampleInput.value = els.valDepartment ? els.valDepartment.value.trim() : '';
         else if (field === 'author') sampleInput.value = els.valAuthor.value.trim();
         else if (field === 'status' && els.valStatus.value !== '등록') sampleInput.value = els.valStatus.value;
         else if (field === 'date') sampleInput.value = els.valDate.value;
+        else if (field === 'desc') sampleInput.value = els.valDesc.value.trim();
         else if (field === 'url') sampleInput.value = els.valUrl.value;
       }
 
@@ -567,9 +839,9 @@ document.addEventListener('DOMContentLoaded', () => {
           if (field === 'title') {
             tplInput.value = '[{분류}] {제목}';
           } else if (field === 'desc') {
-            tplInput.value = '제목: {제목}\n분류: {분류}\n출처: {출처}';
+            tplInput.value = '{부서}';
           } else {
-            tplInput.value = `{${field === 'category' ? '분류' : field === 'author' ? '기안자' : field === 'status' ? '상태' : field === 'date' ? '날짜' : '출처'}}`;
+            tplInput.value = `{${field === 'category' ? '분류' : field === 'department' ? '부서' : field === 'author' ? '기안자' : field === 'status' ? '상태' : field === 'date' ? '날짜' : '출처'}}`;
           }
         }
         activeTemplates[field] = tplInput.value.trim();
@@ -729,8 +1001,46 @@ document.addEventListener('DOMContentLoaded', () => {
   els.btnCancel.addEventListener('click', () => window.close());
 
   els.btnSubmit.addEventListener('click', () => {
+    saveCurrentCheckboxStates();
     const type = currentType || 'schedule';
     chrome.storage.local.set({ lastSelectedType: type });
+
+    // 🎯 맞춤 규칙 자동 갱신 저장:
+    // 사용자가 항목 직접 찍기(비고 등)를 수행한 경우, 찍은 곳의 선택자(selector)를 사이트 맞춤 규칙(tc_site_rules)에 영구 저장!
+    const ruleUpdates = (currentData && currentData.pendingRuleUpdates) || {};
+    if (currentDomain && Object.keys(ruleUpdates).length > 0) {
+      chrome.storage.local.get(['tc_site_rules'], (storageRes) => {
+        const siteRules = storageRes.tc_site_rules || {};
+        if (!siteRules[currentDomain]) {
+          siteRules[currentDomain] = {
+            selectors: Object.assign({}, activeRules),
+            templates: Object.assign({}, activeTemplates),
+            samples: Object.assign({}, ruleSamples),
+            domain: currentDomain,
+            updatedAt: Date.now()
+          };
+        }
+        if (!siteRules[currentDomain].selectors) siteRules[currentDomain].selectors = {};
+        if (!siteRules[currentDomain].samples) siteRules[currentDomain].samples = {};
+
+        for (const [fld, info] of Object.entries(ruleUpdates)) {
+          if (info && info.selector) {
+            // 비고 필드인 경우 체크가 해제되었거나 입력값이 없으면 규칙 저장 제외
+            if (fld === 'desc' && (!els.chkDesc.checked || !els.valDesc.value.trim())) {
+              continue;
+            }
+            siteRules[currentDomain].selectors[fld] = info.selector;
+            if (activeRules) activeRules[fld] = info.selector;
+            if (info.sample) {
+              siteRules[currentDomain].samples[fld] = info.sample;
+              if (ruleSamples) ruleSamples[fld] = info.sample;
+            }
+          }
+        }
+        siteRules[currentDomain].updatedAt = Date.now();
+        chrome.storage.local.set({ tc_site_rules: siteRules });
+      });
+    }
 
     function clean50(val) {
       if (!val || typeof val !== 'string') return '';
@@ -762,6 +1072,9 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       if (type === 'task') {
+        if (els.chkDepartment && els.chkDepartment.checked && clean50(els.valDepartment.value)) {
+          url += `&department=${encodeURIComponent(clean50(els.valDepartment.value))}`;
+        }
         if (els.chkAuthor.checked && clean50(els.valAuthor.value)) {
           url += `&author=${encodeURIComponent(clean50(els.valAuthor.value))}`;
         }
@@ -777,9 +1090,12 @@ document.addEventListener('DOMContentLoaded', () => {
         url += `&date=${els.valDate.value}`;
       }
 
-      // 내용은 보안상 기본 숨김이며, 체크된 경우에만 최대 50자로 전송
-      if (els.chkDesc && els.chkDesc.checked && clean50(els.valDesc.value)) {
-        url += `&desc=${encodeURIComponent(clean50(els.valDesc.value))}`;
+      // 비고: 체크된 경우 전송 (메모 및 비고 용도로 최대 1000자까지 허용)
+      if (els.chkDesc && els.chkDesc.checked && els.valDesc.value.trim()) {
+        const descText = els.valDesc.value.replace(/[\r\t]+/g, ' ').trim().substring(0, 1000);
+        if (descText) {
+          url += `&desc=${encodeURIComponent(descText)}`;
+        }
       }
     }
 

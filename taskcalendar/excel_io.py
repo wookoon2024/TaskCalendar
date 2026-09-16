@@ -18,6 +18,7 @@ _HEADERS = [
     "end_time",
     "all_day",
     "assignee",
+    "department",
     "status",
     "recurrence_enabled",
     "recurrence_type",
@@ -134,6 +135,7 @@ def export_entries_to_excel(
                 entry.end_time,
                 int(entry.all_day),
                 _safe_excel_cell(entry.assignee),
+                _safe_excel_cell(getattr(entry, "department", "") or ""),
                 entry.status,
                 json.dumps(entry.attachments, ensure_ascii=False),
                 int(entry.recurrence_enabled),
@@ -181,7 +183,7 @@ def import_entries_from_excel(file_path: Path) -> tuple[list[CalendarEntry], dic
             return [], {}
         header = [str(item or "").strip() for item in first]
         mapping = {name: idx for idx, name in enumerate(header)}
-        required_headers = [name for name in _HEADERS if name != "attachments_json"]
+        required_headers = [name for name in _HEADERS if name not in ("attachments_json", "department")]
         missing = [name for name in required_headers if name not in mapping]
         if missing:
             raise ValueError(f"엑셀 형식이 올바르지 않습니다. 누락 컬럼: {', '.join(missing)}")
@@ -223,6 +225,7 @@ def import_entries_from_excel(file_path: Path) -> tuple[list[CalendarEntry], dic
                     end_time=str(get("end_time") or "").strip(),
                     all_day=_parse_bool(get("all_day")),
                     assignee=str(get("assignee") or "").strip(),
+                    department=str(get("department") or "").strip() if "department" in mapping else "",
                     status=str(get("status") or "").strip(),
                     # Cross-device share via Excel intentionally excludes attachment paths.
                     attachments=[],
