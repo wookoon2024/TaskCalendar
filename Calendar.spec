@@ -14,6 +14,18 @@ a = Analysis(
     noarchive=False,
     optimize=1,
 )
+
+# Filter out heavy unneeded Qt binaries (e.g. software OpenGL renderer ~20MB, virtual keyboard, etc.)
+_unneeded_binaries = {
+    'opengl32sw.dll',
+    'qtvirtualkeyboardplugin.dll',
+    'qpdf.dll',
+    'qtga.dll',
+    'qtiff.dll',
+    'qwbmp.dll',
+}
+a.binaries = [x for x in a.binaries if not any(ub in x[0].lower() for ub in _unneeded_binaries)]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
