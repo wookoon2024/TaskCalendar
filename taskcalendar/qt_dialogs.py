@@ -14,6 +14,7 @@ from PySide6.QtCore import QDate, QTime, Qt, QTimer, QRect, QPoint, QSize, QUrl,
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QTextCursor, QPainter, QPen, QColor, QDesktopServices, QCursor, QPixmap, QFont, QTextCharFormat, QDrag
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
+    QApplication,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -442,6 +443,33 @@ class OverwriteDateEdit(QDateEdit):
         committed = QDate(year, month, day)
         self.setDate(committed)
         self._raw_text = committed.toString("yyyy-MM-dd")
+
+
+def _position_on_any_screen(x: int, y: int, w: int, h: int) -> bool:
+    """저장된 위치가 현재 어떤 화면(듀얼 모니터 포함)에든 걸쳐 있는지."""
+    app = QApplication.instance()
+    if app is None:
+        return True
+    rect = QRect(int(x), int(y), max(1, int(w)), max(1, int(h)))
+    for screen in app.screens():
+        if screen.availableGeometry().intersects(rect):
+            return True
+    return False
+
+
+def _screen_geometry_for(x: int, y: int, w: int, h: int) -> QRect:
+    """저장된 위치를 담고 있는 화면의 작업 영역(없으면 주 화면)."""
+    app = QApplication.instance()
+    if app is not None:
+        rect = QRect(int(x), int(y), max(1, int(w)), max(1, int(h)))
+        for screen in app.screens():
+            geo = screen.availableGeometry()
+            if geo.intersects(rect):
+                return geo
+        scr = app.primaryScreen()
+        if scr is not None:
+            return scr.availableGeometry()
+    return QRect(0, 0, 1920, 1080)
 
 
 def snap_window_rect(current_geo: QRect, other_geos: list[QRect], screen_geo: QRect, threshold: int = 16) -> QPoint:
@@ -1050,8 +1078,12 @@ class EntryDialog(QDialog):
                         except Exception:
                             pass
 
-            screen = self.screen() or QApplication.primaryScreen()
-            avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+            # 저장된 위치가 어느 화면(듀얼 모니터 포함)에든 걸쳐 있으면 그 화면 기준으로 복원한다.
+            # 주 화면 기준으로 클램프하면 보조 모니터에 있던 메모가 주 화면으로 끌려온다.
+            avail = _screen_geometry_for(exp_x, exp_y, self._expanded_width, self._expanded_height)
+            on_screen = has_saved_geo and _position_on_any_screen(
+                exp_x, exp_y, self._expanded_width, self._expanded_height
+            )
             screen_right = avail.x() + avail.width()
 
             if not has_saved_geo:
@@ -1088,13 +1120,25 @@ class EntryDialog(QDialog):
                             init_x = exp_x + self._expanded_width - target_w
                         else:
                             init_x = exp_x
-                    nx = max(avail.left(), min(init_x, avail.right() - 50))
-                    ny = max(avail.top(), min(exp_y, avail.bottom() - 36))
+                    nx, ny = (
+                        (init_x, exp_y)
+                        if on_screen
+                        else (
+                            max(avail.left(), min(init_x, avail.right() - 50)),
+                            max(avail.top(), min(exp_y, avail.bottom() - 36)),
+                        )
+                    )
                     self.setGeometry(nx, ny, target_w, 36)
                     self._anchored_to_right = getattr(self, "_anchored_to_right", False) or (nx + self._expanded_width > screen_right) or (nx + target_w >= screen_right - 16)
                 else:
-                    nx = max(avail.left(), min(exp_x, avail.right() - 100))
-                    ny = max(avail.top(), min(exp_y, avail.bottom() - 36))
+                    nx, ny = (
+                        (exp_x, exp_y)
+                        if on_screen
+                        else (
+                            max(avail.left(), min(exp_x, avail.right() - 100)),
+                            max(avail.top(), min(exp_y, avail.bottom() - 36)),
+                        )
+                    )
                     self.setGeometry(nx, ny, self._expanded_width, self._expanded_height)
                     self._anchored_to_right = getattr(self, "_anchored_to_right", False) or (nx + self._expanded_width > screen_right) or (nx + self.width() >= screen_right - 16)
 
@@ -4019,8 +4063,12 @@ class FloatingGroupDialog(QDialog):
         if "anchored_to_right" in self.group_dict:
             self._anchored_to_right = bool(self.group_dict["anchored_to_right"])
 
-        screen = self.screen() or QApplication.primaryScreen()
-        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        # 저장된 위치가 어느 화면(듀얼 모니터 포함)에든 걸쳐 있으면 그 화면 기준으로 복원한다.
+        # 주 화면 기준으로 클램프하면 보조 모니터에 있던 창이 주 화면으로 끌려온다.
+        avail = _screen_geometry_for(exp_x, exp_y, self._expanded_width, self._expanded_height)
+        on_screen = has_geo and _position_on_any_screen(
+            exp_x, exp_y, self._expanded_width, self._expanded_height
+        )
         screen_right = avail.x() + avail.width()
 
         if has_geo:
@@ -4033,13 +4081,25 @@ class FloatingGroupDialog(QDialog):
                         init_x = exp_x + self._expanded_width - target_w
                     else:
                         init_x = exp_x
-                nx = max(avail.left(), min(init_x, avail.right() - 50))
-                ny = max(avail.top(), min(exp_y, avail.bottom() - 36))
+                nx, ny = (
+                    (init_x, exp_y)
+                    if on_screen
+                    else (
+                        max(avail.left(), min(init_x, avail.right() - 50)),
+                        max(avail.top(), min(exp_y, avail.bottom() - 36)),
+                    )
+                )
                 self.setGeometry(nx, ny, target_w, 36)
                 self._anchored_to_right = getattr(self, "_anchored_to_right", False) or (nx + self._expanded_width > screen_right) or (nx + target_w >= screen_right - 16)
             else:
-                nx = max(avail.left(), min(exp_x, avail.right() - 100))
-                ny = max(avail.top(), min(exp_y, avail.bottom() - 36))
+                nx, ny = (
+                    (exp_x, exp_y)
+                    if on_screen
+                    else (
+                        max(avail.left(), min(exp_x, avail.right() - 100)),
+                        max(avail.top(), min(exp_y, avail.bottom() - 36)),
+                    )
+                )
                 self.setGeometry(nx, ny, self._expanded_width, self._expanded_height)
                 self._anchored_to_right = getattr(self, "_anchored_to_right", False) or (nx + self._expanded_width > screen_right) or (nx + self.width() >= screen_right - 16)
         else:
