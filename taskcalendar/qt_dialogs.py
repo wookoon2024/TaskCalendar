@@ -1681,6 +1681,9 @@ class EntryDialog(QDialog):
             self.description_input.setHtml(desc_val)
         else:
             self.description_input.setPlainText(desc_val)
+        # Snapshot of the content as loaded, so _save() can tell whether the user
+        # actually edited it (used to keep the auto-derived title in sync).
+        self._original_plain_content = self.description_input.toPlainText().strip()
         self.description_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         content_layout.addWidget(self.description_input, 1)
         root.addWidget(self.content_card)
@@ -2079,16 +2082,22 @@ class EntryDialog(QDialog):
             rec_leap = self.recurrence_month_end_check.isChecked()
 
         plain_content = self.description_input.toPlainText().strip()
+        first_line = plain_content.splitlines()[0].strip() if plain_content else ""
+        import re
+        m = re.match(r"^(?:\d+[\.\)]\s*)?제목:\s*(.+)$", first_line)
+        derived_title = (m.group(1).strip() if m else first_line)[:40]
+
         if self.entry and self.entry.title and self.entry.title not in ("일정", "크롬에서 등록"):
-            default_title = self.entry.title[:40]
-        else:
-            first_line = plain_content.splitlines()[0].strip() if plain_content else "일정"
-            import re
-            m = re.match(r"^(?:\d+[\.\)]\s*)?제목:\s*(.+)$", first_line)
-            if m:
-                default_title = m.group(1).strip()[:40]
+            original_content = getattr(self, "_original_plain_content", plain_content)
+            if plain_content != original_content:
+                # Content was edited: the title follows the (new) first line, exactly
+                # like a new entry. Previously the old title was kept, so editing the
+                # text never changed the title shown on the calendar chip.
+                default_title = derived_title or self.entry.title[:40]
             else:
-                default_title = first_line[:40]
+                default_title = self.entry.title[:40]
+        else:
+            default_title = derived_title or "일정"
         html_content = self.description_input.toHtml()
         description_to_save = html_content if "<img" in html_content else plain_content
         self.result = CalendarEntry(
@@ -3126,36 +3135,36 @@ class EntryDialog(QDialog):
                     self.attachment_bar.hide()
             self._auto_save_to_db()
 
-    def _resize_with_anchor(self, width: int, height: int) -> None:
+    def _resize_with_anchor(self, width: int, height: int, expanding: bool | None = None) -> None:
         screen = self.screen() or QApplication.primaryScreen()
         avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
         screen_right = avail.x() + avail.width()
 
         old_right = self.x() + self.width()
         target_x = self.x()
+        width = max(width, self.minimumWidth())
+        if expanding is None:
+            expanding = width > self.width()
 
         if getattr(self, "_expand_anchor_right", False):
-            is_expanding = width > self.width()
-            is_collapsing = width < self.width()
-
-            if is_expanding:
-                if (target_x + width > screen_right) or getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16):
-                    target_x = old_right - width
-                    self._anchored_to_right = True
-                else:
-                    self._anchored_to_right = False
-            elif is_collapsing:
-                if getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16):
-                    target_x = old_right - width
-                    self._anchored_to_right = True
-                else:
-                    self._anchored_to_right = False
-
-            if getattr(self, "_anchored_to_right", False):
+            # 기본은 왼쪽 모서리 고정이다. 펼치면 오른쪽으로 커지고, 접으면 오른쪽이 줄어든다.
+            # 왼쪽을 고정한 채 펼쳤을 때 화면 오른쪽을 넘칠 때만 오른쪽 모서리를 고정해
+            # 왼쪽으로 커지게 한다.
+            if expanding:
                 if target_x + width > screen_right:
-                    target_x = screen_right - width
-                if target_x < avail.left():
-                    target_x = avail.left()
+                    target_x = old_right - width
+                    self._anchored_to_right = True
+                else:
+                    self._anchored_to_right = False
+            else:
+                # 접을 때: 펼친 창이 화면 안에 있고 펼칠 때 오른쪽 모서리를 고정했다면
+                # 그 오른쪽 모서리로 되돌린다(= 펼치기 전 자리로 복귀).
+                # 펼친 창이 화면 밖으로 삐져나가 있으면 보던 왼쪽 모서리를 유지한다.
+                if self._anchored_to_right and (old_right <= screen_right):
+                    target_x = old_right - width
+            # 어떤 경우에도 창이 화면 오른쪽 밖으로 나가지 않게 한다.
+            if target_x + width > screen_right:
+                target_x = max(avail.left(), screen_right - width)
 
         self.setGeometry(target_x, self.y(), width, height)
 
@@ -3171,8 +3180,8 @@ class EntryDialog(QDialog):
                 self.content_wrap.hide()
             self.setMinimumHeight(36)
             self.setMaximumHeight(36)
-            target_w = getattr(self, "_collapsed_width", None) or self._expanded_width
-            self._resize_with_anchor(target_w, 36)
+            target_w = max(self.minimumWidth(), getattr(self, "_collapsed_width", None) or self._expanded_width)
+            self._resize_with_anchor(target_w, 36, expanding=False)
             if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
                 self._collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg"))))
                 self._collapse_btn.setToolTip("메모 펼치기")
@@ -3187,7 +3196,7 @@ class EntryDialog(QDialog):
             self.setMaximumHeight(16777215)
             target_w = getattr(self, "_expanded_width", 380)
             target_h = getattr(self, "_expanded_height", 360)
-            self._resize_with_anchor(target_w, target_h)
+            self._resize_with_anchor(target_w, target_h, expanding=True)
             if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
                 self._collapse_btn.setIcon(QIcon(str(asset_path("memo_minimize.svg"))))
                 self._collapse_btn.setToolTip("메모 접기")
@@ -3242,18 +3251,27 @@ class EntryDialog(QDialog):
                 parent.repository.save()
 
     def _end_window_drag(self) -> None:
+        moved = False
         if hasattr(self, "_drag_position"):
             delattr(self, "_drag_position")
+        if hasattr(self, "_drag_origin"):
+            moved = self.pos() != self._drag_origin
+            delattr(self, "_drag_origin")
         screen = self.screen() or QApplication.primaryScreen()
-        if screen:
+        # 기준 모서리는 사용자가 창을 '실제로 옮겼을 때'만 다시 정한다.
+        # 제목줄을 단순히 클릭하거나 접기/펼치기만 해도 재계산되면, 펼친 뒤 판정이
+        # 뒤집혀 접을 때 엉뚱한 자리로 튄다.
+        if screen and moved:
             avail = screen.availableGeometry()
             screen_right = avail.x() + avail.width()
             exp_w = getattr(self, "_expanded_width", 380)
-            self._anchored_to_right = (self.x() + exp_w > screen_right) or (self.x() + self.width() >= screen_right - 16)
+            # 왼쪽을 고정한 채 펼쳤을 때 화면 오른쪽을 넘치는 경우에만 우측 기준(왼쪽으로 커짐).
+            self._anchored_to_right = (self.x() + exp_w > screen_right)
         self._debounced_save_memo_geometry(250)
 
     def _start_window_drag(self, global_pos: QPoint) -> None:
         self._drag_position = global_pos - self.frameGeometry().topLeft()
+        self._drag_origin = self.pos()
 
     def _other_window_geometries(self) -> list[QRect]:
         geos: list[QRect] = []
@@ -4674,8 +4692,8 @@ class FloatingGroupDialog(QDialog):
             self.content_wrap.hide()
             self.setMinimumHeight(36)
             self.setMaximumHeight(36)
-            target_w = getattr(self, "_collapsed_width", None) or self._expanded_width
-            self._resize_with_anchor(target_w, 36)
+            target_w = max(self.minimumWidth(), getattr(self, "_collapsed_width", None) or self._expanded_width)
+            self._resize_with_anchor(target_w, 36, expanding=False)
         else:
             curr_w = self.width()
             exp_w = getattr(self, "_expanded_width", None)
@@ -4686,41 +4704,41 @@ class FloatingGroupDialog(QDialog):
             self.setMaximumHeight(16777215)
             target_w = getattr(self, "_expanded_width", 360)
             target_h = getattr(self, "_expanded_height", 420)
-            self._resize_with_anchor(target_w, target_h)
+            self._resize_with_anchor(target_w, target_h, expanding=True)
         self._update_collapse_btn()
         self._apply_theme(self.group_color)
         self._debounced_save(250)
 
-    def _resize_with_anchor(self, width: int, height: int) -> None:
+    def _resize_with_anchor(self, width: int, height: int, expanding: bool | None = None) -> None:
         screen = self.screen() or QApplication.primaryScreen()
         avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
         screen_right = avail.x() + avail.width()
 
         old_right = self.x() + self.width()
         target_x = self.x()
+        width = max(width, self.minimumWidth())
+        if expanding is None:
+            expanding = width > self.width()
 
         if getattr(self, "_expand_anchor_right", False):
-            is_expanding = width > self.width()
-            is_collapsing = width < self.width()
-
-            if is_expanding:
-                if (target_x + width > screen_right) or getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16):
-                    target_x = old_right - width
-                    self._anchored_to_right = True
-                else:
-                    self._anchored_to_right = False
-            elif is_collapsing:
-                if getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16):
-                    target_x = old_right - width
-                    self._anchored_to_right = True
-                else:
-                    self._anchored_to_right = False
-
-            if getattr(self, "_anchored_to_right", False):
+            # 기본은 왼쪽 모서리 고정이다. 펼치면 오른쪽으로 커지고, 접으면 오른쪽이 줄어든다.
+            # 왼쪽을 고정한 채 펼쳤을 때 화면 오른쪽을 넘칠 때만 오른쪽 모서리를 고정해
+            # 왼쪽으로 커지게 한다.
+            if expanding:
                 if target_x + width > screen_right:
-                    target_x = screen_right - width
-                if target_x < avail.left():
-                    target_x = avail.left()
+                    target_x = old_right - width
+                    self._anchored_to_right = True
+                else:
+                    self._anchored_to_right = False
+            else:
+                # 접을 때: 펼친 창이 화면 안에 있고 펼칠 때 오른쪽 모서리를 고정했다면
+                # 그 오른쪽 모서리로 되돌린다(= 펼치기 전 자리로 복귀).
+                # 펼친 창이 화면 밖으로 삐져나가 있으면 보던 왼쪽 모서리를 유지한다.
+                if self._anchored_to_right and (old_right <= screen_right):
+                    target_x = old_right - width
+            # 어떤 경우에도 창이 화면 오른쪽 밖으로 나가지 않게 한다.
+            if target_x + width > screen_right:
+                target_x = max(avail.left(), screen_right - width)
 
         self.setGeometry(target_x, self.y(), width, height)
 
@@ -4855,6 +4873,7 @@ class FloatingGroupDialog(QDialog):
 
     def _start_window_drag(self, global_pos: QPoint) -> None:
         self._drag_pos = global_pos - self.frameGeometry().topLeft()
+        self._drag_origin = self.pos()
 
     def _perform_window_drag(self, global_pos: QPoint) -> None:
         if hasattr(self, "_drag_pos") and self._drag_pos is not None:
@@ -4864,14 +4883,20 @@ class FloatingGroupDialog(QDialog):
             self.move(snapped_pos)
 
     def _end_window_drag(self) -> None:
+        moved = False
         if hasattr(self, "_drag_pos") and self._drag_pos is not None:
             self._drag_pos = None
+        if hasattr(self, "_drag_origin"):
+            moved = self.pos() != self._drag_origin
+            delattr(self, "_drag_origin")
         screen = self.screen() or QApplication.primaryScreen()
-        if screen:
+        # 기준 모서리는 창을 '실제로 옮겼을 때'만 다시 정한다(제목줄 단순 클릭/접기·펼치기 제외).
+        if screen and moved:
             avail = screen.availableGeometry()
             screen_right = avail.x() + avail.width()
             exp_w = getattr(self, "_expanded_width", 360)
-            self._anchored_to_right = (self.x() + exp_w > screen_right) or (self.x() + self.width() >= screen_right - 16)
+            # 왼쪽을 고정한 채 펼쳤을 때 화면 오른쪽을 넘치는 경우에만 우측 기준(왼쪽으로 커짐).
+            self._anchored_to_right = (self.x() + exp_w > screen_right)
         self._debounced_save(250)
 
     def _get_resize_direction(self, global_pos: QPoint) -> str | None:
@@ -5756,6 +5781,16 @@ class SettingsDialog(QDialog):
         email_value = QLabel("westock@korea.kr")
         email_value.setObjectName("value")
         info_layout.addRow(email_label, email_value)
+        license_label = QLabel("오픈소스")
+        license_label.setObjectName("muted")
+        notices_button = QPushButton("라이선스 전문 보기")
+        notices_button.setObjectName("secondary")
+        notices_button.setCursor(Qt.PointingHandCursor)
+        notices_button.setToolTip(
+            "제3자 오픈소스 고지 및 라이선스 전문(LGPL-3.0 / GPL-3.0)을 확인합니다."
+        )
+        notices_button.clicked.connect(self._show_third_party_notices)
+        info_layout.addRow(license_label, notices_button)
         pg_gen_layout.addWidget(info_card)
         pg_gen_layout.addStretch(1)
 
@@ -6460,6 +6495,48 @@ class SettingsDialog(QDialog):
         }
         self.accept()
 
+
+    def _show_third_party_notices(self) -> None:
+        from taskcalendar.third_party_notices import (
+            NOTICES_TEXT,
+            LGPL3_TEXT,
+            GPL3_TEXT,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("오픈소스 라이선스 고지")
+        dlg.setWindowIcon(_dialog_icon())
+        dlg.resize(780, 620)
+        dlg.setStyleSheet(dialog_stylesheet(self.palette))
+        layout = QVBoxLayout(dlg)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+
+        title = QLabel("제3자 오픈소스 고지")
+        title.setObjectName("title")
+        layout.addWidget(title)
+
+        tabs = QTabWidget()
+        for tab_title, body in (
+            ("고지 요약", NOTICES_TEXT),
+            ("LGPL-3.0 전문", LGPL3_TEXT),
+            ("GPL-3.0 전문", GPL3_TEXT),
+        ):
+            view = QPlainTextEdit(body)
+            view.setReadOnly(True)
+            view.setFont(QFont("Consolas", 9))
+            tabs.addTab(view, tab_title)
+        layout.addWidget(tabs)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        close_btn = QPushButton("닫기")
+        close_btn.setObjectName("primary")
+        close_btn.clicked.connect(dlg.accept)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+        dlg.exec()
 
     def _show_intro_guide(self) -> None:
         dlg = WelcomeFeatureIntroDialog(self, is_dismissed=False)

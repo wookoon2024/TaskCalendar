@@ -1,14 +1,34 @@
 from __future__ import annotations
 
 import functools
+import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
+
+logger = logging.getLogger(__name__)
 
 try:
     from korean_lunar_calendar import KoreanLunarCalendar
     _HAS_KOREAN_LUNAR = True
+    _LUNAR_SOURCE = "installed"
 except ImportError:
-    _HAS_KOREAN_LUNAR = False
+    try:
+        # Fallback: the copy bundled inside the project, so no pip install is
+        # required (air-gapped / 업무망 PCs included).
+        from taskcalendar._vendor.korean_lunar_calendar import KoreanLunarCalendar
+        _HAS_KOREAN_LUNAR = True
+        _LUNAR_SOURCE = "vendored"
+    except ImportError:
+        KoreanLunarCalendar = None  # type: ignore[assignment,misc]
+        _HAS_KOREAN_LUNAR = False
+        _LUNAR_SOURCE = "missing"
+        # Do not fail silently: without the converter every lunar date/solar-term
+        # lookup returns None, so the calendar shows no lunar at all regardless of
+        # the display settings.
+        logger.warning(
+            "음력 변환 모듈을 불러올 수 없어 음력/절기 표시가 비활성화됩니다. "
+            "(설치본 korean_lunar_calendar 및 내장본 taskcalendar/_vendor 모두 없음)"
+        )
 
 
 @dataclass(frozen=True, slots=True)

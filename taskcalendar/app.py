@@ -38,9 +38,11 @@ def _set_windows_app_id() -> None:
 
 def _configure_logging() -> None:
     handlers: list[logging.Handler] = []
+    # stderr 로만 기록한다. (파일 로그는 생성하지 않음)
+    # windowed 빌드(pythonw / --windowed exe)는 stderr 가 없어 로그가 버려진다.
     if sys.stderr:
         handlers.append(logging.StreamHandler(sys.stderr))
-    else:
+    if not handlers:
         handlers.append(logging.NullHandler())
     logging.basicConfig(
         level=logging.INFO,

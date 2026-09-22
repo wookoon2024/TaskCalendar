@@ -1740,8 +1740,11 @@ class MainWindow(QMainWindow):
         self._apply_sidebar_visibility(self._sidebar_visible, save=False)
         self._apply_topbar_visibility(self._topbar_visible, save=False)
 
-        # Background silent auto-vacuum if fragmentation threshold is met
-        QTimer.singleShot(3000, lambda: threading.Thread(target=self.repository.maybe_auto_vacuum, daemon=True).start())
+        # Silent auto-vacuum if fragmentation threshold is met.
+        # Must run on the GUI thread: the repository's SQLite connection is created here,
+        # and using it from another thread raises "SQLite objects created in a thread
+        # can only be used in that same thread" (which silently aborted the vacuum).
+        QTimer.singleShot(3000, self.repository.maybe_auto_vacuum)
 
     def _apply_clickable_cursor(self, root: QWidget | None = None) -> None:
         target = root or self

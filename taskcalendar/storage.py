@@ -3,8 +3,10 @@ from __future__ import annotations
 import calendar
 import ctypes
 import json
+import logging
 import shutil
 import sqlite3
+import time
 import traceback
 from ctypes import wintypes
 from dataclasses import replace
@@ -18,6 +20,7 @@ from taskcalendar.lunar import get_lunar_date
 
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
 CRYPTPROTECT_LOCAL_MACHINE = 0x4
+logger = logging.getLogger(__name__)
 
 
 class DATA_BLOB(ctypes.Structure):
@@ -442,10 +445,42 @@ class EncryptedRepository:
 
         tmp_path = self.db_path.with_suffix(self.db_path.suffix + ".tmp")
         bak_path = self.db_path.with_suffix(self.db_path.suffix + ".bak")
-        tmp_path.write_bytes(encrypted)
-        if self.db_path.exists():
-            shutil.copy2(self.db_path, bak_path)
-        tmp_path.replace(self.db_path)
+        last_exc: Exception | None = None
+        for attempt in range(5):
+            try:
+                tmp_path.write_bytes(encrypted)
+                if self.db_path.exists():
+                    shutil.copy2(self.db_path, bak_path)
+                tmp_path.replace(self.db_path)
+                last_exc = None
+                break
+            except OSError as exc:
+                # Windows search indexers / AV scanners can hold the file briefly.
+                # Retry instead of silently dropping the edit (pythonw.exe has no console,
+                # so an unhandled exception here would vanish without a trace).
+                last_exc = exc
+                time.sleep(0.15 * (attempt + 1))
+        if last_exc is not None:
+            self._log_diagnostic(
+                "save_write_failed",
+                f"db={self.db_path}\nbytes={len(encrypted)}\n{last_exc}\n{traceback.format_exc()}",
+            )
+            logger.error("repository.save failed for %s: %s", self.db_path, last_exc)
+            raise last_exc
+        try:
+            entry_count = self.connection.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+        except Exception:
+            entry_count = -1
+        # Log only when the entry count changes: that is exactly when new data
+        # (or a deletion) must reach the file, so a missing entry is visible here.
+        if entry_count != getattr(self, "_last_logged_entry_count", None):
+            self._last_logged_entry_count = entry_count
+            logger.info(
+                "repository.save entries=%s bytes=%s -> %s",
+                entry_count,
+                len(encrypted),
+                self.db_path,
+            )
 
     def reload_database(self) -> None:
         if self.db_path.exists():
