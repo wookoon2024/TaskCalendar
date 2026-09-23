@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from taskcalendar.fonts import font_family_css
 from taskcalendar.paths import asset_path
 from taskcalendar.themes import THEMES
 
@@ -64,7 +65,7 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
     QDialog, QDialog#entryDialog {{
         background: {bg};
         color: {text};
-        font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+        font-family: {font_family_css()};
         font-size: 13px;
     }}
     QLabel {{

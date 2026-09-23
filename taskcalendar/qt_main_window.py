@@ -66,6 +66,8 @@ from taskcalendar.desktop_services import (
 )
 from taskcalendar.excel_io import export_entries_to_excel, import_entries_from_excel
 from taskcalendar import APP_VERSION
+from taskcalendar import fonts
+from taskcalendar.fonts import font_family_css, scale_px
 from taskcalendar.backup_io import backup_to_zip, restore_from_zip
 from taskcalendar.models import AlertType, CalendarEntry, EntryType, Alarm, calculate_next_alarm_trigger
 from taskcalendar.paths import asset_path, data_path
@@ -237,7 +239,7 @@ def app_stylesheet(p: dict[str, str]) -> str:
     QMainWindow {{
         background: {p['bg']};
         color: {p['text']};
-        font-family: 'Segoe UI', 'Segoe UI Emoji', 'Malgun Gothic';
+        font-family: {font_family_css()};
         font-size: 13px;
     }}
     QLabel {{
@@ -338,7 +340,7 @@ def app_stylesheet(p: dict[str, str]) -> str:
         border: 1px solid {p['line']};
         border-radius: 6px;
         padding: 6px 10px;
-        font-family: 'Malgun Gothic', 'Segoe UI', sans-serif;
+        font-family: {font_family_css()};
         font-size: 12px;
     }}
     QScrollBar:vertical {{
@@ -1174,6 +1176,7 @@ class MainWindow(QMainWindow):
         self._memo_card_widgets: dict[int, QWidget] = {}
         self._active_memo_dialogs: dict[int | str, EntryDialog] = {}
         self._active_group_dialogs: dict[str, QDialog] = {}
+        self._calendar_clicked_since_restore = False
         self._pending_scroll_memo_id: int | None = None
         self._sticker_widgets: dict[str, StickerItem] = {}
         self._sticker_edit_mode = False
@@ -1257,6 +1260,10 @@ class MainWindow(QMainWindow):
             self._schedule_calendar_rerender()
             self._sync_sticker_overlay()
             return True
+        if event.type() == QEvent.Type.MouseButtonPress:
+            # 캘린더 창(또는 그 자식 위젯)을 클릭하면 메모/그룹 창 위로 올린다.
+            # 이미 활성화된 창은 Windows가 클릭만으로 올려주지 않기 때문에 직접 처리한다.
+            self._raise_calendar_over_memos(watched)
         if event.type() == QEvent.Type.KeyPress and self._handle_calendar_navigation_key(event):
             event.accept()
             return True
@@ -1771,7 +1778,7 @@ class MainWindow(QMainWindow):
                 f"border: 1px solid {p.get('line', '#CBD5E1')}; "
                 f"border-radius: 6px; "
                 f"padding: 6px 10px; "
-                f"font-family: 'Malgun Gothic', 'Segoe UI', sans-serif; "
+                f"font-family: {font_family_css()}; "
                 f"font-size: 12px; "
                 f"}}"
             )
@@ -2338,6 +2345,9 @@ class MainWindow(QMainWindow):
 
     def _toggle_window_visibility(self) -> None:
         if self.isVisible() and not self.isMinimized():
+            # 캘린더를 숨기면 Windows가 다음 창(다른 앱/바탕화면)을 활성화하면서 메모 위로 올린다.
+            # 숨기기 전에 메모를 최상위로 올려두어야 메모가 같이 사라지지 않고 그대로 떠 있는다.
+            self._set_memos_topmost(True)
             self.hide()
             return
         self._restore_window_state()
@@ -2393,6 +2403,7 @@ class MainWindow(QMainWindow):
             self._last_normal_geometry = QRect(current_geometry)
 
     def _restore_window_state(self) -> None:
+        self._calendar_clicked_since_restore = False
         self._suspend_window_state_tracking = True
         if self._last_window_was_maximized:
             self.showMaximized()
@@ -2402,12 +2413,23 @@ class MainWindow(QMainWindow):
                 self.setGeometry(self._last_normal_geometry)
         self.activateWindow()
         self.raise_()
+        # 캘린더를 표시하면서 Windows가 캘린더를 메모/그룹 창 위로 올리므로, 캘린더만 다시 아래로 내린다.
+        self._keep_calendar_below_memos()
         QTimer.singleShot(0, self._finish_window_restore)
+        # 표시 직후 보정이 늦어지더라도 메모가 임시 최상위 상태로 남지 않게 한 번 더 되돌린다.
+        QTimer.singleShot(400, self._revert_memos_topmost)
+
+    def _revert_memos_topmost(self) -> None:
+        self._set_memos_topmost(False)
 
     def _finish_window_restore(self) -> None:
         self._suspend_window_state_tracking = False
         self._remember_window_state()
-        self._raise_memos_above_calendar()
+        # 숨김 동안 다른 창에 가려지지 않도록 임시로 최상위로 올려둔 메모 상태를 되돌린다.
+        self._set_memos_topmost(False)
+        # 표시 직후 보정이 사용자가 캘린더를 클릭한 뒤에 실행되면 클릭 결과를 되돌려 버리므로 건너뛴다.
+        if not self._calendar_clicked_since_restore:
+            self._keep_calendar_below_memos()
 
     def _load_window_state(self) -> None:
         raw = self.repository.get_setting("window_state_v1", "")
@@ -4162,16 +4184,16 @@ class MainWindow(QMainWindow):
                 border: 1px solid {line_col};
                 border-radius: 6px;
                 padding: 6px 10px;
-                font-family: 'Malgun Gothic', 'Segoe UI', sans-serif;
+                font-family: {font_family_css()};
                 font-size: 12px;
             }}
         """)
 
         html_lines = [
-            f"<div style=\"font-family: 'Malgun Gothic', 'Segoe UI', sans-serif; font-size: 12px; color: {text_main}; white-space: nowrap;\">",
-            f"<div style=\"font-weight: bold; font-size: 12px; margin-bottom: 4px; white-space: nowrap;\"><nobr>📋 {target_day.strftime('%Y-%m-%d')} 업무 총 {count}건:</nobr></div>",
+            f"<div style=\"font-family: {font_family_css()}; font-size: {scale_px(12)}px; color: {text_main}; white-space: nowrap;\">",
+            f"<div style=\"font-weight: bold; font-size: {scale_px(12)}px; margin-bottom: 4px; white-space: nowrap;\"><nobr>📋 {target_day.strftime('%Y-%m-%d')} 업무 총 {count}건:</nobr></div>",
             f"<hr style=\"border: none; border-top: 1px solid {line_col}; margin: 4px 0 6px 0;\">",
-            f"<div style=\"font-size: 11.5px; line-height: 150%; white-space: nowrap;\">",
+            f"<div style=\"font-size: {scale_px(11.5)}px; line-height: 150%; white-space: nowrap;\">",
         ]
         for t in tasks[:10]:
             clean_title = " ".join((t.title or "").split())
@@ -5330,6 +5352,30 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _apply_ui_font(self) -> None:
+        """저장된 글꼴 패밀리/크기 배율을 앱 전체에 적용한다."""
+        family = self.repository.get_setting("ui_font_family", fonts.DEFAULT_FAMILY)
+        scale = self.repository.get_setting("ui_font_scale", fonts.DEFAULT_SCALE)
+        fonts.set_ui_font(family, scale)
+        self.setStyleSheet(app_stylesheet(self.palette))
+        self._apply_tooltip_palette()
+        # 이미 만들어진 위젯의 인라인 스타일시트(글자 크기)도 새 배율로 다시 적용
+        fonts.reapply_widget_styles()
+        # 열려 있는 메모/그룹 창은 위젯 글꼴을 직접 갱신해야 새 글꼴이 반영된다
+        for dlg in list(getattr(self, "_active_memo_dialogs", {}).values()) + list(
+            getattr(self, "_active_group_dialogs", {}).values()
+        ):
+            if dlg is None:
+                continue
+            try:
+                for child in dlg.findChildren(QWidget):
+                    child_font = child.font()
+                    if child_font.family() != fonts.ui_font_family():
+                        child_font.setFamily(fonts.ui_font_family())
+                        child.setFont(child_font)
+            except Exception:
+                pass
+
     def _reload_and_apply_all_settings(self, companion_settings: dict[str, str] | None = None) -> None:
         """
         Reloads all user preferences from the repository and companion settings JSON,
@@ -5348,6 +5394,9 @@ class MainWindow(QMainWindow):
             self._apply_tooltip_palette()
             if getattr(self, "_task_manager_dialog", None) is not None:
                 self._task_manager_dialog.apply_palette(self.palette)
+
+        # 1b. 글꼴 (패밀리/크기 배율)
+        self._apply_ui_font()
 
         # 2. Lunar & Display preferences
         self.hide_completed_on_calendar = self.repository.get_setting("hide_completed_on_calendar", "1") == "1"
@@ -5920,6 +5969,8 @@ class MainWindow(QMainWindow):
             available_task_statuses=available_statuses,
             calendar_task_statuses=current_cal_task_statuses,
             calendar_sidebar_title_only=getattr(self, "calendar_sidebar_title_only", False),
+            ui_font_family=self.repository.get_setting("ui_font_family", fonts.DEFAULT_FAMILY),
+            ui_font_scale=self.repository.get_setting("ui_font_scale", fonts.DEFAULT_SCALE),
         )
         if dialog.exec() and dialog.result is not None:
             action = str(dialog.result.get("action", "apply"))
@@ -6006,9 +6057,20 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("auto_backup_interval_days", str(dialog.result.get("auto_backup_interval_days", 1)))
             self.repository.set_setting("auto_backup_keep_count", str(dialog.result.get("auto_backup_keep_count", 5)))
 
+            # 글꼴 설정
+            old_font_family = self.repository.get_setting("ui_font_family", fonts.DEFAULT_FAMILY)
+            old_font_scale = self.repository.get_setting("ui_font_scale", fonts.DEFAULT_SCALE)
+            new_font_family = str(dialog.result.get("ui_font_family", old_font_family)) or fonts.DEFAULT_FAMILY
+            new_font_scale = str(dialog.result.get("ui_font_scale", old_font_scale)) or fonts.DEFAULT_SCALE
+            self.repository.set_setting("ui_font_family", new_font_family)
+            self.repository.set_setting("ui_font_scale", new_font_scale)
+            font_changed = (new_font_family != old_font_family) or (new_font_scale != old_font_scale)
+
             if not self._sticker_animation_enabled:
                 self._sticker_animation_state.clear()
             self.repository.save()
+            if font_changed:
+                self._apply_ui_font()
             if not applied or current_auto_start != requested_auto_start:
                 QMessageBox.warning(
                     self,
@@ -6369,6 +6431,167 @@ class MainWindow(QMainWindow):
                         )
                     except Exception:
                         pass
+
+    def _set_memos_topmost(self, topmost: bool) -> None:
+        """메모/그룹 창을 임시로 최상위로 올리거나(캘린더 숨김) 원래 상태로 되돌린다.
+
+        캘린더를 숨기면 Windows가 다음 창(다른 앱)을 활성화하면서 그 창이 메모 위로 올라온다.
+        숨기기 직전에 메모를 최상위로 만들어 두면 다른 창에 가려지지 않아 깜박이지 않는다.
+        이미 '항상 위에 고정'된 창은 건드리지 않는다.
+        """
+        try:
+            user32 = ctypes.windll.user32
+            user32.SetWindowPos.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_uint,
+            ]
+            user32.SetWindowPos.restype = ctypes.c_int
+        except Exception:
+            return
+
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_NOACTIVATE = 0x0010
+        target_z = ctypes.c_void_p(-1) if topmost else ctypes.c_void_p(-2)
+
+        dialogs = list(getattr(self, "_active_memo_dialogs", {}).values())
+        dialogs += list(getattr(self, "_active_group_dialogs", {}).values())
+        for dlg in dialogs:
+            if dlg is None or not dlg.isVisible():
+                continue
+            if getattr(dlg, "_is_floating", False):
+                continue
+            try:
+                hwnd = int(dlg.winId())
+            except Exception:
+                continue
+            if not hwnd:
+                continue
+            try:
+                user32.SetWindowPos(
+                    ctypes.c_void_p(hwnd),
+                    target_z,
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                )
+            except Exception:
+                pass
+
+    def _raise_calendar_over_memos(self, watched) -> None:
+        """캘린더 창 클릭 시 캘린더를 메모/그룹 창 위로 올린다(메모 창은 건드리지 않는다)."""
+        widget = watched if isinstance(watched, QWidget) else None
+        if widget is None:
+            return
+        if widget is not self and not self.isAncestorOf(widget):
+            return
+
+        # 캘린더를 숨긴 동안 임시로 최상위로 둔 메모가 남아 있으면 먼저 원래대로 되돌린다.
+        # (그러지 않으면 최상위 메모 아래로 내려가 캘린더를 올려도 가려진 채로 남는다)
+        self._set_memos_topmost(False)
+        self._calendar_clicked_since_restore = True
+
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_NOACTIVATE = 0x0010
+        try:
+            user32 = ctypes.windll.user32
+            user32.SetWindowPos.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_uint,
+            ]
+            user32.SetWindowPos.restype = ctypes.c_int
+            user32.SetWindowPos(
+                ctypes.c_void_p(int(self.winId())),
+                ctypes.c_void_p(0),
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        except Exception:
+            pass
+
+    def _keep_calendar_below_memos(self) -> None:
+        """메모/그룹 창은 표시 상태/위치를 그대로 둔 채, 캘린더 창만 그 아래로 내린다.
+
+        Windows는 캘린더를 활성화할 때 z-순서를 메모 위로 올린다. 이때 메모를 다시 올리는 대신
+        캘린더만 아래로 내리면 메모 창이 사라졌다 나타나는 깜박임이 생기지 않는다.
+        (이미 최상단인 메모는 SetWindowPos가 사실상 무변화라 화면에 영향이 없다.)
+        """
+        self._raise_memos_above_calendar()
+        GWL_EXSTYLE = -20
+        WS_EX_TOPMOST = 0x00000008
+        GW_CHILD = 5
+        GW_HWNDNEXT = 2
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        SWP_NOACTIVATE = 0x0010
+
+        try:
+            user32 = ctypes.windll.user32
+        except Exception:
+            return
+
+        memo_hwnds: set[int] = set()
+        dialogs = list(getattr(self, "_active_memo_dialogs", {}).values())
+        dialogs += list(getattr(self, "_active_group_dialogs", {}).values())
+        for dlg in dialogs:
+            if dlg is None or not dlg.isVisible():
+                continue
+            try:
+                hwnd = int(dlg.winId())
+            except Exception:
+                continue
+            if not hwnd:
+                continue
+            # 항상 위로 고정된 창은 어차피 캘린더보다 위에 있으므로 대상에서 제외한다.
+            if user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE) & WS_EX_TOPMOST:
+                continue
+            memo_hwnds.add(hwnd)
+        if not memo_hwnds:
+            return
+
+        try:
+            user32.GetWindow.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+            user32.GetWindow.restype = ctypes.c_void_p
+            user32.GetDesktopWindow.restype = ctypes.c_void_p
+            user32.SetWindowPos.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_uint,
+            ]
+            user32.SetWindowPos.restype = ctypes.c_int
+
+            # 데스크톱 z-체인을 앞에서 뒤로 훑어 가장 아래에 있는 메모 창을 찾는다.
+            lowest = 0
+            hwnd = user32.GetWindow(user32.GetDesktopWindow(), GW_CHILD)
+            while hwnd:
+                if hwnd in memo_hwnds:
+                    lowest = hwnd
+                hwnd = user32.GetWindow(hwnd, GW_HWNDNEXT)
+            if not lowest:
+                return
+
+            user32.SetWindowPos(
+                ctypes.c_void_p(int(self.winId())),
+                ctypes.c_void_p(lowest),
+                0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            )
+        except Exception:
+            pass
 
     def _open_memo_group(self, group_id: str) -> QDialog | None:
         from taskcalendar.qt_dialogs import FloatingGroupDialog

@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 )
 
 from taskcalendar.rich_text_edit import RichTextEdit
+from taskcalendar.fonts import DEFAULT_FAMILY, DEFAULT_SCALE, SCALE_OPTIONS, scale_px, ui_font_family
 from taskcalendar.models import (
     ALERT_OPTIONS,
     COLOR_OPTIONS,
@@ -2823,7 +2824,7 @@ class EntryDialog(QDialog):
         self.btn_italic = QPushButton("I")
         self.btn_italic.setProperty("class", "editorBtn")
         self.btn_italic.setCheckable(True)
-        font_i = QFont("Segoe UI", 10)
+        font_i = QFont(ui_font_family(), scale_px(10))
         font_i.setItalic(True)
         self.btn_italic.setFont(font_i)
         self.btn_italic.setToolTip("기울임 (Ctrl+I)")
@@ -2833,7 +2834,7 @@ class EntryDialog(QDialog):
         self.btn_underline = QPushButton("U")
         self.btn_underline.setProperty("class", "editorBtn")
         self.btn_underline.setCheckable(True)
-        font_u = QFont("Segoe UI", 10)
+        font_u = QFont(ui_font_family(), scale_px(10))
         font_u.setUnderline(True)
         self.btn_underline.setFont(font_u)
         self.btn_underline.setToolTip("밑줄 (Ctrl+U)")
@@ -2843,7 +2844,7 @@ class EntryDialog(QDialog):
         self.btn_strike = QPushButton("S")
         self.btn_strike.setProperty("class", "editorBtn")
         self.btn_strike.setCheckable(True)
-        font_s = QFont("Segoe UI", 10)
+        font_s = QFont(ui_font_family(), scale_px(10))
         font_s.setStrikeOut(True)
         self.btn_strike.setFont(font_s)
         self.btn_strike.setToolTip("취소선")
@@ -5722,6 +5723,8 @@ class SettingsDialog(QDialog):
         available_task_statuses: list[str] | None = None,
         calendar_task_statuses: list[str] | None = None,
         calendar_sidebar_title_only: bool = False,
+        ui_font_family: str = DEFAULT_FAMILY,
+        ui_font_scale: str = DEFAULT_SCALE,
     ) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
@@ -6017,6 +6020,50 @@ class SettingsDialog(QDialog):
         theme_label.setObjectName("muted")
         appearance_layout.addRow(theme_label, self.theme_combo)
         pg_skin_layout.addWidget(appearance)
+
+        font_card = QFrame()
+        font_card.setObjectName("card")
+        font_layout = QFormLayout(font_card)
+        font_layout.setContentsMargins(14, 12, 14, 12)
+        font_layout.setSpacing(10)
+        font_title = QLabel("글꼴 설정")
+        font_title.setObjectName("sectionTitle")
+        font_layout.addRow(font_title)
+
+        self.ui_font_family_combo = QFontComboBox()
+        self.ui_font_family_combo.setCurrentFont(QFont(ui_font_family))
+        self.ui_font_family_combo.setFixedWidth(240)
+        family_label = QLabel("글꼴")
+        family_label.setObjectName("muted")
+        font_layout.addRow(family_label, self.ui_font_family_combo)
+
+        self.ui_font_scale_combo = QComboBox()
+        for scale_key_name, scale_label_text in (
+            ("small", "작게"),
+            ("normal", "보통"),
+            ("large", "크게"),
+            ("xlarge", "아주 크게"),
+        ):
+            self.ui_font_scale_combo.addItem(
+                f"{scale_label_text} ({int(SCALE_OPTIONS[scale_key_name] * 100)}%)",
+                scale_key_name,
+            )
+        scale_index = self.ui_font_scale_combo.findData(ui_font_scale)
+        self.ui_font_scale_combo.setCurrentIndex(
+            scale_index if scale_index >= 0 else self.ui_font_scale_combo.findData(DEFAULT_SCALE)
+        )
+        self.ui_font_scale_combo.setFixedWidth(240)
+        scale_label = QLabel("글자 크기")
+        scale_label.setObjectName("muted")
+        font_layout.addRow(scale_label, self.ui_font_scale_combo)
+
+        self.ui_font_preview = QLabel("가나다 ABC 123 - 미리보기")
+        font_layout.addRow(self.ui_font_preview)
+        self._update_font_preview()
+        self.ui_font_family_combo.currentFontChanged.connect(self._update_font_preview)
+        self.ui_font_scale_combo.currentIndexChanged.connect(self._update_font_preview)
+
+        pg_skin_layout.addWidget(font_card)
         pg_skin_layout.addStretch(1)
 
         self.pages.addWidget(page_skin)
@@ -6552,6 +6599,8 @@ class SettingsDialog(QDialog):
             "memo_title_only": self.memo_title_only_check.isChecked(),
             "memo_expand_anchor": "right" if self.memo_expand_anchor_check.isChecked() else "left",
             "show_window_controls": self.window_controls_check.isChecked(),
+            "ui_font_family": self.ui_font_family_combo.currentFont().family() or DEFAULT_FAMILY,
+            "ui_font_scale": str(self.ui_font_scale_combo.currentData() or DEFAULT_SCALE),
         }
         self.accept()
 
@@ -6561,6 +6610,7 @@ class SettingsDialog(QDialog):
             NOTICES_TEXT,
             LGPL3_TEXT,
             GPL3_TEXT,
+            OFL1_1_TEXT,
         )
 
         dlg = QDialog(self)
@@ -6581,6 +6631,7 @@ class SettingsDialog(QDialog):
             ("고지 요약", NOTICES_TEXT),
             ("LGPL-3.0 전문", LGPL3_TEXT),
             ("GPL-3.0 전문", GPL3_TEXT),
+            ("OFL-1.1 전문", OFL1_1_TEXT),
         ):
             view = QPlainTextEdit(body)
             view.setReadOnly(True)
@@ -6601,6 +6652,16 @@ class SettingsDialog(QDialog):
     def _show_intro_guide(self) -> None:
         dlg = WelcomeFeatureIntroDialog(self, is_dismissed=False)
         dlg.exec()
+
+    def _update_font_preview(self, *_args) -> None:
+        """선택한 글꼴/배율을 미리보기 라벨에 바로 반영한다."""
+        if not hasattr(self, "ui_font_preview"):
+            return
+        family = self.ui_font_family_combo.currentFont().family() or DEFAULT_FAMILY
+        scale = SCALE_OPTIONS.get(str(self.ui_font_scale_combo.currentData()), 1.0)
+        preview_font = QFont(family)
+        preview_font.setPixelSize(max(1, round(13 * scale)))
+        self.ui_font_preview.setFont(preview_font)
 
     def _get_current_cal_shortcut_from_ui(self) -> str:
         modifiers: list[str] = []

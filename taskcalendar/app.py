@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from PySide6.QtCore import QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
+from taskcalendar import fonts
 from taskcalendar.desktop_services import (
     default_shortcut,
     default_memo_shortcut,
@@ -176,6 +177,9 @@ def run() -> None:
     _set_windows_app_id()
     app = ensure_qt_application()
     app.setApplicationName("K캘린더")
+    # 내장 폰트(Pretendard) 등록 + 전역 글자 크기 배율 훅 설치
+    fonts.install_style_hook()
+    fonts.load_bundled_fonts()
     icon = app_icon()
     if not icon.isNull():
         app.setWindowIcon(icon)
@@ -194,6 +198,12 @@ def run() -> None:
     set_startup_enabled(desired_auto_start)
     repository.set_setting("auto_start", "1" if is_startup_enabled() else "0")
     repository.save()
+
+    # 저장된 글꼴/크기 설정을 UI를 만들기 전에 반영
+    fonts.set_ui_font(
+        repository.get_setting("ui_font_family", fonts.DEFAULT_FAMILY),
+        repository.get_setting("ui_font_scale", fonts.DEFAULT_SCALE),
+    )
 
     window = MainWindow(repository)
 
