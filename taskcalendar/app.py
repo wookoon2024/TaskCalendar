@@ -30,6 +30,17 @@ IPC_SERVER_NAME = "TaskCalendar_IPC"
 IPC_TIMEOUT_MS = 3000
 
 
+def _enable_windows_dpi_awareness() -> None:
+    try:
+        # Set Windows Per-Monitor V2 DPI awareness before Qt initializes
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    except Exception:
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            pass
+
+
 def _set_windows_app_id() -> None:
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("taskcalendar.calendar")
@@ -173,7 +184,7 @@ def run() -> None:
         return
 
     _configure_logging()
-
+    _enable_windows_dpi_awareness()
     _set_windows_app_id()
     app = ensure_qt_application()
     app.setApplicationName("K캘린더")

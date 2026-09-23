@@ -179,7 +179,7 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         background: {accent_soft};
         border-color: {accent};
     }}
-    QLineEdit, QComboBox, QDateEdit, QTimeEdit, QSpinBox, QPlainTextEdit, QTextEdit {{
+    QLineEdit, QComboBox, QFontComboBox, QDateEdit, QTimeEdit, QSpinBox, QPlainTextEdit, QTextEdit {{
         background: {panel};
         border: 1px solid {line};
         border-radius: 8px;
@@ -187,6 +187,11 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         padding: 4px 8px;
         selection-background-color: {accent_soft};
         selection-color: {text};
+    }}
+    QComboBox QLineEdit, QFontComboBox QLineEdit {{
+        border: none;
+        background: transparent;
+        padding: 0px;
     }}
     QPlainTextEdit, QTextEdit {{
         padding: 8px;
@@ -324,7 +329,7 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         color: {text};
         font-weight: 700;
     }}
-    QComboBox:disabled, QDateEdit:disabled, QTimeEdit:disabled, QSpinBox:disabled {{
+    QComboBox:disabled, QFontComboBox:disabled, QDateEdit:disabled, QTimeEdit:disabled, QSpinBox:disabled {{
         background: {panel_alt};
         color: {muted};
         border: 1px solid {line};

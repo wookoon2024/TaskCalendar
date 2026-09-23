@@ -84,6 +84,8 @@ def set_ui_font(family: str | None = None, scale: str | float | None = None) -> 
         if dpi <= 0:
             dpi = 96.0
         font = QFont(_family)
+        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality)
+        font.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
         font.setPointSizeF(max(1.0, scale_px(BASE_FONT_PX) * 72.0 / dpi))
         app.setFont(font)
 

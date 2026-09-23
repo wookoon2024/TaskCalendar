@@ -6032,6 +6032,7 @@ class SettingsDialog(QDialog):
 
         self.ui_font_family_combo = QFontComboBox()
         self.ui_font_family_combo.setCurrentFont(QFont(ui_font_family))
+        self.ui_font_family_combo.setEditable(False)
         self.ui_font_family_combo.setFixedWidth(240)
         family_label = QLabel("글꼴")
         family_label.setObjectName("muted")
