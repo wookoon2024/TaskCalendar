@@ -6064,7 +6064,8 @@ class SettingsDialog(QDialog):
             f"color: {self.palette['text']}; "
             f"border: 1px solid {self.palette['line']}; "
             f"border-radius: 6px; "
-            f"padding: 10px 12px; "
+            f"padding: 10px 14px; "
+            f"min-height: 42px; "
             f"margin-top: 4px;"
         )
         font_layout.addRow(self.ui_font_preview)
@@ -6675,7 +6676,7 @@ class SettingsDialog(QDialog):
             dpi = 96.0
         preview_font = QFont(family)
         preview_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality)
-        preview_font.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
+        preview_font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
         preview_font.setPointSizeF(max(1.0, scale_px(13 * scale) * 72.0 / dpi))
         self.ui_font_preview.setFont(preview_font)
 
