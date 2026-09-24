@@ -6057,8 +6057,16 @@ class SettingsDialog(QDialog):
         scale_label = QLabel("글자 크기")
         scale_label.setObjectName("muted")
         font_layout.addRow(scale_label, self.ui_font_scale_combo)
-
-        self.ui_font_preview = QLabel("가나다 ABC 123 - 미리보기")
+        self.ui_font_preview = QLabel("다람쥐 헌 쳇바퀴에 타고파. 123,456,789원 (가나다라 ABC)")
+        self.ui_font_preview.setAlignment(Qt.AlignCenter)
+        self.ui_font_preview.setStyleSheet(
+            f"background: {self.palette['panel_alt']}; "
+            f"color: {self.palette['text']}; "
+            f"border: 1px solid {self.palette['line']}; "
+            f"border-radius: 6px; "
+            f"padding: 10px 12px; "
+            f"margin-top: 4px;"
+        )
         font_layout.addRow(self.ui_font_preview)
         self._update_font_preview()
         self.ui_font_family_combo.currentFontChanged.connect(self._update_font_preview)
@@ -6660,8 +6668,15 @@ class SettingsDialog(QDialog):
             return
         family = self.ui_font_family_combo.currentFont().family() or DEFAULT_FAMILY
         scale = SCALE_OPTIONS.get(str(self.ui_font_scale_combo.currentData()), 1.0)
+        app = QApplication.instance()
+        screen = app.primaryScreen() if app else None
+        dpi = float(screen.logicalDotsPerInch()) if screen is not None else 96.0
+        if dpi <= 0:
+            dpi = 96.0
         preview_font = QFont(family)
-        preview_font.setPixelSize(max(1, round(13 * scale)))
+        preview_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality)
+        preview_font.setHintingPreference(QFont.HintingPreference.PreferVerticalHinting)
+        preview_font.setPointSizeF(max(1.0, scale_px(13 * scale) * 72.0 / dpi))
         self.ui_font_preview.setFont(preview_font)
 
     def _get_current_cal_shortcut_from_ui(self) -> str:
