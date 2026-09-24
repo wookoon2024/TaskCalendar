@@ -313,12 +313,16 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         border-radius: 10px;
         outline: none;
         padding: 6px;
+        font-family: {font_family_css()};
+        font-size: 14px;
+        font-weight: 600;
     }}
     QListWidget#navSidebar::item {{
-        height: 38px;
-        min-height: 38px;
+        height: 40px;
+        min-height: 40px;
         padding-left: 10px;
-        font-size: 13px;
+        font-family: {font_family_css()};
+        font-size: 14px;
         font-weight: 600;
         color: {text};
         border-radius: 6px;
