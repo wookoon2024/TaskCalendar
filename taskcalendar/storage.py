@@ -625,7 +625,12 @@ class EncryptedRepository:
 
     def get_setting(self, key: str, default: str = "") -> str:
         row = self.connection.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
-        return row["value"] if row else default
+        if not row:
+            return default
+        val = row["value"]
+        if val is None or (isinstance(val, str) and not val.strip() and default):
+            return default
+        return val
 
     def get_all_settings(self) -> dict[str, str]:
         rows = self.connection.execute("SELECT key, value FROM settings").fetchall()

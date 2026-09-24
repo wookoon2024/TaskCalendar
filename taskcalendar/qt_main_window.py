@@ -236,6 +236,9 @@ class QtGlobalHotkeyManager:
 
 def app_stylesheet(p: dict[str, str]) -> str:
     return f"""
+    QWidget {{
+        font-family: {font_family_css()};
+    }}
     QMainWindow {{
         background: {p['bg']};
         color: {p['text']};

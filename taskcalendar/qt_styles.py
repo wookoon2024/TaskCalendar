@@ -62,6 +62,9 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
     check_icon = asset_path("checkmark.svg").as_posix()
 
     return f"""
+    QWidget {{
+        font-family: {font_family_css()};
+    }}
     QDialog, QDialog#entryDialog {{
         background: {bg};
         color: {text};
