@@ -1,6 +1,21 @@
-﻿# Version History
+# Version History
 
 이 파일은 TaskCalendar의 버전 변경 이력을 관리합니다.
+
+## [1.9.1] - 2026-09-26
+
+### Improved
+- **150% 고해상도(DPI) 글꼴 렌더링 품질 최적화**:
+  - Windows DirectWrite 환경에 최적화된 Pretendard TrueType(TTF) 정식 글꼴 탑재
+  - Qt QSS 글꼴 패밀리 파싱 단일화로 Pretendard 100% 매칭 보장
+  - 고해상도 소수점(150%) 배율에서 힌팅 왜곡 및 계단현상 방지(`PreferNoHinting`) 적용으로 부드러운 벡터 곡선 출력
+  - 전체 위젯(`QWidget`) Pretendard 글꼴 상속 및 빈 설정값 기본값 복구 로직 강화
+
+### Fixed & Enhanced
+- **환경설정 UI 가독성 및 디자인 개선**:
+  - 환경설정 좌측 메뉴(`기본`, `캘린더`, `스킨`, `메모`, `단축키`, `데이터`) 글자 크기를 우측 본문과 조화롭게 `14px DemiBold`로 확대
+  - 환경설정 스킨 탭 글꼴 선택 콤보박스 텍스트 시작 위치 완벽 정렬 (편집 커서 제거)
+  - 스마트 계산기 스타일의 프리텐다드 실시간 미리보기 카드 박스 적용 및 텍스트 하단 잘림(Clipping) 해소
 
 ## [1.9.0] - 2026-09-23
 
