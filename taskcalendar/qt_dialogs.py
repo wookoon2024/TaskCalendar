@@ -483,6 +483,22 @@ def _screen_geometry_for(x: int, y: int, w: int, h: int) -> QRect:
     return QRect(0, 0, 1920, 1080)
 
 
+def clamp_rect_into_screen(avail: QRect, x: int, y: int, w: int, h: int, min_w: int, min_h: int) -> tuple[int, int, int, int]:
+    """창이 화면 작업 영역을 넘지 않도록 위치와 크기를 함께 보정한다.
+
+    크기 자체가 작업 영역보다 크면 화면에 맞는 크기로 줄여주고,
+    그렇지 않으면 위치만 화면 안쪽으로 당긴다.
+    """
+    max_w = max(min_w, avail.width())
+    max_h = max(min_h, avail.height())
+    w = max(min_w, min(int(w), max_w))
+    h = max(min_h, min(int(h), max_h))
+
+    x = max(avail.left(), min(int(x), avail.left() + max_w - w))
+    y = max(avail.top(), min(int(y), avail.top() + max_h - h))
+    return x, y, w, h
+
+
 def snap_window_rect(current_geo: QRect, other_geos: list[QRect], screen_geo: QRect, threshold: int = 16) -> QPoint:
     x = current_geo.x()
     y = current_geo.y()
@@ -3224,13 +3240,17 @@ class EntryDialog(QDialog):
                 target_x = old_right - width
                 self._anchored_to_right = True
 
-        # 어떤 경우에도 창이 화면 오른쪽이나 왼쪽 밖으로 나가지 않도록 최종 클램핑
-        if target_x + width > screen_right:
-            target_x = max(avail.left(), screen_right - width)
-        if target_x < avail.left():
-            target_x = avail.left()
-
-        self.setGeometry(target_x, self.y(), width, height)
+        # 위치와 크기를 한 번에 보정해 화면 밖으로 나가지 않게 한다
+        target_x, target_y, target_w, target_h = clamp_rect_into_screen(
+            avail,
+            target_x,
+            self.y(),
+            width,
+            height,
+            self.minimumWidth(),
+            self.minimumHeight(),
+        )
+        self.setGeometry(target_x, target_y, target_w, target_h)
 
     def _toggle_collapse(self) -> None:
         self._is_collapsed = not getattr(self, "_is_collapsed", False)
@@ -4818,13 +4838,17 @@ class FloatingGroupDialog(QDialog):
                 target_x = old_right - width
                 self._anchored_to_right = True
 
-        # 어떤 경우에도 창이 화면 오른쪽이나 왼쪽 밖으로 나가지 않도록 최종 클램핑
-        if target_x + width > screen_right:
-            target_x = max(avail.left(), screen_right - width)
-        if target_x < avail.left():
-            target_x = avail.left()
-
-        self.setGeometry(target_x, self.y(), width, height)
+        # 위치와 크기를 한 번에 보정해 화면 밖으로 나가지 않게 한다
+        target_x, target_y, target_w, target_h = clamp_rect_into_screen(
+            avail,
+            target_x,
+            self.y(),
+            width,
+            height,
+            self.minimumWidth(),
+            self.minimumHeight(),
+        )
+        self.setGeometry(target_x, target_y, target_w, target_h)
 
     def paintEvent(self, event) -> None:
         opt = QStyleOption()
