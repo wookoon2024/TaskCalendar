@@ -11,7 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
     viewConfig: document.getElementById('view-config'),
     btnToggleConfig: document.getElementById('btn-toggle-config'),
     btnPickElement: document.getElementById('btn-pick-element'),
-    siteRuleBadge: document.getElementById('site-rule-badge'),
+    siteRuleBadge: document.getElementById('site-rule-status'),
     siteDomainLabel: document.getElementById('site-domain-label'),
     cfgDomainBadge: document.getElementById('cfg-domain-badge'),
 
@@ -59,6 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // 현재 도메인의 맞춤 규칙 및 사용자정의 서식 상태
   let activeRules = {};
   let activeTemplates = {};
+  let activePatterns = {};
   let ruleSamples = {};
 
   // ========== 등록 뷰: 탭 전환 ==========
@@ -112,7 +113,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const actionsEl = document.querySelector('.actions');
     if (target === 'config') {
       els.headerRow.style.display = 'none';
-      els.siteRuleBadge.style.display = 'none';
+      if (els.siteRuleBadge) els.siteRuleBadge.style.display = 'none';
       els.viewRegister.style.display = 'none';
       if (actionsEl) actionsEl.style.display = 'none';
       els.viewConfig.style.display = 'flex';
@@ -341,8 +342,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // ========== 서식 치환 헬퍼 (미리보기용) ==========
-  function renderTemplatePreview(templateStr) {
+  // ========== 서식 치환 & 정규식 패턴 추출 헬퍼 (미리보기용) ==========
+  function applyExtractPattern(text, pattern) {
+    if (!text || !pattern || typeof pattern !== 'string') return text || '';
+    let p = pattern.trim();
+    if (!p) return text;
+    try {
+      if (p === '대괄호' || p === 'bracket') p = '\\[(.*?)\\]';
+      else if (p === '소괄호' || p === 'paren') p = '\\((.*?)\\)';
+      else if (p === '첫단어' || p === 'first_word') p = '^([^\\s]+)';
+      const reg = new RegExp(p);
+      const match = text.match(reg);
+      if (match) {
+        return (match[1] !== undefined ? match[1] : match[0]).trim();
+      }
+    } catch(e) {}
+    return text;
+  }
+
+  function renderTemplatePreview(templateStr, targetField = '') {
     if (!templateStr) return '';
     const base = {
       '제목': currentData.linkText || (activeRules.title && activeRules.title !== '__none__' ? '예시 제목' : ''),
@@ -366,18 +384,135 @@ document.addEventListener('DOMContentLoaded', () => {
       'url': currentData.linkUrl || currentData.pageUrl || ''
     };
 
+    // 설정된 필드별 추출 패턴(정규식)을 기본값에 먼저 반영
+    if (activePatterns.title) base.title = base['제목'] = applyExtractPattern(base.title, activePatterns.title);
+    if (activePatterns.category) base.category = base['분류'] = applyExtractPattern(base.category, activePatterns.category);
+    if (activePatterns.department) base.department = base['부서'] = base.dept = applyExtractPattern(base.department, activePatterns.department);
+    if (activePatterns.author) base.author = base['기안자'] = base['작성자'] = applyExtractPattern(base.author, activePatterns.author);
+    if (activePatterns.status) base.status = base['상태'] = applyExtractPattern(base.status, activePatterns.status);
+    if (activePatterns.desc) base.desc = base['비고'] = base['내용'] = applyExtractPattern(base.desc, activePatterns.desc);
+
     return templateStr.replace(/\{([^{}]+)\}/g, (match, key) => {
-      const k = key.trim().toLowerCase();
-      if (k === '제목' || k === 'title') return base.title;
-      if (k === '분류' || k === 'category') return base.category;
-      if (k === '기안자' || k === '작성자' || k === 'author') return base.author;
-      if (k === '부서' || k === 'department' || k === 'dept') return base.department;
-      if (k === '상태' || k === 'status') return base.status;
-      if (k === '날짜' || k === 'date') return base.date;
-      if (k === '내용' || k === '본문' || k === '비고' || k === 'desc') return base.desc;
-      if (k === '출처' || k === '링크' || k === 'url') return base.url;
-      return match;
+      let filter = '';
+      let k = key.trim();
+      const colonIdx = k.search(/[:|]/);
+      if (colonIdx !== -1) {
+        filter = k.substring(colonIdx + 1).trim();
+        k = k.substring(0, colonIdx).trim().toLowerCase();
+      } else {
+        k = k.toLowerCase();
+      }
+
+      let val = match;
+      if (k === '제목' || k === 'title') val = base.title;
+      else if (k === '분류' || k === 'category') val = base.category;
+      else if (k === '기안자' || k === '작성자' || k === 'author') val = base.author;
+      else if (k === '부서' || k === 'department' || k === 'dept') val = base.department;
+      else if (k === '상태' || k === 'status') val = base.status;
+      else if (k === '날짜' || k === 'date') val = base.date;
+      else if (k === '내용' || k === '본문' || k === '비고' || k === 'desc') val = base.desc;
+      else if (k === '출처' || k === '링크' || k === 'url') val = base.url;
+
+      if (filter && val && val !== match) {
+        val = applyExtractPattern(val, filter);
+      }
+      return val;
     });
+  }
+
+  // ========== 2차 추출(스마트 단어 후보 분석 & 패턴 자동 역추론) ==========
+  function extractCandidateTokens(str, field = '') {
+    if (!str || typeof str !== 'string') return [];
+    str = str.replace(/[\s\n\r\t]+/g, ' ').trim();
+    if (str.length < 2) return [];
+
+    const candidates = [];
+    const seen = new Set();
+
+    function add(item) {
+      if (!item) return;
+      item = item.trim();
+      item = item.replace(/^[:\s\-_.,/]+|[:\s\-_.,/]+$/g, '').trim();
+      if (item && item.length >= 2 && item.length <= 30 && !seen.has(item) && item !== str) {
+        seen.add(item);
+        candidates.push(item);
+      }
+    }
+
+    // 1. 대괄호 [ ... ] 및 소괄호 ( ... ) 안 내용 우선 추출
+    const bMatches = str.matchAll(/\[([^\]]+)\]/g);
+    for (const m of bMatches) add(m[1]);
+
+    const pMatches = str.matchAll(/\(([^)]+)\)/g);
+    for (const m of pMatches) add(m[1]);
+
+    // 2. 직급/라벨 뒤 이름 (예: 주무관 홍길동, 기안: 홍길동 등)
+    const titleMatches = str.matchAll(/(?:기안자?|작성자?|담당자?|주무관|사무관|서기관|주사|사원|대리|과장|차장|부장|팀장|계장|연구원|선임|책임)\s*[:\s\[]\s*([가-힣a-zA-Z]{2,10})/g);
+    for (const m of titleMatches) add(m[1]);
+
+    // 3. 구분자(/, |, ,)가 있는 경우에만 분리 (공백만으로 일반 문장을 쪼개지 않음)
+    if (str.includes('/') || str.includes('|') || str.includes(',')) {
+      const parts = str.split(/[/|,]+/);
+      for (const p of parts) {
+        if (!/^\d+$/.test(p) && !/^(조회|조회수|추천|추천수|공지|알림|전체|등록|수정)$/.test(p)) {
+          add(p);
+        }
+      }
+    }
+
+    return candidates.slice(0, 5);
+  }
+
+  function deducePatternForToken(fullStr, token) {
+    if (!fullStr || !token || fullStr === token) return '';
+    token = token.trim();
+    const idx = fullStr.indexOf(token);
+    if (idx === -1) return '';
+
+    const esc = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const before = fullStr.substring(0, idx);
+    const after = fullStr.substring(idx + token.length);
+
+    // 1. 대괄호 안에 들어있는 경우
+    if (before.includes('[') && after.includes(']')) {
+      const bBracket = before.lastIndexOf('[');
+      const prefix = before.substring(0, bBracket).trim();
+      const bracketCount = (fullStr.match(/\[.*?\]/g) || []).length;
+      if (bracketCount > 1 && prefix) {
+        const escPre = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return `${escPre}\\s*\\[(.*?)\\]`;
+      }
+      return '\\[(.*?)\\]';
+    }
+
+    // 2. 소괄호 안에 들어있는 경우
+    if (before.includes('(') && after.includes(')')) {
+      const bParen = before.lastIndexOf('(');
+      const parenPrefix = before.substring(0, bParen).trim();
+      const parenCount = (fullStr.match(/\(.*?\)/g) || []).length;
+      if (parenCount > 1 && parenPrefix) {
+        const escPre = parenPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return `${escPre}\\s*\\((.*?)\\)`;
+      }
+      return '\\((.*?)\\)';
+    }
+
+    // 3. 앞쪽에 명시적 라벨/키워드가 있는 경우 (예: "조회수 203" -> 조회수\s*[:]?\s*(.*))
+    const labelMatch = before.match(/([가-힣a-zA-Z0-9_-]+)\s*[:]?\s*$/);
+    if (labelMatch && after.trim().length === 0) {
+      const label = labelMatch[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return `${label}\\s*[:]?\\s*(.*)`;
+    }
+
+    // 4. 앞 단어 + 공백 뒤에 있는 경우 (예: 주무관 홍길동)
+    const wordPreMatch = fullStr.match(new RegExp(`([가-힣a-zA-Z0-9]+)\\s+${esc}`));
+    if (wordPreMatch && wordPreMatch[1]) {
+      const preWord = wordPreMatch[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return `${preWord}\\s+([^\\s,/:|]+)`;
+    }
+
+    // 5. 일반 fallback: 단어 자체 매칭
+    return `(${esc})`;
   }
 
   // ========== 데이터 폼 채우기 ==========
@@ -540,7 +675,7 @@ document.addEventListener('DOMContentLoaded', () => {
         : false;
     }
 
-    // 맞춤 규칙 적용 배지 표시 여부
+    // 맞춤 규칙 적용 상태 표시 여부
     updateRuleBadgeVisibility(!!data.hasCustomRule);
 
     syncCheckboxState();
@@ -548,20 +683,220 @@ document.addEventListener('DOMContentLoaded', () => {
     if (data.targetPickField) {
       selectPickField(data.targetPickField);
     }
+
+    // 🎯 K캘린더 팝업 내부 모달: 방금 직접 찍기로 들어온 경우 팝업 안에서 확인 대화창 표시
+    if (data.justPicked && data.justPicked.field && data.justPicked.rawText) {
+      const pField = data.justPicked.field;
+      const pRaw = data.justPicked.rawText;
+      delete data.justPicked;
+      chrome.storage.local.get(['taskCalendarData'], (res) => {
+        if (res && res.taskCalendarData && res.taskCalendarData.justPicked) {
+          delete res.taskCalendarData.justPicked;
+          chrome.storage.local.set({ taskCalendarData: res.taskCalendarData });
+        }
+      });
+      showInPopupConfirmModal(pField, pRaw);
+    }
   }
 
   function updateRuleBadgeVisibility(hasRule) {
+    const statusEl = document.getElementById('site-rule-status');
+    const domainEl = document.getElementById('site-domain-label');
     if (hasRule && currentDomain) {
-      els.siteRuleBadge.style.display = 'flex';
-      els.btnToggleConfig.style.background = '#EDE9FE';
-      els.btnToggleConfig.style.borderColor = '#C4B5FD';
+      if (statusEl) statusEl.style.display = 'block';
+      if (domainEl) domainEl.textContent = `(${currentDomain})`;
       els.btnToggleConfig.textContent = '⚙️ 맞춤 규칙 수정';
     } else {
-      els.siteRuleBadge.style.display = 'none';
-      els.btnToggleConfig.style.background = '#EDE9FE';
-      els.btnToggleConfig.style.borderColor = '#DDD6FE';
+      if (statusEl) statusEl.style.display = 'none';
       els.btnToggleConfig.textContent = '⚙️ 사이트 맞춤';
     }
+  }
+
+  const FIELD_NAMES_KO = {
+    department: '부서',
+    author: '기안자',
+    title: '제목',
+    date: '날짜',
+    category: '분류',
+    status: '상태',
+    desc: '비고 / 내용',
+    all: '항목'
+  };
+
+  function showInPopupConfirmModal(field, rawText) {
+    const overlay = document.getElementById('modal-confirm-overlay');
+    const titleEl = document.getElementById('modal-confirm-title');
+    const rawEl = document.getElementById('modal-confirm-raw');
+    const inputEl = document.getElementById('modal-confirm-input');
+    const closeBtn = document.getElementById('modal-confirm-close');
+    const cancelBtn = document.getElementById('btn-modal-cancel');
+    const okBtn = document.getElementById('btn-modal-ok');
+    const chipsRow = document.getElementById('modal-confirm-chips-row');
+    const chipsContainer = document.getElementById('modal-confirm-chips');
+
+    if (!overlay || !titleEl || !rawEl || !inputEl) return;
+
+    const fieldKo = FIELD_NAMES_KO[field] || '항목';
+    titleEl.textContent = `🎯 [${fieldKo}] 항목 추출 확인`;
+    rawEl.textContent = rawText;
+    inputEl.value = rawText;
+
+    // 추천 칩 분석 (대괄호 안 단어, 기안자/주무관 뒤 단어 등)
+    const tokens = extractCandidateTokens(rawText, field);
+    if (tokens.length > 0 && chipsContainer && chipsRow) {
+      chipsContainer.innerHTML = '';
+      chipsRow.style.display = 'flex';
+      tokens.forEach(tok => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'modal-confirm-chip-btn';
+        btn.textContent = `🎯 ${tok}`;
+        btn.addEventListener('click', () => {
+          inputEl.value = tok;
+          inputEl.focus();
+          inputEl.select();
+        });
+        chipsContainer.appendChild(btn);
+      });
+    } else if (chipsRow) {
+      chipsRow.style.display = 'none';
+    }
+
+    overlay.style.display = 'flex';
+    setTimeout(() => {
+      inputEl.focus();
+      inputEl.select();
+    }, 50);
+
+    function closeModal() {
+      overlay.style.display = 'none';
+    }
+
+    function useAsIs() {
+      const fieldInputMap = {
+        department: els.valDepartment,
+        author: els.valAuthor,
+        title: els.valTitle,
+        category: els.valCategory,
+        status: els.valStatus,
+        date: els.valDate,
+        desc: els.valDesc
+      };
+      const targetInput = fieldInputMap[field];
+      if (targetInput) {
+        if (field === 'date') {
+          const m = rawText.match(/\b(20\d{2}|19\d{2})[-./](\d{1,2})[-./](\d{1,2})\b/);
+          targetInput.value = m ? `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}` : rawText;
+        } else {
+          targetInput.value = rawText;
+        }
+        targetInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+
+      // 그대로 사용 시: 기존에 등록되어 있던 2차 정규식 추출 규칙 완전 제거
+      delete activePatterns[field];
+
+      if (currentDomain) {
+        chrome.storage.local.get(['tc_site_rules'], (storageRes) => {
+          const siteRules = storageRes.tc_site_rules || {};
+          if (siteRules[currentDomain] && siteRules[currentDomain].patterns) {
+            delete siteRules[currentDomain].patterns[field];
+            siteRules[currentDomain].updatedAt = Date.now();
+            chrome.storage.local.set({ tc_site_rules: siteRules });
+          }
+          const hasRemainingRule = Object.keys(activeRules).some(k => activeRules[k]) ||
+                                   Object.keys(activeTemplates).some(k => activeTemplates[k]) ||
+                                   Object.keys(activePatterns).some(k => activePatterns[k]);
+          updateRuleBadgeVisibility(hasRemainingRule);
+        });
+      }
+
+      closeModal();
+    }
+
+    function applyModalValue() {
+      const finalVal = inputEl.value.trim() || rawText;
+
+      // 대상 인풋창에 값 주입
+      const fieldInputMap = {
+        department: els.valDepartment,
+        author: els.valAuthor,
+        title: els.valTitle,
+        category: els.valCategory,
+        status: els.valStatus,
+        date: els.valDate,
+        desc: els.valDesc
+      };
+      const targetInput = fieldInputMap[field];
+      if (targetInput) {
+        if (field === 'date') {
+          const m = finalVal.match(/\b(20\d{2}|19\d{2})[-./](\d{1,2})[-./](\d{1,2})\b/);
+          targetInput.value = m ? `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}` : finalVal;
+        } else {
+          targetInput.value = finalVal;
+        }
+        targetInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+
+      // 원문과 다르고 원문에 포함되어 있다면 정규식 패턴 자동 역추론 및 영구 저장
+      if (finalVal !== rawText && rawText.includes(finalVal) && currentDomain) {
+        const autoPat = deducePatternForToken(rawText, finalVal);
+        if (autoPat) {
+          activePatterns[field] = autoPat;
+          chrome.storage.local.get(['tc_site_rules'], (storageRes) => {
+            const siteRules = storageRes.tc_site_rules || {};
+            if (!siteRules[currentDomain]) {
+              siteRules[currentDomain] = {
+                selectors: Object.assign({}, activeRules),
+                templates: Object.assign({}, activeTemplates),
+                patterns: {},
+                samples: {},
+                domain: currentDomain,
+                updatedAt: Date.now()
+              };
+            }
+            if (!siteRules[currentDomain].patterns) siteRules[currentDomain].patterns = {};
+            siteRules[currentDomain].patterns[field] = autoPat;
+            siteRules[currentDomain].updatedAt = Date.now();
+            chrome.storage.local.set({ tc_site_rules: siteRules });
+            updateRuleBadgeVisibility(true);
+          });
+        }
+      } else {
+        // 원문과 같거나 원문 그대로 사용하는 경우: 기존에 등록되어 있던 2차 추출 패턴 규칙 완전 해제
+        delete activePatterns[field];
+        if (currentDomain) {
+          chrome.storage.local.get(['tc_site_rules'], (storageRes) => {
+            const siteRules = storageRes.tc_site_rules || {};
+            if (siteRules[currentDomain] && siteRules[currentDomain].patterns) {
+              delete siteRules[currentDomain].patterns[field];
+              siteRules[currentDomain].updatedAt = Date.now();
+              chrome.storage.local.set({ tc_site_rules: siteRules });
+            }
+            const hasRemainingRule = Object.keys(activeRules).some(k => activeRules[k]) ||
+                                     Object.keys(activeTemplates).some(k => activeTemplates[k]) ||
+                                     Object.keys(activePatterns).some(k => activePatterns[k]);
+            updateRuleBadgeVisibility(hasRemainingRule);
+          });
+        }
+      }
+
+      closeModal();
+    }
+
+    okBtn.onclick = applyModalValue;
+    cancelBtn.onclick = useAsIs;
+    closeBtn.onclick = useAsIs;
+
+    inputEl.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        applyModalValue();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        useAsIs();
+      }
+    };
   }
 
   let userSavedCheckedStates = null;
@@ -599,11 +934,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const saved = allSiteRules[currentDomain];
         activeRules = Object.assign({}, saved.selectors || saved);
         activeTemplates = Object.assign({}, saved.templates || {});
+        activePatterns = Object.assign({}, saved.patterns || {});
         ruleSamples = Object.assign({}, saved.samples || {});
-        data.hasCustomRule = Object.keys(activeRules).some(k => activeRules[k]) || Object.keys(activeTemplates).some(k => activeTemplates[k]);
+        data.hasCustomRule = Object.keys(activeRules).some(k => activeRules[k]) ||
+                             Object.keys(activeTemplates).some(k => activeTemplates[k]) ||
+                             Object.keys(activePatterns).some(k => activePatterns[k]);
       } else {
         activeRules = {};
         activeTemplates = {};
+        activePatterns = {};
         ruleSamples = {};
       }
 
@@ -651,18 +990,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const prevText = document.getElementById(`cfg-prev-text-${field}`);
     const prevSel = document.getElementById(`cfg-prev-sel-${field}`);
     const tplInput = document.getElementById(`cfg-tpl-${field}`);
+    const patInput = document.getElementById(`cfg-pattern-${field}`);
 
     const tpl = (activeTemplates[field] || '').trim();
+    const pat = (activePatterns[field] || '').trim();
     const sel = activeRules[field] || '';
 
-    // 1) 서식(사용자정의)이 설정되어 있는 경우
-    if (tpl) {
+    // 1) 서식(사용자정의) 또는 추출 패턴이 설정되어 있는 경우
+    if (tpl || pat) {
       statusPill.className = 'cfg-status-pill pill-custom';
       statusPill.textContent = '✏️ 사용자정의';
       prevBox.style.display = 'flex';
-      const previewVal = renderTemplatePreview(tpl);
+      const effectiveTpl = tpl || `{${field === 'category' ? '분류' : field === 'department' ? '부서' : field === 'author' ? '기안자' : field === 'status' ? '상태' : field === 'date' ? '날짜' : field === 'desc' ? '비고' : '제목'}}`;
+      const previewVal = renderTemplatePreview(effectiveTpl, field);
       prevText.textContent = `치환 결과: "${previewVal}"`;
-      prevSel.textContent = `서식: ${tpl}${sel && sel !== '__none__' ? ` (기준 선택자: ${sel})` : ''}`;
+      let descParts = [];
+      if (tpl) descParts.push(`서식: ${tpl}`);
+      if (pat) descParts.push(`패턴: /${pat}/`);
+      if (sel && sel !== '__none__') descParts.push(`기준 선택자: ${sel}`);
+      prevSel.textContent = descParts.join(' | ');
       return;
     }
 
@@ -698,6 +1044,7 @@ document.addEventListener('DOMContentLoaded', () => {
     FIELDS.forEach(field => {
       const sampleInput = document.getElementById(`cfg-sample-${field}`);
       const tplInput = document.getElementById(`cfg-tpl-${field}`);
+      const patInput = document.getElementById(`cfg-pattern-${field}`);
       const tplPanel = document.getElementById(`cfg-tpl-panel-${field}`);
       const btnNone = document.querySelector(`.btn-cfg-none[data-field="${field}"]`);
       const btnCustom = document.querySelector(`.btn-cfg-custom[data-field="${field}"]`);
@@ -719,9 +1066,11 @@ document.addEventListener('DOMContentLoaded', () => {
         else if (field === 'url') sampleInput.value = els.valUrl.value;
       }
 
-      // 서식 텍스트 복원
-      if (activeTemplates[field]) {
-        if (tplInput) tplInput.value = activeTemplates[field];
+      // 서식 및 패턴 텍스트 복원
+      if (patInput) patInput.value = activePatterns[field] || '';
+
+      if (activeTemplates[field] || activePatterns[field]) {
+        if (tplInput) tplInput.value = activeTemplates[field] || '';
         if (tplPanel) tplPanel.style.display = 'flex';
         if (btnCustom) btnCustom.classList.add('active');
       } else {
@@ -732,6 +1081,39 @@ document.addEventListener('DOMContentLoaded', () => {
       if (activeRules[field] === '__none__' && btnNone) {
         btnNone.classList.add('active');
         sampleInput.placeholder = '(이 사이트에는 해당 항목 없음 - 건너뜀)';
+      }
+
+      // 2차 추출 추천 단어 칩 렌더링
+      const subPickContainer = document.getElementById(`cfg-subpick-chips-${field}`);
+      if (subPickContainer) {
+        subPickContainer.innerHTML = '';
+        const sampleText = ruleSamples[field] || sampleInput.value || '';
+        const cfgTokens = extractCandidateTokens(sampleText, field);
+        const parentRow = subPickContainer.closest('.cfg-pattern-row');
+        const chipLabel = parentRow ? parentRow.querySelector('.cfg-chip-label') : null;
+        if (cfgTokens.length > 0) {
+          if (chipLabel) chipLabel.style.display = 'block';
+          subPickContainer.style.display = 'flex';
+          cfgTokens.forEach(tok => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'sub-pick-btn';
+            btn.textContent = `🎯 ${tok}`;
+            btn.title = `클릭하면 '${tok}' 추출 패턴으로 자동 설정됩니다`;
+            btn.addEventListener('click', () => {
+              const deducedPat = deducePatternForToken(sampleText, tok);
+              if (deducedPat) {
+                if (patInput) patInput.value = deducedPat;
+                activePatterns[field] = deducedPat;
+                patInput?.dispatchEvent(new Event('input', { bubbles: true }));
+              }
+            });
+            subPickContainer.appendChild(btn);
+          });
+        } else {
+          if (chipLabel) chipLabel.style.display = 'none';
+          subPickContainer.style.display = 'none';
+        }
       }
 
       updateCardPreview(field);
@@ -797,17 +1179,20 @@ document.addEventListener('DOMContentLoaded', () => {
       const field = btn.getAttribute('data-field');
       const sampleInput = document.getElementById(`cfg-sample-${field}`);
       const tplInput = document.getElementById(`cfg-tpl-${field}`);
+      const patInput = document.getElementById(`cfg-pattern-${field}`);
       const tplPanel = document.getElementById(`cfg-tpl-panel-${field}`);
       const btnCustom = document.querySelector(`.btn-cfg-custom[data-field="${field}"]`);
 
       activeRules[field] = '__none__';
       ruleSamples[field] = '';
       delete activeTemplates[field];
+      delete activePatterns[field];
 
       btn.classList.add('active');
       if (btnCustom) btnCustom.classList.remove('active');
       if (tplPanel) tplPanel.style.display = 'none';
       if (tplInput) tplInput.value = '';
+      if (patInput) patInput.value = '';
 
       sampleInput.value = '';
       sampleInput.placeholder = '(이 사이트에는 해당 항목 없음 - 건너뜀)';
@@ -822,6 +1207,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const field = btn.getAttribute('data-field');
       const tplPanel = document.getElementById(`cfg-tpl-panel-${field}`);
       const tplInput = document.getElementById(`cfg-tpl-${field}`);
+      const patInput = document.getElementById(`cfg-pattern-${field}`);
       const btnNone = document.querySelector(`.btn-cfg-none[data-field="${field}"]`);
 
       if (!tplPanel) return;
@@ -835,7 +1221,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (btnNone) btnNone.classList.remove('active');
 
         // 기본 추천 서식 제안
-        if (!tplInput.value.trim()) {
+        if (!tplInput.value.trim() && !patInput?.value.trim()) {
           if (field === 'title') {
             tplInput.value = '[{분류}] {제목}';
           } else if (field === 'desc') {
@@ -844,13 +1230,17 @@ document.addEventListener('DOMContentLoaded', () => {
             tplInput.value = `{${field === 'category' ? '분류' : field === 'department' ? '부서' : field === 'author' ? '기안자' : field === 'status' ? '상태' : field === 'date' ? '날짜' : '출처'}}`;
           }
         }
-        activeTemplates[field] = tplInput.value.trim();
+        if (tplInput.value.trim()) {
+          activeTemplates[field] = tplInput.value.trim();
+        }
         tplInput.focus();
       } else {
         // 패널 닫기
         tplPanel.style.display = 'none';
         btn.classList.remove('active');
         delete activeTemplates[field];
+        delete activePatterns[field];
+        if (patInput) patInput.value = '';
       }
 
       updateCardPreview(field);
@@ -870,6 +1260,37 @@ document.addEventListener('DOMContentLoaded', () => {
         delete activeTemplates[field];
       }
       updateCardPreview(field);
+    });
+  });
+
+  // 패턴(정규식) 입력 시 실시간 미리보기 갱신
+  document.querySelectorAll('.cfg-pattern-input').forEach(input => {
+    const id = input.id;
+    const field = id.replace('cfg-pattern-', '');
+
+    input.addEventListener('input', () => {
+      const val = input.value;
+      if (val.trim()) {
+        activePatterns[field] = val.trim();
+      } else {
+        delete activePatterns[field];
+      }
+      updateCardPreview(field);
+    });
+  });
+
+  // 빠른 패턴 칩 클릭 시 패턴 입력란에 자동 설정 & 실시간 미리보기
+  document.querySelectorAll('.cfg-quick-pattern').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const field = btn.getAttribute('data-field');
+      const pattern = btn.getAttribute('data-pattern');
+      const patInput = document.getElementById(`cfg-pattern-${field}`);
+      if (!patInput || !pattern) return;
+
+      patInput.value = pattern;
+      activePatterns[field] = pattern;
+      patInput.dispatchEvent(new Event('input', { bubbles: true }));
+      patInput.focus();
     });
   });
 
@@ -903,8 +1324,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const hasAnySelector = Object.keys(activeRules).some(k => activeRules[k]);
     const hasAnyTemplate = Object.keys(activeTemplates).some(k => activeTemplates[k]);
+    const hasAnyPattern = Object.keys(activePatterns).some(k => activePatterns[k]);
 
-    if (!hasAnySelector && !hasAnyTemplate) {
+    if (!hasAnySelector && !hasAnyTemplate && !hasAnyPattern) {
       alert('최소 1개 이상의 항목을 검색하거나, [없음] 또는 [사용자정의]를 지정해주세요.');
       return;
     }
@@ -917,6 +1339,7 @@ document.addEventListener('DOMContentLoaded', () => {
       siteRules[currentDomain] = {
         selectors: activeRules,
         templates: activeTemplates,
+        patterns: activePatterns,
         samples: ruleSamples,
         domain: currentDomain,
         updatedAt: Date.now()
@@ -930,8 +1353,13 @@ document.addEventListener('DOMContentLoaded', () => {
           frameId: currentData.originFrameId,
           linkUrl: currentData.linkUrl || "",
           selection: currentData.selectedText || "",
-          customRule: activeRules,
-          templates: activeTemplates
+          customRule: {
+            selectors: activeRules,
+            templates: activeTemplates,
+            patterns: activePatterns
+          },
+          templates: activeTemplates,
+          patterns: activePatterns
         }, (extractRes) => {
           els.btnCfgSave.disabled = false;
           els.btnCfgSave.textContent = '규칙 저장 및 적용';
@@ -967,6 +1395,7 @@ document.addEventListener('DOMContentLoaded', () => {
       chrome.storage.local.set({ tc_site_rules: siteRules }, () => {
         activeRules = {};
         activeTemplates = {};
+        activePatterns = {};
         ruleSamples = {};
         populateConfigView();
 
@@ -978,7 +1407,8 @@ document.addEventListener('DOMContentLoaded', () => {
           linkUrl: currentData.linkUrl || "",
           selection: currentData.selectedText || "",
           customRule: null,
-          templates: null
+          templates: null,
+          patterns: null
         }, (extractRes) => {
           if (extractRes && extractRes.success && extractRes.data) {
             const resetData = Object.assign({}, currentData, extractRes.data, {
@@ -1015,12 +1445,14 @@ document.addEventListener('DOMContentLoaded', () => {
           siteRules[currentDomain] = {
             selectors: Object.assign({}, activeRules),
             templates: Object.assign({}, activeTemplates),
+            patterns: Object.assign({}, activePatterns),
             samples: Object.assign({}, ruleSamples),
             domain: currentDomain,
             updatedAt: Date.now()
           };
         }
         if (!siteRules[currentDomain].selectors) siteRules[currentDomain].selectors = {};
+        if (!siteRules[currentDomain].patterns) siteRules[currentDomain].patterns = {};
         if (!siteRules[currentDomain].samples) siteRules[currentDomain].samples = {};
 
         for (const [fld, info] of Object.entries(ruleUpdates)) {

@@ -5,10 +5,10 @@
   <title>K캘린더로 보내기</title>
   <style>
     :root {
-      --primary: #6C5CE7;
-      --primary-hover: #5A4BCC;
-      --border: #E2E8F0;
-      --light-purple: #F3F0FF;
+      --primary: #2563EB;
+      --primary-hover: #1D4ED8;
+      --border: #CBD5E1;
+      --light-blue: #EFF6FF;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -19,11 +19,12 @@
       overflow: hidden;
       margin: 0;
       padding: 0;
+      position: relative;
     }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Segoe UI", Roboto, sans-serif;
-      background: #F8F9FA;
-      color: #333;
+      background: #F8FAFC;
+      color: #1E293B;
       padding: 10px 12px;
       font-size: 12px;
       user-select: none;
@@ -31,94 +32,99 @@
       flex-direction: column;
     }
 
-    /* 상단 헤더 영역 (등록 화면에서만 표시) */
+    /* 상단 헤더 영역 (공공기관 단정 스타일: 좌측 버튼, 우측 회색 규칙 상태) */
     .header-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 6px;
       margin-bottom: 8px;
       flex-shrink: 0;
     }
-    .header-title {
-      font-size: 13px;
-      font-weight: bold;
-      color: var(--primary);
+    .header-actions {
       display: flex;
       align-items: center;
       gap: 5px;
+      flex-shrink: 0;
     }
-    .btn-config-toggle {
-      background: #EDE9FE;
-      color: var(--primary);
-      border: 1px solid #DDD6FE;
-      border-radius: 6px;
-      padding: 4px 8px;
+    .btn-gov {
+      background: #FFFFFF;
+      color: #1D4ED8;
+      border: 1px solid #93C5FD;
+      border-radius: 4px;
+      padding: 4px 7px;
       font-size: 11px;
       font-weight: 600;
       cursor: pointer;
-      display: flex;
+      display: inline-flex;
       align-items: center;
-      gap: 4px;
-      transition: all 0.15s ease;
-    }
-    .btn-config-toggle:hover {
-      background: var(--primary);
-      color: white;
-      border-color: var(--primary);
-    }
-
-    /* 사이트 맞춤 규칙 적용 안내 배지 */
-    .site-rule-badge {
-      background: #F0FDF4;
-      border: 1px solid #BBF7D0;
-      color: #166534;
-      padding: 4px 8px;
-      border-radius: 6px;
-      font-size: 11px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 8px;
+      gap: 3px;
+      white-space: nowrap;
       flex-shrink: 0;
+      line-height: 1.2;
+      transition: none;
     }
-    .domain-label {
-      font-size: 10px;
-      color: #4D7C0F;
-      font-family: monospace;
+    .btn-gov:hover {
+      background: #EFF6FF;
+    }
+    .btn-gov.field-targeted {
+      background: #2563EB !important;
+      color: white !important;
+      border-color: #2563EB !important;
     }
 
-    /* 탭 헤더 */
+    /* 사이트 맞춤 규칙 적용 상태 (우측 회색 글씨, 한 줄로 표시) */
+    .site-rule-status {
+      font-size: 10px;
+      color: #64748B;
+      font-weight: 500;
+      text-align: right;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+      flex: 1;
+    }
+    .site-rule-status .domain-label {
+      font-size: 10px;
+      color: #94A3B8;
+      font-family: monospace;
+      margin-left: 2px;
+    }
+
+    /* 탭 헤더 (아래는 둥근 거 없이 평평한 정부 포털형 탭 디자인) */
     .tabs-header {
       display: flex;
-      background: #EDF2F7;
-      border-radius: 8px;
-      padding: 3px;
-      margin-bottom: 8px;
-      border: 1px solid var(--border);
-      gap: 2px;
+      gap: 3px;
+      margin-bottom: 0;
+      padding: 0 2px;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid #2563EB;
       flex-shrink: 0;
     }
     .tab-btn {
       flex: 1;
-      padding: 6px 0;
+      padding: 7px 0;
       text-align: center;
       font-size: 12px;
-      font-weight: 500;
-      color: #64748B;
-      background: transparent;
-      border: none;
-      border-radius: 6px;
+      font-weight: 600;
+      color: #475569;
+      background: #F1F5F9;
+      border: 1px solid #CBD5E1;
+      border-bottom: none;
+      border-top-left-radius: 5px;
+      border-top-right-radius: 5px;
+      border-bottom-left-radius: 0;
+      border-bottom-right-radius: 0;
       cursor: pointer;
-      transition: all 0.15s ease;
-    }
-    .tab-btn:hover {
-      color: #1E293B;
+      transition: none;
     }
     .tab-btn.active {
-      background: #FFFFFF;
-      color: var(--primary);
+      background: #2563EB;
+      color: #FFFFFF;
+      border-color: #2563EB;
       font-weight: bold;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
     }
 
     /* 등록 폼 뷰 */
@@ -128,10 +134,12 @@
       flex: 1;
       min-height: 0;
     }
-    #view-register .fields {
+    .fields-box {
       background: white;
-      border: 1px solid var(--border);
-      border-radius: 6px;
+      border: 1px solid #CBD5E1;
+      border-top: none;
+      border-bottom-left-radius: 6px;
+      border-bottom-right-radius: 6px;
       padding: 8px 10px;
       margin-bottom: 8px;
       flex: 1;
@@ -175,7 +183,7 @@
     }
     .field-row + .field-row { border-top: 1px solid #f0f0f0; }
     .field-row input[type="checkbox"] {
-      accent-color: var(--primary);
+      accent-color: #2563EB;
       flex-shrink: 0;
     }
     .field-label {
@@ -183,7 +191,7 @@
       font-size: 11px;
       width: 44px;
       flex-shrink: 0;
-      color: #555;
+      color: #334155;
     }
     .field-input {
       flex: 1;
@@ -192,14 +200,14 @@
       border-radius: 4px;
       font-size: 11px;
       font-family: inherit;
-      color: #333;
-      background: #fafafa;
+      color: #1E293B;
+      background: #FAFAFA;
       min-width: 0;
       user-select: text;
     }
     .field-input:focus {
       outline: none;
-      border-color: var(--primary);
+      border-color: #2563EB;
       background: white;
     }
     .field-input:disabled {
@@ -213,9 +221,9 @@
       transition: height 0.15s ease;
     }
     .btn-field-pick {
-      background: #F3F0FF;
-      border: 1px solid #DDD6FE;
-      color: var(--primary);
+      background: #EFF6FF;
+      border: 1px solid #BFDBFE;
+      color: #1D4ED8;
       border-radius: 4px;
       padding: 0 4px;
       font-size: 11px;
@@ -223,29 +231,21 @@
       height: 22px;
       line-height: 20px;
       flex-shrink: 0;
-      transition: all 0.15s ease;
       display: inline-flex;
       align-items: center;
       justify-content: center;
     }
     .btn-field-pick:hover, .btn-field-pick.active {
-      background: var(--primary);
+      background: #2563EB;
       color: white;
-      border-color: var(--primary);
-      transform: scale(1.05);
-    }
-    .btn-config-toggle.field-targeted {
-      background: var(--primary) !important;
-      color: white !important;
-      border-color: var(--primary) !important;
-      box-shadow: 0 0 0 2px rgba(108, 92, 231, 0.25);
+      border-color: #2563EB;
     }
     .field-row.field-pick-selected {
-      background: #F5F3FF;
+      background: #EFF6FF;
       border-radius: 4px;
     }
 
-    /* 하단 액션 버튼 (공통) */
+    /* 하단 액션 버튼: 등록(좌측/파랑) / 닫기(우측/회색) */
     .actions, .config-actions {
       display: flex;
       gap: 6px;
@@ -254,16 +254,28 @@
     .actions button, .config-actions button {
       flex: 1;
       padding: 9px;
-      border-radius: 6px;
-      border: none;
+      border-radius: 5px;
       font-size: 12px;
       font-weight: bold;
       cursor: pointer;
     }
-    .btn-submit { background: var(--primary); color: white; }
-    .btn-submit:hover { background: var(--primary-hover); }
-    .btn-cancel { background: #E2E8F0; color: #4A5568; }
-    .btn-cancel:hover { background: #CBD5E0; }
+    .btn-submit {
+      background: #2563EB;
+      color: white;
+      border: none;
+    }
+    .btn-submit:hover {
+      background: #1D4ED8;
+    }
+    .btn-cancel {
+      background: #F1F5F9;
+      color: #475569;
+      border: 1px solid #CBD5E1;
+      font-weight: 600;
+    }
+    .btn-cancel:hover {
+      background: #E2E8F0;
+    }
 
     /* ========== 사이트 맞춤 설정 뷰 ========== */
     #view-config {
@@ -522,6 +534,47 @@
       border-color: var(--primary);
     }
 
+    /* 텍스트 추출 패턴 (정규식/부분추출) */
+    .cfg-pattern-row {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin-top: 4px;
+      padding-top: 4px;
+      border-top: 1px dashed #E2E8F0;
+    }
+    .cfg-pattern-input {
+      width: 100%;
+      padding: 3px 6px;
+      border: 1px solid #CBD5E1;
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: monospace, inherit;
+      color: #0F172A;
+      background: white;
+    }
+    .cfg-pattern-input:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 1px var(--primary);
+    }
+    .cfg-quick-pattern {
+      padding: 2px 5px;
+      background: #EDE9FE;
+      border: 1px solid #DDD6FE;
+      border-radius: 3px;
+      font-size: 10px;
+      color: #6D28D9;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.1s ease;
+    }
+    .cfg-quick-pattern:hover {
+      background: #7C3AED;
+      color: white;
+      border-color: #7C3AED;
+    }
+
     .cfg-preview-box {
       margin-top: 5px;
       padding: 4px 6px;
@@ -554,27 +607,207 @@
     .btn-danger:hover {
       background: #FCA5A5;
     }
+
+    /* 사이트 설정 2차 추출 UI 버튼 (파란색 테마) */
+    .sub-pick-btn {
+      padding: 2px 7px;
+      background: white;
+      border: 1px solid #93C5FD;
+      border-radius: 3px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #1D4ED8;
+      cursor: pointer;
+    }
+    .sub-pick-btn:hover {
+      background: #2563EB;
+      color: white;
+      border-color: #2563EB;
+    }
+    .cfg-subpick-box {
+      padding: 5px 8px;
+      background: #FFFFFF;
+      border: 1px solid #CBD5E1;
+      border-radius: 4px;
+      font-size: 11px;
+      color: #1E293B;
+      user-select: text;
+      cursor: text;
+      line-height: 1.4;
+      word-break: break-all;
+    }
+    .cfg-subpick-box::selection {
+      background: #BFDBFE;
+      color: #1E3A8A;
+    }
+
+    /* K캘린더 팝업 내부 확인 모달 (웹페이지 변조 원천 차단) */
+    .modal-confirm-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(15, 23, 42, 0.55);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px;
+    }
+    .modal-confirm-card {
+      background: #FFFFFF;
+      border-radius: 8px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
+      border: 1px solid #CBD5E1;
+      width: 100%;
+      max-width: 360px;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      color: #1E293B;
+    }
+    .modal-confirm-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-confirm-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #1E3A8A;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .modal-confirm-close {
+      border: none;
+      background: transparent;
+      color: #94A3B8;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .modal-confirm-close:hover {
+      color: #1E293B;
+    }
+    .modal-confirm-sec {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .modal-confirm-lbl {
+      font-size: 11px;
+      font-weight: 600;
+      color: #64748B;
+    }
+    .modal-confirm-raw {
+      background: #F8FAFC;
+      border: 1px solid #E2E8F0;
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-size: 11px;
+      color: #1E293B;
+      max-height: 60px;
+      overflow-y: auto;
+      word-break: break-all;
+      white-space: pre-wrap;
+    }
+    .modal-confirm-input {
+      width: 100%;
+      padding: 6px 8px;
+      border: 1.5px solid #2563EB;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #1E293B;
+      background: #FFFFFF;
+      outline: none;
+      box-sizing: border-box;
+    }
+    .modal-confirm-chips-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      align-items: center;
+      margin-top: 4px;
+    }
+    .modal-confirm-chips-lbl {
+      font-size: 10px;
+      font-weight: 600;
+      color: #2563EB;
+    }
+    .modal-confirm-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .modal-confirm-chip-btn {
+      padding: 2px 6px;
+      background: #EFF6FF;
+      border: 1px solid #BFDBFE;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 600;
+      color: #1D4ED8;
+      cursor: pointer;
+    }
+    .modal-confirm-chip-btn:hover {
+      background: #2563EB;
+      color: white;
+      border-color: #2563EB;
+    }
+    .modal-confirm-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .btn-modal-cancel {
+      background: #F1F5F9;
+      color: #475569;
+      border: 1px solid #CBD5E1;
+      border-radius: 4px;
+      padding: 6px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-modal-cancel:hover {
+      background: #E2E8F0;
+    }
+    .btn-modal-ok {
+      background: #2563EB;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 6px 14px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .btn-modal-ok:hover {
+      background: #1D4ED8;
+    }
   </style>
 </head>
 <body>
 
-  <!-- 상단 헤더 (등록 뷰에서만 표시) -->
+  <!-- 상단 헤더 (공공기관 스타일: 좌측 버튼, 우측 맞춤 규칙 회색 상태 문구) -->
   <div class="header-row" id="header-row">
-    <div class="header-title">K캘린더로 보내기</div>
-    <div style="display: flex; gap: 5px; align-items: center;">
-      <button type="button" id="btn-pick-element" class="btn-config-toggle" title="웹페이지에서 원하는 메일/게시글을 마우스로 직접 클릭하여 선택합니다">
+    <div class="header-actions">
+      <button type="button" id="btn-pick-element" class="btn-gov" title="웹페이지에서 원하는 항목을 마우스로 직접 클릭하여 선택합니다">
         🎯 항목 직접 찍기
       </button>
-      <button type="button" id="btn-toggle-config" class="btn-config-toggle" title="이 사이트 맞춤 규칙 설정">
-        ⚙️ 사이트 맞춤
+      <button type="button" id="btn-toggle-config" class="btn-gov" title="이 사이트 맞춤 규칙 설정">
+        ⚙️ 맞춤 규칙 수정
       </button>
     </div>
-  </div>
-
-  <!-- 사이트 맞춤 규칙 적용 중 안내 배지 -->
-  <div id="site-rule-badge" class="site-rule-badge" style="display: none;">
-    <span>✨ 사이트 맞춤 규칙 적용 중</span>
-    <span id="site-domain-label" class="domain-label"></span>
+    <div id="site-rule-status" class="site-rule-status" style="display: none;">
+      사이트 맞춤 규칙 적용 중 <span id="site-domain-label" class="domain-label"></span>
+    </div>
   </div>
 
   <!-- 1. 등록 폼 뷰 (기본) -->
@@ -585,6 +818,7 @@
       <button type="button" class="tab-btn" id="btn-memo" data-type="memo">메모</button>
     </div>
 
+    <div class="fields-box">
       <!-- 1. 제목 (최대 50자) -->
       <div class="field-row" id="item-title">
         <input type="checkbox" id="chk-title" checked>
@@ -657,12 +891,14 @@
         <span class="field-label">출처</span>
         <input type="text" class="field-input" id="val-url" placeholder="URL">
       </div>
-
-      <div class="actions">
-        <button class="btn-cancel" id="btn-cancel-action">취소</button>
-        <button class="btn-submit" id="btn-submit-action">K캘린더로 보내기</button>
-      </div>
     </div>
+
+    <!-- 하단 액션 버튼: 등록(왼쪽) / 닫기(오른쪽) -->
+    <div class="actions">
+      <button class="btn-submit" id="btn-submit-action">등록</button>
+      <button class="btn-cancel" id="btn-cancel-action">닫기</button>
+    </div>
+  </div>
 
   <!-- 2. 사이트 맞춤 설정 뷰 (토글) -->
   <div id="view-config">
@@ -700,6 +936,16 @@
             <button type="button" class="cfg-chip" data-field="title" data-tag="{분류}">{분류}</button>
             <button type="button" class="cfg-chip" data-field="title" data-tag="{상태}">{상태}</button>
           </div>
+          <div class="cfg-pattern-row">
+            <span class="cfg-chip-label">🎯 텍스트 추출 패턴 (정규식):</span>
+            <input type="text" class="cfg-pattern-input" id="cfg-pattern-title" placeholder="예: \[(.*?)\] 또는 ^([^\s]+)">
+            <div class="cfg-chips-row">
+              <span class="cfg-chip-label">빠른 설정:</span>
+              <button type="button" class="cfg-quick-pattern" data-field="title" data-pattern="\[(.*?)\]">[대괄호 안]</button>
+              <button type="button" class="cfg-quick-pattern" data-field="title" data-pattern="\((.*?)\)">(소괄호 안)</button>
+              <button type="button" class="cfg-quick-pattern" data-field="title" data-pattern="^([^\s]+)">첫 단어</button>
+            </div>
+          </div>
         </div>
         <div class="cfg-preview-box" id="cfg-prev-title" style="display: none;">
           <span class="cfg-prev-text" id="cfg-prev-text-title"></span>
@@ -729,6 +975,20 @@
             <button type="button" class="cfg-chip" data-field="department" data-tag="{분류}">{분류}</button>
             <button type="button" class="cfg-chip" data-field="department" data-tag="{제목}">{제목}</button>
           </div>
+          <div class="cfg-pattern-row">
+            <span class="cfg-chip-label">🎯 2차 추출 추천 단어 (클릭 시 자동 선택):</span>
+            <div class="cfg-chips-row" id="cfg-subpick-chips-department"></div>
+            <details style="margin-top: 4px; font-size: 10px; cursor: pointer;">
+              <summary style="color: #64748B; font-weight: 600;">⚙️ 고급 정규식 직접 수정</summary>
+              <input type="text" class="cfg-pattern-input" id="cfg-pattern-department" placeholder="예: \[(.*?)\] 또는 ^([^\s]+)" style="margin-top: 3px;">
+              <div class="cfg-chips-row" style="margin-top: 3px;">
+                <span class="cfg-chip-label">빠른 패턴:</span>
+                <button type="button" class="cfg-quick-pattern" data-field="department" data-pattern="\[(.*?)\]">[대괄호 안]</button>
+                <button type="button" class="cfg-quick-pattern" data-field="department" data-pattern="\((.*?)\)">(소괄호 안)</button>
+                <button type="button" class="cfg-quick-pattern" data-field="department" data-pattern="^([^\s]+)">첫 단어</button>
+              </div>
+            </details>
+          </div>
         </div>
         <div class="cfg-preview-box" id="cfg-prev-department" style="display: none;">
           <span class="cfg-prev-text" id="cfg-prev-text-department"></span>
@@ -753,10 +1013,24 @@
           <input type="text" class="cfg-tpl-input" id="cfg-tpl-author" placeholder="치환 서식 입력 (예: {기안자})" maxlength="50">
           <div class="cfg-chips-row">
             <span class="cfg-chip-label">치환 태그:</span>
-            <button type="button" class="cfg-chip" data-field="author" data-tag="{부서}">{부서}</button>
             <button type="button" class="cfg-chip" data-field="author" data-tag="{기안자}">{기안자}</button>
-            <button type="button" class="cfg-chip" data-field="author" data-tag="{분류}">{분류}</button>
+            <button type="button" class="cfg-chip" data-field="author" data-tag="{부서}">{부서}</button>
             <button type="button" class="cfg-chip" data-field="author" data-tag="{제목}">{제목}</button>
+          </div>
+          <div class="cfg-pattern-row">
+            <span class="cfg-chip-label">🎯 2차 추출 추천 단어 (클릭 시 자동 선택):</span>
+            <div class="cfg-chips-row" id="cfg-subpick-chips-author"></div>
+            <details style="margin-top: 4px; font-size: 10px; cursor: pointer;">
+              <summary style="color: #64748B; font-weight: 600;">⚙️ 고급 정규식 직접 수정</summary>
+              <input type="text" class="cfg-pattern-input" id="cfg-pattern-author" placeholder="예: \[(.*?)\] 또는 주무관\[(.*?)\]" style="margin-top: 3px;">
+              <div class="cfg-chips-row" style="margin-top: 3px;">
+                <span class="cfg-chip-label">빠른 패턴:</span>
+                <button type="button" class="cfg-quick-pattern" data-field="author" data-pattern="\[(.*?)\]">[대괄호 안]</button>
+                <button type="button" class="cfg-quick-pattern" data-field="author" data-pattern="\((.*?)\)">(소괄호 안)</button>
+                <button type="button" class="cfg-quick-pattern" data-field="author" data-pattern="주무관\[(.*?)\]">주무관[...]</button>
+                <button type="button" class="cfg-quick-pattern" data-field="author" data-pattern="^([^\s]+)">첫 단어</button>
+              </div>
+            </details>
           </div>
         </div>
         <div class="cfg-preview-box" id="cfg-prev-author" style="display: none;">
@@ -813,6 +1087,16 @@
             <button type="button" class="cfg-chip" data-field="category" data-tag="{기안자}">{기안자}</button>
             <button type="button" class="cfg-chip" data-field="category" data-tag="{상태}">{상태}</button>
             <button type="button" class="cfg-chip" data-field="category" data-tag="{날짜}">{날짜}</button>
+          </div>
+          <div class="cfg-pattern-row">
+            <span class="cfg-chip-label">🎯 텍스트 추출 패턴 (정규식):</span>
+            <input type="text" class="cfg-pattern-input" id="cfg-pattern-category" placeholder="예: \[(.*?)\] 또는 ^([^\s]+)">
+            <div class="cfg-chips-row">
+              <span class="cfg-chip-label">빠른 설정:</span>
+              <button type="button" class="cfg-quick-pattern" data-field="category" data-pattern="\[(.*?)\]">[대괄호 안]</button>
+              <button type="button" class="cfg-quick-pattern" data-field="category" data-pattern="\((.*?)\)">(소괄호 안)</button>
+              <button type="button" class="cfg-quick-pattern" data-field="category" data-pattern="^([^\s]+)">첫 단어</button>
+            </div>
           </div>
         </div>
         <div class="cfg-preview-box" id="cfg-prev-category" style="display: none;">
@@ -872,6 +1156,16 @@
             <button type="button" class="cfg-chip" data-field="desc" data-tag="{분류}">{분류}</button>
             <button type="button" class="cfg-chip" data-field="desc" data-tag="{상태}">{상태}</button>
           </div>
+          <div class="cfg-pattern-row">
+            <span class="cfg-chip-label">🎯 텍스트 추출 패턴 (정규식):</span>
+            <input type="text" class="cfg-pattern-input" id="cfg-pattern-desc" placeholder="예: \[(.*?)\] 또는 ^([^\s]+)">
+            <div class="cfg-chips-row">
+              <span class="cfg-chip-label">빠른 설정:</span>
+              <button type="button" class="cfg-quick-pattern" data-field="desc" data-pattern="\[(.*?)\]">[대괄호 안]</button>
+              <button type="button" class="cfg-quick-pattern" data-field="desc" data-pattern="\((.*?)\)">(소괄호 안)</button>
+              <button type="button" class="cfg-quick-pattern" data-field="desc" data-pattern="^([^\s]+)">첫 단어</button>
+            </div>
+          </div>
         </div>
         <div class="cfg-preview-box" id="cfg-prev-desc" style="display: none;">
           <span class="cfg-prev-text" id="cfg-prev-text-desc"></span>
@@ -906,6 +1200,32 @@
       <button type="button" class="btn-cancel" id="btn-cfg-cancel" style="flex: 1;">돌아가기</button>
       <button type="button" class="btn-danger" id="btn-cfg-reset">규칙 초기화</button>
       <button type="button" class="btn-submit" id="btn-cfg-save" style="flex: 1.5;">규칙 저장 및 적용</button>
+    </div>
+  </div>
+
+  <!-- K캘린더 팝업 내부 확인 모달 (웹페이지 변조 없는 순정 모달) -->
+  <div id="modal-confirm-overlay" class="modal-confirm-overlay" style="display: none;">
+    <div class="modal-confirm-card">
+      <div class="modal-confirm-header">
+        <span class="modal-confirm-title" id="modal-confirm-title">🎯 항목 추출 확인</span>
+        <button type="button" class="modal-confirm-close" id="modal-confirm-close">✕</button>
+      </div>
+      <div class="modal-confirm-sec">
+        <div class="modal-confirm-lbl">📄 웹페이지에서 찍은 원문:</div>
+        <div class="modal-confirm-raw" id="modal-confirm-raw"></div>
+      </div>
+      <div class="modal-confirm-sec">
+        <div class="modal-confirm-lbl">✏️ 등록할 내용 <span style="font-weight: normal; color: #2563EB;">(원하는 단어만 남기면 자동 정규화)</span>:</div>
+        <input type="text" class="modal-confirm-input" id="modal-confirm-input">
+        <div class="modal-confirm-chips-row" id="modal-confirm-chips-row" style="display: none;">
+          <span class="modal-confirm-chips-lbl">💡 추천:</span>
+          <div class="modal-confirm-chips" id="modal-confirm-chips"></div>
+        </div>
+      </div>
+      <div class="modal-confirm-actions">
+        <button type="button" class="btn-modal-cancel" id="btn-modal-cancel">그대로 사용</button>
+        <button type="button" class="btn-modal-ok" id="btn-modal-ok">✔ 적용</button>
+      </div>
     </div>
   </div>
 

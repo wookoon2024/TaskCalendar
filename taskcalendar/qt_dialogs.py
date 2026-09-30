@@ -1117,7 +1117,7 @@ class EntryDialog(QDialog):
                         init_x = saved_col_x
                     else:
                         # Fallback for legacy saved data where pts[0] was shifted left
-                        if self._expand_anchor_right and (exp_x + self._expanded_width <= screen_right + 50):
+                        if (self._expand_anchor_right or getattr(self, "_anchored_to_right", False)) and (exp_x + self._expanded_width <= screen_right + 50):
                             init_x = exp_x + self._expanded_width - target_w
                         else:
                             init_x = exp_x
@@ -2394,14 +2394,15 @@ class EntryDialog(QDialog):
             self._prev_compact_width = curr_w
             new_w = target_w
 
-        screen = self.screen() or QApplication.primaryScreen()
-        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        avail = _screen_geometry_for(self.x(), self.y(), max(1, self.width()), max(1, self.height()))
         screen_right = avail.x() + avail.width()
         old_right = self.x() + self.width()
 
         should_shift_left = (r_dir == "l")
-        if not should_shift_left and getattr(self, "_expand_anchor_right", False):
-            if (self.x() + new_w > screen_right) or getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16):
+        anchor_right_opt = getattr(self, "_expand_anchor_right", False)
+        is_anchored = getattr(self, "_anchored_to_right", False)
+        if not should_shift_left:
+            if (self.x() + new_w > screen_right) or (anchor_right_opt and (is_anchored or old_right >= screen_right - 16)) or is_anchored:
                 should_shift_left = True
                 self._anchored_to_right = True
 
@@ -2413,6 +2414,10 @@ class EntryDialog(QDialog):
             if new_x < avail.left():
                 new_x = avail.left()
             self.move(new_x, self.y())
+        else:
+            if self.x() + new_w > screen_right:
+                new_x = max(avail.left(), screen_right - new_w)
+                self.move(new_x, self.y())
         self._collapsed_width = new_w
         self.resize(new_w, self.height())
         self._debounced_save_memo_geometry(250)
@@ -3181,8 +3186,7 @@ class EntryDialog(QDialog):
             self._auto_save_to_db()
 
     def _resize_with_anchor(self, width: int, height: int, expanding: bool | None = None) -> None:
-        screen = self.screen() or QApplication.primaryScreen()
-        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        avail = _screen_geometry_for(self.x(), self.y(), max(1, self.width()), max(1, self.height()))
         screen_right = avail.x() + avail.width()
 
         old_right = self.x() + self.width()
@@ -3191,25 +3195,27 @@ class EntryDialog(QDialog):
         if expanding is None:
             expanding = width > self.width()
 
-        if getattr(self, "_expand_anchor_right", False):
-            # 기본은 왼쪽 모서리 고정이다. 펼치면 오른쪽으로 커지고, 접으면 오른쪽이 줄어든다.
-            # 왼쪽을 고정한 채 펼쳤을 때 화면 오른쪽을 넘칠 때만 오른쪽 모서리를 고정해
-            # 왼쪽으로 커지게 한다.
-            if expanding:
-                if target_x + width > screen_right:
-                    target_x = old_right - width
-                    self._anchored_to_right = True
-                else:
-                    self._anchored_to_right = False
-            else:
-                # 접을 때: 펼친 창이 화면 안에 있고 펼칠 때 오른쪽 모서리를 고정했다면
-                # 그 오른쪽 모서리로 되돌린다(= 펼치기 전 자리로 복귀).
-                # 펼친 창이 화면 밖으로 삐져나가 있으면 보던 왼쪽 모서리를 유지한다.
-                if self._anchored_to_right and (old_right <= screen_right):
-                    target_x = old_right - width
-            # 어떤 경우에도 창이 화면 오른쪽 밖으로 나가지 않게 한다.
-            if target_x + width > screen_right:
-                target_x = max(avail.left(), screen_right - width)
+        anchor_right_opt = getattr(self, "_expand_anchor_right", False)
+        is_anchored = getattr(self, "_anchored_to_right", False)
+
+        if expanding:
+            # 펼칠 때: 화면 오른쪽을 넘치거나, 이미 우측에 고정되어 있거나, 화면 우측 끝(16px 이내)에 붙어있을 때
+            # 오른쪽 모서리를 기준으로 고정하여 왼쪽으로 커지게 함
+            if (target_x + width > screen_right) or is_anchored or (old_right >= screen_right - 16) or (anchor_right_opt and is_anchored):
+                target_x = old_right - width
+                self._anchored_to_right = True
+            elif anchor_right_opt:
+                self._anchored_to_right = False
+        else:
+            # 접을 때: 우측 모서리에 고정되어 있던 창이면 오른쪽 모서리를 유지하며 접힘
+            if is_anchored and (old_right <= screen_right + 10):
+                target_x = old_right - width
+
+        # 어떤 경우에도(설정 여부와 무관하게) 창이 화면 오른쪽 밖으로 나가지 않게 최종 보호
+        if target_x + width > screen_right:
+            target_x = max(avail.left(), screen_right - width)
+        if target_x < avail.left():
+            target_x = avail.left()
 
         self.setGeometry(target_x, self.y(), width, height)
 
@@ -3271,14 +3277,14 @@ class EntryDialog(QDialog):
 
             if is_col:
                 col_x = curr_geo.x()
-                if getattr(self, "_expand_anchor_right", False) and getattr(self, "_anchored_to_right", False):
+                if getattr(self, "_anchored_to_right", False):
                     exp_x = curr_geo.x() + curr_geo.width() - w_val
                 else:
                     exp_x = curr_geo.x()
                 parent.repository.set_setting(f"memo_col_x_{self.entry.entry_id}", str(col_x))
             else:
                 exp_x = curr_geo.x()
-                if getattr(self, "_expand_anchor_right", False) and getattr(self, "_anchored_to_right", False):
+                if getattr(self, "_anchored_to_right", False):
                     col_w = getattr(self, "_collapsed_width", None) or 180
                     col_x = curr_geo.x() + curr_geo.width() - col_w
                 else:
@@ -3302,16 +3308,15 @@ class EntryDialog(QDialog):
         if hasattr(self, "_drag_origin"):
             moved = self.pos() != self._drag_origin
             delattr(self, "_drag_origin")
-        screen = self.screen() or QApplication.primaryScreen()
         # 기준 모서리는 사용자가 창을 '실제로 옮겼을 때'만 다시 정한다.
         # 제목줄을 단순히 클릭하거나 접기/펼치기만 해도 재계산되면, 펼친 뒤 판정이
         # 뒤집혀 접을 때 엉뚱한 자리로 튄다.
-        if screen and moved:
-            avail = screen.availableGeometry()
+        if moved:
+            avail = _screen_geometry_for(self.x(), self.y(), max(1, self.width()), max(1, self.height()))
             screen_right = avail.x() + avail.width()
             exp_w = getattr(self, "_expanded_width", 380)
-            # 왼쪽을 고정한 채 펼쳤을 때 화면 오른쪽을 넘치는 경우에만 우측 기준(왼쪽으로 커짐).
-            self._anchored_to_right = (self.x() + exp_w > screen_right)
+            # 펼쳤을 때 화면 오른쪽을 넘치거나, 창의 오른쪽 모서리가 화면 우측 끝(16px 이내)에 닿아있는 경우 우측 기준
+            self._anchored_to_right = (self.x() + exp_w >= screen_right - 4) or (self.x() + self.width() >= screen_right - 16)
         self._debounced_save_memo_geometry(250)
 
     def _start_window_drag(self, global_pos: QPoint) -> None:
@@ -3337,8 +3342,7 @@ class EntryDialog(QDialog):
             target_pos = global_pos - self._drag_position
             curr_geo = QRect(target_pos, self.size())
             other_geos = self._other_window_geometries()
-            screen = self.screen()
-            screen_geo = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+            screen_geo = _screen_geometry_for(target_pos.x(), target_pos.y(), self.width(), self.height())
             snapped_pos = snap_window_rect(curr_geo, other_geos, screen_geo, threshold=16)
             self.move(snapped_pos)
 
@@ -4078,7 +4082,7 @@ class FloatingGroupDialog(QDialog):
                 if saved_col_x is not None:
                     init_x = int(saved_col_x)
                 else:
-                    if self._expand_anchor_right and (exp_x + self._expanded_width <= screen_right + 50):
+                    if (self._expand_anchor_right or getattr(self, "_anchored_to_right", False)) and (exp_x + self._expanded_width <= screen_right + 50):
                         init_x = exp_x + self._expanded_width - target_w
                     else:
                         init_x = exp_x
@@ -4771,8 +4775,7 @@ class FloatingGroupDialog(QDialog):
         self._debounced_save(250)
 
     def _resize_with_anchor(self, width: int, height: int, expanding: bool | None = None) -> None:
-        screen = self.screen() or QApplication.primaryScreen()
-        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        avail = _screen_geometry_for(self.x(), self.y(), max(1, self.width()), max(1, self.height()))
         screen_right = avail.x() + avail.width()
 
         old_right = self.x() + self.width()
@@ -4781,25 +4784,27 @@ class FloatingGroupDialog(QDialog):
         if expanding is None:
             expanding = width > self.width()
 
-        if getattr(self, "_expand_anchor_right", False):
-            # 기본은 왼쪽 모서리 고정이다. 펼치면 오른쪽으로 커지고, 접으면 오른쪽이 줄어든다.
-            # 왼쪽을 고정한 채 펼쳤을 때 화면 오른쪽을 넘칠 때만 오른쪽 모서리를 고정해
-            # 왼쪽으로 커지게 한다.
-            if expanding:
-                if target_x + width > screen_right:
-                    target_x = old_right - width
-                    self._anchored_to_right = True
-                else:
-                    self._anchored_to_right = False
-            else:
-                # 접을 때: 펼친 창이 화면 안에 있고 펼칠 때 오른쪽 모서리를 고정했다면
-                # 그 오른쪽 모서리로 되돌린다(= 펼치기 전 자리로 복귀).
-                # 펼친 창이 화면 밖으로 삐져나가 있으면 보던 왼쪽 모서리를 유지한다.
-                if self._anchored_to_right and (old_right <= screen_right):
-                    target_x = old_right - width
-            # 어떤 경우에도 창이 화면 오른쪽 밖으로 나가지 않게 한다.
-            if target_x + width > screen_right:
-                target_x = max(avail.left(), screen_right - width)
+        anchor_right_opt = getattr(self, "_expand_anchor_right", False)
+        is_anchored = getattr(self, "_anchored_to_right", False)
+
+        if expanding:
+            # 펼칠 때: 화면 오른쪽을 넘치거나, 이미 우측에 고정되어 있거나, 화면 우측 끝(16px 이내)에 붙어있을 때
+            # 오른쪽 모서리를 기준으로 고정하여 왼쪽으로 커지게 함
+            if (target_x + width > screen_right) or is_anchored or (old_right >= screen_right - 16) or (anchor_right_opt and is_anchored):
+                target_x = old_right - width
+                self._anchored_to_right = True
+            elif anchor_right_opt:
+                self._anchored_to_right = False
+        else:
+            # 접을 때: 우측 모서리에 고정되어 있던 창이면 오른쪽 모서리를 유지하며 접힘
+            if is_anchored and (old_right <= screen_right + 10):
+                target_x = old_right - width
+
+        # 어떤 경우에도(설정 여부와 무관하게) 창이 화면 오른쪽 밖으로 나가지 않게 최종 보호
+        if target_x + width > screen_right:
+            target_x = max(avail.left(), screen_right - width)
+        if target_x < avail.left():
+            target_x = avail.left()
 
         self.setGeometry(target_x, self.y(), width, height)
 
@@ -4858,14 +4863,14 @@ class FloatingGroupDialog(QDialog):
 
             if is_col:
                 col_x = curr_geo.x()
-                if getattr(self, "_expand_anchor_right", False) and getattr(self, "_anchored_to_right", False):
+                if getattr(self, "_anchored_to_right", False):
                     exp_x = curr_geo.x() + curr_geo.width() - w_val
                 else:
                     exp_x = curr_geo.x()
                 self.group_dict["col_x"] = col_x
             else:
                 exp_x = curr_geo.x()
-                if getattr(self, "_expand_anchor_right", False) and getattr(self, "_anchored_to_right", False):
+                if getattr(self, "_anchored_to_right", False):
                     col_w = getattr(self, "_collapsed_width", None) or 250
                     col_x = curr_geo.x() + curr_geo.width() - col_w
                 else:
@@ -4929,8 +4934,7 @@ class FloatingGroupDialog(QDialog):
         return geos
 
     def _screen_geometry(self) -> QRect:
-        screen = self.screen()
-        return screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        return _screen_geometry_for(self.x(), self.y(), max(1, self.width()), max(1, self.height()))
 
     def _start_window_drag(self, global_pos: QPoint) -> None:
         self._drag_pos = global_pos - self.frameGeometry().topLeft()
@@ -4950,14 +4954,13 @@ class FloatingGroupDialog(QDialog):
         if hasattr(self, "_drag_origin"):
             moved = self.pos() != self._drag_origin
             delattr(self, "_drag_origin")
-        screen = self.screen() or QApplication.primaryScreen()
         # 기준 모서리는 창을 '실제로 옮겼을 때'만 다시 정한다(제목줄 단순 클릭/접기·펼치기 제외).
-        if screen and moved:
-            avail = screen.availableGeometry()
+        if moved:
+            avail = _screen_geometry_for(self.x(), self.y(), max(1, self.width()), max(1, self.height()))
             screen_right = avail.x() + avail.width()
             exp_w = getattr(self, "_expanded_width", 360)
-            # 왼쪽을 고정한 채 펼쳤을 때 화면 오른쪽을 넘치는 경우에만 우측 기준(왼쪽으로 커짐).
-            self._anchored_to_right = (self.x() + exp_w > screen_right)
+            # 펼쳤을 때 화면 오른쪽을 넘치거나, 창의 오른쪽 모서리가 화면 우측 끝(16px 이내)에 닿아있는 경우 우측 기준
+            self._anchored_to_right = (self.x() + exp_w >= screen_right - 4) or (self.x() + self.width() >= screen_right - 16)
         self._debounced_save(250)
 
     def _get_resize_direction(self, global_pos: QPoint) -> str | None:
@@ -5202,14 +5205,15 @@ class FloatingGroupDialog(QDialog):
             self._prev_compact_width = curr_w
             new_w = target_w
 
-        screen = self.screen() or QApplication.primaryScreen()
-        avail = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        avail = _screen_geometry_for(self.x(), self.y(), max(1, self.width()), max(1, self.height()))
         screen_right = avail.x() + avail.width()
         old_right = self.x() + self.width()
 
         should_shift_left = (r_dir == "l")
-        if not should_shift_left and getattr(self, "_expand_anchor_right", False):
-            if (self.x() + new_w > screen_right) or getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16):
+        anchor_right_opt = getattr(self, "_expand_anchor_right", False)
+        is_anchored = getattr(self, "_anchored_to_right", False)
+        if not should_shift_left:
+            if (self.x() + new_w > screen_right) or (anchor_right_opt and (is_anchored or old_right >= screen_right - 16)) or is_anchored:
                 should_shift_left = True
                 self._anchored_to_right = True
 
@@ -5221,6 +5225,10 @@ class FloatingGroupDialog(QDialog):
             if new_x < avail.left():
                 new_x = avail.left()
             self.move(new_x, self.y())
+        else:
+            if self.x() + new_w > screen_right:
+                new_x = max(avail.left(), screen_right - new_w)
+                self.move(new_x, self.y())
         self._collapsed_width = new_w
         self.resize(new_w, self.height())
         self._debounced_save(250)
@@ -5745,8 +5753,8 @@ class SettingsDialog(QDialog):
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
         self.setWindowTitle("환경설정")
         self.setWindowIcon(_dialog_icon())
-        self.resize(700, 520)
-        self.setFixedWidth(700)
+        self.resize(720, 530)
+        self.setFixedWidth(720)
         self.setStyleSheet(dialog_stylesheet(self.palette))
 
         root = QVBoxLayout(self)
@@ -5836,6 +5844,7 @@ class SettingsDialog(QDialog):
         info_layout = QFormLayout(info_card)
         info_layout.setContentsMargins(14, 12, 14, 12)
         info_layout.setSpacing(8)
+        info_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         info_title = QLabel("개발자 정보")
         info_title.setObjectName("sectionTitle")
         info_layout.addRow(info_title)
@@ -5963,7 +5972,7 @@ class SettingsDialog(QDialog):
             lunar_freq_label.setEnabled(checked)
 
         self.show_lunar_check.toggled.connect(_on_lunar_toggled)
-        self.lunar_freq_combo.setFixedWidth(190)
+        self.lunar_freq_combo.setFixedWidth(230)
         lunar_row.addWidget(self.lunar_freq_combo)
         lunar_row.addStretch(1)
         cal_view_layout.addLayout(lunar_row)
@@ -6009,6 +6018,7 @@ class SettingsDialog(QDialog):
         appearance_layout = QFormLayout(appearance)
         appearance_layout.setContentsMargins(14, 12, 14, 12)
         appearance_layout.setSpacing(10)
+        appearance_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         appearance_title = QLabel("스킨 설정")
         appearance_title.setObjectName("sectionTitle")
         appearance_layout.addRow(appearance_title)
@@ -6016,6 +6026,7 @@ class SettingsDialog(QDialog):
         for theme_name in THEME_OPTIONS:
             self.theme_combo.addItem(THEME_LABELS.get(theme_name, theme_name), theme_name)
         self.theme_combo.setCurrentIndex(max(0, self.theme_combo.findData(current_theme)))
+        self.theme_combo.setFixedWidth(280)
         theme_label = QLabel("테마")
         theme_label.setObjectName("muted")
         appearance_layout.addRow(theme_label, self.theme_combo)
@@ -6026,13 +6037,14 @@ class SettingsDialog(QDialog):
         font_layout = QFormLayout(font_card)
         font_layout.setContentsMargins(14, 12, 14, 12)
         font_layout.setSpacing(10)
+        font_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         font_title = QLabel("글꼴 설정")
         font_title.setObjectName("sectionTitle")
         font_layout.addRow(font_title)
 
         self.ui_font_family_combo = QFontComboBox()
         self.ui_font_family_combo.setCurrentFont(QFont(ui_font_family))
-        self.ui_font_family_combo.setFixedWidth(240)
+        self.ui_font_family_combo.setFixedWidth(280)
         family_label = QLabel("글꼴")
         family_label.setObjectName("muted")
         font_layout.addRow(family_label, self.ui_font_family_combo)
@@ -6052,7 +6064,7 @@ class SettingsDialog(QDialog):
         self.ui_font_scale_combo.setCurrentIndex(
             scale_index if scale_index >= 0 else self.ui_font_scale_combo.findData(DEFAULT_SCALE)
         )
-        self.ui_font_scale_combo.setFixedWidth(240)
+        self.ui_font_scale_combo.setFixedWidth(280)
         scale_label = QLabel("글자 크기")
         scale_label.setObjectName("muted")
         font_layout.addRow(scale_label, self.ui_font_scale_combo)
@@ -6103,7 +6115,7 @@ class SettingsDialog(QDialog):
 
         c_idx = self.memo_default_color_combo.findData(memo_default_color)
         self.memo_default_color_combo.setCurrentIndex(c_idx if c_idx >= 0 else 1)
-        self.memo_default_color_combo.setFixedWidth(190)
+        self.memo_default_color_combo.setFixedWidth(200)
         color_row.addWidget(self.memo_default_color_combo)
         color_row.addStretch(1)
         mc1_layout.addLayout(color_row)
@@ -6118,13 +6130,13 @@ class SettingsDialog(QDialog):
         self.memo_default_floating_check.setToolTip("새 메모를 만들 때 항상 다른 프로그램 창 위에 떠 있도록 핀을 기본으로 고정합니다.")
         mc1_layout.addWidget(self.memo_default_floating_check)
 
-        opt_row = QHBoxLayout()
-        opt_row.setContentsMargins(0, 0, 0, 0)
-        opt_row.setSpacing(10)
+        op_row = QHBoxLayout()
+        op_row.setContentsMargins(0, 0, 0, 0)
+        op_row.setSpacing(10)
 
         op_label = QLabel("기본 투명도:")
         op_label.setObjectName("muted")
-        opt_row.addWidget(op_label)
+        op_row.addWidget(op_label)
 
         self.memo_default_opacity_combo = QComboBox()
         self.memo_default_opacity_combo.addItem("100% (완전 불투명)", 100)
@@ -6135,14 +6147,18 @@ class SettingsDialog(QDialog):
         self.memo_default_opacity_combo.addItem("50% (반투명)", 50)
         op_idx = self.memo_default_opacity_combo.findData(memo_default_opacity)
         self.memo_default_opacity_combo.setCurrentIndex(op_idx if op_idx >= 0 else 0)
-        self.memo_default_opacity_combo.setFixedWidth(150)
-        opt_row.addWidget(self.memo_default_opacity_combo)
+        self.memo_default_opacity_combo.setFixedWidth(200)
+        op_row.addWidget(self.memo_default_opacity_combo)
+        op_row.addStretch(1)
+        mc1_layout.addLayout(op_row)
 
-        opt_row.addSpacing(16)
+        sz_row = QHBoxLayout()
+        sz_row.setContentsMargins(0, 0, 0, 0)
+        sz_row.setSpacing(10)
 
         sz_label = QLabel("기본 크기:")
         sz_label.setObjectName("muted")
-        opt_row.addWidget(sz_label)
+        sz_row.addWidget(sz_label)
 
         self.memo_default_size_combo = QComboBox()
         self.memo_default_size_combo.addItem("보통 (380 × 360)", "380,360")
@@ -6151,10 +6167,10 @@ class SettingsDialog(QDialog):
         self.memo_default_size_combo.addItem("와이드 (560 × 360)", "560,360")
         sz_idx = self.memo_default_size_combo.findData(memo_default_size)
         self.memo_default_size_combo.setCurrentIndex(sz_idx if sz_idx >= 0 else 0)
-        self.memo_default_size_combo.setFixedWidth(160)
-        opt_row.addWidget(self.memo_default_size_combo)
-        opt_row.addStretch(1)
-        mc1_layout.addLayout(opt_row)
+        self.memo_default_size_combo.setFixedWidth(200)
+        sz_row.addWidget(self.memo_default_size_combo)
+        sz_row.addStretch(1)
+        mc1_layout.addLayout(sz_row)
 
         pg_memo_layout.addWidget(memo_card1)
 
@@ -6183,7 +6199,7 @@ class SettingsDialog(QDialog):
         self.memo_default_font_size_combo.addItem("아주 크게 (15pt)", 15)
         f_idx = self.memo_default_font_size_combo.findData(memo_default_font_size)
         self.memo_default_font_size_combo.setCurrentIndex(f_idx if f_idx >= 0 else 1)
-        self.memo_default_font_size_combo.setFixedWidth(150)
+        self.memo_default_font_size_combo.setFixedWidth(180)
         font_row.addWidget(self.memo_default_font_size_combo)
         font_row.addStretch(1)
         mc2_layout.addLayout(font_row)

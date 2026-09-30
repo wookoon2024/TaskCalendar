@@ -60,6 +60,7 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
     accent_hover = _shade(accent, -0.12)
     accent_grad_end = _shade(accent, 0.15)
     check_icon = asset_path("checkmark.svg").as_posix()
+    arrow_svg = asset_path("chevron_down.svg").as_posix()
 
     return f"""
     QDialog, QDialog#entryDialog {{
@@ -179,7 +180,7 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         background: {accent_soft};
         border-color: {accent};
     }}
-    QLineEdit, QComboBox, QDateEdit, QTimeEdit, QSpinBox, QPlainTextEdit, QTextEdit {{
+    QLineEdit, QDateEdit, QTimeEdit, QSpinBox, QPlainTextEdit, QTextEdit {{
         background: {panel};
         border: 1px solid {line};
         border-radius: 8px;
@@ -187,6 +188,43 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         padding: 4px 8px;
         selection-background-color: {accent_soft};
         selection-color: {text};
+    }}
+    QComboBox {{
+        background: {panel};
+        border: 1px solid {line};
+        border-radius: 8px;
+        color: {text};
+        padding: 4px 26px 4px 10px;
+        min-height: 22px;
+        selection-background-color: {accent_soft};
+        selection-color: {text};
+    }}
+    QComboBox:hover, QComboBox:focus {{
+        border-color: {accent};
+    }}
+    QComboBox::drop-down {{
+        subcontrol-origin: padding;
+        subcontrol-position: center right;
+        width: 22px;
+        border-left: 1px solid {line};
+        border-top-right-radius: 7px;
+        border-bottom-right-radius: 7px;
+        background: transparent;
+    }}
+    QComboBox::down-arrow {{
+        image: url("{arrow_svg}");
+        width: 10px;
+        height: 10px;
+    }}
+    QComboBox QAbstractItemView {{
+        border: 1px solid {line};
+        border-radius: 6px;
+        background-color: {panel};
+        color: {text};
+        selection-background-color: {accent_soft};
+        selection-color: {text};
+        outline: 0px;
+        padding: 4px;
     }}
     QPlainTextEdit, QTextEdit {{
         padding: 8px;

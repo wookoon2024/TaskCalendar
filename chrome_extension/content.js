@@ -207,58 +207,143 @@
     }
   }
 
-  function buildElementSelector(el, container) {
+  function buildElementSelector(el) {
     if (!el || el === document.body || el === document.documentElement) return '';
 
-    // 1. 전역 고유 ID 검사
-    if (el.id && !/^\d+$/.test(el.id)) {
+    // 1. el 자체의 고유 ID 검사 (순수 숫자, 동적 세션 식별자 제외)
+    if (el.id && !/^\d+$/.test(el.id) && !/^[:_]/.test(el.id) && !el.id.includes('__') && !el.id.startsWith('tc-')) {
       try {
         var idSel = '#' + CSS.escape(el.id);
         if (document.querySelectorAll(idSel).length === 1) return idSel;
       } catch(e) {}
     }
 
-    var boundary = (container && container.contains && container.contains(el) && container !== document.body && container !== document.documentElement)
-      ? container
-      : document.body;
+    // 2. 표(Table) 헤더/레이블 기반 매칭 (한국 공공 전자결재/공문서/게시판 최적화)
+    var td = el.closest ? el.closest('td, th') : null;
+    if (td) {
+      // 이전 th/td 형제 셀에 레이블이 있는 경우: <tr><th>기안부서</th><td>운영지원과</td></tr>
+      var prev = td.previousElementSibling;
+      while (prev && prev.tagName !== 'TH' && prev.tagName !== 'TD') {
+        prev = prev.previousElementSibling;
+      }
+      if (prev) {
+        var prevTxt = (prev.innerText || prev.textContent || '').replace(/[\s\n\r\t]+/g, '').trim();
+        var isKnownLabel = /^(기안부서|담당부서|소속부서|발신부서|수신부서|처리부서|소속|소속기관|부서|부서명|기안자|작성자|담당자|기안인|작성인|등록자|글쓴이|기안자명|작성자명|기안일자|기안일|작성일자|작성일|등록일자|등록일|시행일자|일자|문서제목|제목|안건명|과제명|조회|조회수|추천|추천수)$/i.test(prevTxt);
+        if (prevTxt && isKnownLabel) {
+          var labelCandidate = prev.tagName.toLowerCase() + ':has-text("' + prevTxt + '") + ' + td.tagName.toLowerCase();
+          if (el !== td) {
+            var subPath = el.tagName.toLowerCase();
+            if (el.className && typeof el.className === 'string') {
+              var subCls = el.className.trim().split(/\s+/).filter(function(c) {
+                return c && !c.startsWith('tc-') && !/^\d+$/.test(c);
+              })[0];
+              if (subCls) subPath += '.' + CSS.escape(subCls);
+            }
+            labelCandidate += ' ' + subPath;
+          }
+          return labelCandidate;
+        }
+      }
+    }
 
-    // 2. 클래스 기반 고유 선택자
+    // 3. 안정적인 상위 컨테이너(ID 또는 대표 클래스) 탐색
+    var stableAncestor = null;
+    var ancestorSel = '';
+    var currP = el.parentElement;
+    while (currP && currP !== document.body && currP !== document.documentElement) {
+      if (currP.id && !/^\d+$/.test(currP.id) && !currP.id.startsWith('tc-') && !currP.id.includes('__')) {
+        try {
+          var pIdSel = '#' + CSS.escape(currP.id);
+          if (document.querySelectorAll(pIdSel).length === 1) {
+            stableAncestor = currP;
+            ancestorSel = pIdSel;
+            break;
+          }
+        } catch(e) {}
+      }
+      if (currP.className && typeof currP.className === 'string') {
+        var pClasses = currP.className.trim().split(/\s+/).filter(function(c) {
+          return c && !c.startsWith('tc-') && !c.includes(':') && !/^\d+$/.test(c) &&
+                 /view|content|article|board|post|detail|doc|sub-top|sub_top|bbs|item|wrap/i.test(c);
+        });
+        for (var pi = 0; pi < pClasses.length; pi++) {
+          var pCls = '.' + CSS.escape(pClasses[pi]);
+          try {
+            if (document.querySelectorAll(pCls).length === 1) {
+              stableAncestor = currP;
+              ancestorSel = pCls;
+              break;
+            }
+          } catch(e) {}
+        }
+        if (stableAncestor) break;
+      }
+      currP = currP.parentElement;
+    }
+
+    // 4. el 자체의 클래스 검사
     if (el.className && typeof el.className === 'string') {
       var classes = el.className.trim().split(/\s+/).filter(function(c) {
         return c && !c.startsWith('tc-') && !c.includes(':') && !c.includes('/') && !/^\d+$/.test(c);
       });
+      // 4-a. 문서 전체에서 고유한 클래스
       for (var k = 0; k < classes.length; k++) {
         var cls = '.' + CSS.escape(classes[k]);
         try {
-          if (boundary !== document.body && boundary.querySelectorAll(cls).length === 1) return cls;
           if (document.querySelectorAll(cls).length === 1) return cls;
         } catch(e) {}
       }
-      if (classes.length > 0) {
-        var tagCls = el.tagName.toLowerCase() + '.' + classes.map(function(c) { return CSS.escape(c); }).join('.');
-        try {
-          if (boundary !== document.body && boundary.querySelectorAll(tagCls).length === 1) return tagCls;
-          if (document.querySelectorAll(tagCls).length === 1) return tagCls;
-        } catch(e) {}
+      // 4-b. 상위 컨테이너 내부에서 고유한 클래스
+      if (stableAncestor && ancestorSel) {
+        for (var m = 0; m < classes.length; m++) {
+          var subCls = ancestorSel + ' .' + CSS.escape(classes[m]);
+          try {
+            if (document.querySelectorAll(subCls).length === 1) return subCls;
+          } catch(e) {}
+        }
       }
     }
 
-    // 3. 계층 경로 탐색
+    // 5. 상위 컨테이너(또는 body) 기준 경로 탐색
+    var boundary = stableAncestor || document.body;
     var path = [];
     var curr = el;
     while (curr && curr !== boundary && curr !== document.body && curr !== document.documentElement) {
       var tag = curr.tagName.toLowerCase();
       var parent = curr.parentElement;
       if (!parent) break;
-      var siblings = Array.from(parent.children).filter(function(ch) { return ch.tagName === curr.tagName; });
-      if (siblings.length > 1) {
-        var idx = siblings.indexOf(curr) + 1;
-        tag += ':nth-of-type(' + idx + ')';
+
+      var stepSel = tag;
+      var hasUniqueClassInParent = false;
+      if (curr.className && typeof curr.className === 'string') {
+        var clList = curr.className.trim().split(/\s+/).filter(function(c) {
+          return c && !c.startsWith('tc-') && !c.includes(':') && !/^\d+$/.test(c);
+        });
+        if (clList.length > 0) {
+          try {
+            if (parent.querySelectorAll('.' + CSS.escape(clList[0])).length === 1) {
+              stepSel = tag + '.' + CSS.escape(clList[0]);
+              hasUniqueClassInParent = true;
+            }
+          } catch(e) {}
+        }
       }
-      path.unshift(tag);
+
+      if (!hasUniqueClassInParent) {
+        var siblings = Array.from(parent.children).filter(function(ch) { return ch.tagName === curr.tagName; });
+        if (siblings.length > 1) {
+          var idx = siblings.indexOf(curr) + 1;
+          stepSel = tag + ':nth-of-type(' + idx + ')';
+        }
+      }
+
+      path.unshift(stepSel);
       curr = parent;
     }
-    return path.join(' > ');
+
+    var localPath = path.join(' > ');
+    var fullSelector = (ancestorSel ? (ancestorSel + ' > ' + localPath) : localPath);
+    return fullSelector || localPath;
   }
 
   function onPickerClick(e) {
@@ -278,8 +363,9 @@
     }
     document.__tcLink = a;
 
-    // 만약 사용자가 본문 내부의 작은 텍스트(span, font, p, div 등)를 찍은 경우 본문 컨테이너로 승격
-    var contentAncestor = target.closest ? target.closest(
+    // 비고/내용 필드인 경우에만 본문 컨테이너로 승격 (부서, 기안자, 날짜, 제목 등은 승격하지 않음!)
+    var isBodyField = (activeTargetField === 'desc' || activeTargetField === 'all');
+    var contentAncestor = (isBodyField && target.closest) ? target.closest(
       'td.board-contents, .board-contents, td.han, .view_content, .article_content, .post_content, .doc_content, [class*="board-contents"], [class*="view_content"], [class*="post_content"], [class*="article_body"], #articleBody, #board_content, #view_content'
     ) : null;
     var effectiveTarget = (contentAncestor && contentAncestor.contains(target)) ? contentAncestor : target;
@@ -303,7 +389,7 @@
       }
     }
 
-    if (contentAncestor && contentAncestor !== effectiveTarget) {
+    if (isBodyField && contentAncestor && contentAncestor !== effectiveTarget) {
       var fullContentText = (contentAncestor.innerText || contentAncestor.textContent || '').replace(/[\s\n\r\t]+/g, ' ').trim();
       if (fullContentText && fullContentText.length > pickedText.length) {
         pickedText = fullContentText;
@@ -311,7 +397,7 @@
       }
     }
 
-    var pickedSelector = buildElementSelector(effectiveTarget, container);
+    var pickedSelector = buildElementSelector(effectiveTarget);
 
     // 블록 드래그 텍스트 해제 (내용 수집 원천 차단)
     try {
@@ -323,7 +409,7 @@
     var completedField = activeTargetField;
     stopElementPicker();
 
-    // 백그라운드에 선택 완료 알림
+    // 백그라운드에 선택 완료 알림 (웹페이지 변조 없음)
     try {
       chrome.runtime.sendMessage({
         action: "elementPickerCompleted",
