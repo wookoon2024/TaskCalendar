@@ -163,6 +163,8 @@ class CompactCategoryTree(QTreeWidget):
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QTreeWidget.DragDropMode.DragDrop)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self._drop_target_item = None
+        self._drop_pos = None
 
     def _detach_item(self, item: QTreeWidgetItem) -> QTreeWidgetItem:
         """아이템을 현재 부모 또는 최상위 트리에서 안전하게 분리하여 반환"""
@@ -212,6 +214,49 @@ class CompactCategoryTree(QTreeWidget):
         item_option.rect = self.visualRect(index)
         self.itemDelegate().paint(painter, item_option, index)
 
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if getattr(self, "_drop_target_item", None):
+            item = self._drop_target_item
+            drop_pos = getattr(self, "_drop_pos", None)
+            rect = self.visualItemRect(item)
+            if not rect.isValid() or rect.width() <= 0:
+                return
+
+            painter = QPainter(self.viewport())
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            try:
+                accent_color = QColor("#2563EB")
+                accent_fill = QColor(37, 99, 235, 35)
+
+                is_folder = not isinstance(item.data(0, Qt.UserRole), WorkSheetData)
+                # 폴더 위로 올렸거나 OnItem인 경우: 대상 폴더 영역 전체에 파란색 포커스 테두리와 은은한 배경 강조
+                if drop_pos == QAbstractItemView.DropIndicatorPosition.OnItem or (is_folder and drop_pos is None):
+                    target_rect = QRect(2, rect.y() + 1, self.viewport().width() - 4, rect.height() - 2)
+                    painter.setPen(QPen(accent_color, 2))
+                    painter.setBrush(accent_fill)
+                    painter.drawRoundedRect(target_rect, 4, 4)
+                elif drop_pos == QAbstractItemView.DropIndicatorPosition.AboveItem:
+                    # 상단 삽입 위치 가이드선 (좌측 앵커 점 + 가로선)
+                    y = rect.top()
+                    x_start = max(4, rect.left())
+                    x_end = self.viewport().width() - 6
+                    painter.setPen(QPen(accent_color, 2))
+                    painter.drawLine(x_start + 4, y, x_end, y)
+                    painter.setBrush(accent_color)
+                    painter.drawEllipse(QPoint(x_start + 4, y), 3, 3)
+                elif drop_pos == QAbstractItemView.DropIndicatorPosition.BelowItem:
+                    # 하단 삽입 위치 가이드선 (좌측 앵커 점 + 가로선)
+                    y = rect.bottom()
+                    x_start = max(4, rect.left())
+                    x_end = self.viewport().width() - 6
+                    painter.setPen(QPen(accent_color, 2))
+                    painter.drawLine(x_start + 4, y, x_end, y)
+                    painter.setBrush(accent_color)
+                    painter.drawEllipse(QPoint(x_start + 4, y), 3, 3)
+            finally:
+                painter.end()
+
     def startDrag(self, supportedActions):
         """내부 트리 이동 시 식별용 마임 전달 및 순수 MoveAction 적용"""
         items = self.selectedItems()
@@ -224,16 +269,24 @@ class CompactCategoryTree(QTreeWidget):
         drag.exec(Qt.DropAction.MoveAction)
 
     def dragEnterEvent(self, event):
+        super().dragEnterEvent(event)
         if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-taskcalendar-cat-internal"):
             event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
+        super().dragMoveEvent(event)
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        self._drop_target_item = self.itemAt(pos)
+        self._drop_pos = self.dropIndicatorPosition()
+        self.viewport().update()
         if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-taskcalendar-cat-internal"):
             event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event):
+        self._drop_target_item = None
+        self._drop_pos = None
+        self.viewport().update()
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event):
         # 1. 탐색기 등 외부 파일 드롭
@@ -394,6 +447,9 @@ class CompactCategoryTree(QTreeWidget):
 
             event.acceptProposedAction()
         finally:
+            self._drop_target_item = None
+            self._drop_pos = None
+            self.viewport().update()
             self.blockSignals(False)
 
         self.orderChanged.emit()
@@ -496,6 +552,8 @@ class CompactAttachmentTree(QTreeWidget):
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QTreeWidget.DragDropMode.DragDrop)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self._drop_target_item = None
+        self._drop_pos = None
 
     # ------------------------------------------------------------------
     # 내부 유틸: 아이템을 현재 위치에서 분리
@@ -533,6 +591,48 @@ class CompactAttachmentTree(QTreeWidget):
         vr = self.visualRect(index)
         item_option.rect = vr
         self.itemDelegate().paint(painter, item_option, index)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if getattr(self, "_drop_target_item", None):
+            item = self._drop_target_item
+            drop_pos = getattr(self, "_drop_pos", None)
+            rect = self.visualItemRect(item)
+            if not rect.isValid() or rect.width() <= 0:
+                return
+
+            painter = QPainter(self.viewport())
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            try:
+                accent_color = QColor("#2563EB")
+                accent_fill = QColor(37, 99, 235, 35)
+
+                it_data = item.data(0, Qt.UserRole) or {}
+                is_folder = (it_data.get("type") == "folder")
+
+                if drop_pos == QAbstractItemView.DropIndicatorPosition.OnItem or (is_folder and drop_pos is None):
+                    target_rect = QRect(2, rect.y() + 1, self.viewport().width() - 4, rect.height() - 2)
+                    painter.setPen(QPen(accent_color, 2))
+                    painter.setBrush(accent_fill)
+                    painter.drawRoundedRect(target_rect, 4, 4)
+                elif drop_pos == QAbstractItemView.DropIndicatorPosition.AboveItem:
+                    y = rect.top()
+                    x_start = max(4, rect.left())
+                    x_end = self.viewport().width() - 6
+                    painter.setPen(QPen(accent_color, 2))
+                    painter.drawLine(x_start + 4, y, x_end, y)
+                    painter.setBrush(accent_color)
+                    painter.drawEllipse(QPoint(x_start + 4, y), 3, 3)
+                elif drop_pos == QAbstractItemView.DropIndicatorPosition.BelowItem:
+                    y = rect.bottom()
+                    x_start = max(4, rect.left())
+                    x_end = self.viewport().width() - 6
+                    painter.setPen(QPen(accent_color, 2))
+                    painter.drawLine(x_start + 4, y, x_end, y)
+                    painter.setBrush(accent_color)
+                    painter.drawEllipse(QPoint(x_start + 4, y), 3, 3)
+            finally:
+                painter.end()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Delete:
@@ -577,16 +677,24 @@ class CompactAttachmentTree(QTreeWidget):
         drag.exec(Qt.DropAction.CopyAction | Qt.DropAction.MoveAction)
 
     def dragEnterEvent(self, event):
+        super().dragEnterEvent(event)
         if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-taskcalendar-att-internal"):
             event.acceptProposedAction()
-        else:
-            super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
+        super().dragMoveEvent(event)
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        self._drop_target_item = self.itemAt(pos)
+        self._drop_pos = self.dropIndicatorPosition()
+        self.viewport().update()
         if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-taskcalendar-att-internal"):
             event.acceptProposedAction()
-        else:
-            super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event):
+        self._drop_target_item = None
+        self._drop_pos = None
+        self.viewport().update()
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event):
         pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
@@ -671,6 +779,8 @@ class CompactAttachmentTree(QTreeWidget):
             self.expandAll()
 
         finally:
+            self._drop_target_item = None
+            self._drop_pos = None
             self.blockSignals(False)
 
         self.viewport().update()
@@ -3551,6 +3661,19 @@ class WorkManagerDialog(QDialog):
         """시트 내용 동기 저장 (탭 닫기 또는 창 닫기 시)"""
         if sheet in self._open_sheets and self._open_sheets.index(sheet) == self._active_sheet_index:
             self._save_current_sheet_data()
+            # 현재 에디터 내용 추출 후 저장
+            loop = QEventLoop()
+            def _on_exported(text: str, hwpx_bytes: bytes | None):
+                if text:
+                    sheet.content_text = text
+                if hwpx_bytes:
+                    sheet.hwpx_blob = hwpx_bytes
+                loop.quit()
+
+            self.editor.export_document_data(_on_exported)
+            QTimer.singleShot(800, loop.quit)
+            loop.exec()
+
         if self.repository:
             sheet.db_id = self.repository.upsert_work_item(
                 work_id=sheet.db_id,

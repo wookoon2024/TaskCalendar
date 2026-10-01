@@ -240,6 +240,7 @@ class RhwpEditorWidget(QWidget):
             self.web_view = QWebEngineView(self)
             self.web_view.loadFinished.connect(self._on_load_finished)
             self.web_view.page().titleChanged.connect(self._on_web_title_changed)
+            self.web_view.titleChanged.connect(self._on_web_title_changed)
 
             studio_url = self.server.get_url()
             self.web_view.setUrl(QUrl(studio_url))
@@ -263,24 +264,44 @@ class RhwpEditorWidget(QWidget):
             return
         js = """
         (function() {
-            if (window._hasModifiedHook) return;
-            window._hasModifiedHook = true;
             function notifyMod() {
                 document.title = 'rhwp_modified:' + Date.now();
             }
-            window.addEventListener('keydown', function(e) {
-                if (!['Control', 'Alt', 'Shift', 'Meta', 'CapsLock', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
-                    notifyMod();
+            window._rhwpNotifyMod = notifyMod;
+
+            // 1. rhwp-studio eventBus 구독 (에디터 내 문서 변형 감지)
+            try {
+                var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                var eb = deps && (deps.eventBus || (deps.getInputHandler && deps.getInputHandler()?.eventBus));
+                if (eb && !window._hasEventBusHook) {
+                    window._hasEventBusHook = true;
+                    eb.on('document-changed', notifyMod);
+                    eb.on('document-dirty-changed', notifyMod);
+                    eb.on('document-mutated', notifyMod);
                 }
-            }, true);
-            window.addEventListener('paste', notifyMod, true);
-            window.addEventListener('cut', notifyMod, true);
-            document.addEventListener('click', function(e) {
-                var t = e.target;
-                if (t && (t.closest('button') || t.closest('.ribbon') || t.closest('.toolbar'))) {
-                    notifyMod();
-                }
-            }, true);
+            } catch(e) {}
+
+            // 2. DOM 전역 이벤트 캡처 (한글 IME composition, input, keydown, paste, cut, 툴바 버튼 클릭)
+            if (!window._hasDomHook) {
+                window._hasDomHook = true;
+                window.addEventListener('input', notifyMod, true);
+                window.addEventListener('beforeinput', notifyMod, true);
+                window.addEventListener('compositionend', notifyMod, true);
+                window.addEventListener('compositionupdate', notifyMod, true);
+                window.addEventListener('keydown', function(e) {
+                    if (!['Control', 'Alt', 'Shift', 'Meta', 'CapsLock', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+                        notifyMod();
+                    }
+                }, true);
+                window.addEventListener('paste', notifyMod, true);
+                window.addEventListener('cut', notifyMod, true);
+                document.addEventListener('click', function(e) {
+                    var t = e.target;
+                    if (t && (t.closest('button') || t.closest('.tb-btn') || t.closest('.sb-btn') || t.closest('.stb-item') || t.closest('select') || t.closest('input'))) {
+                        notifyMod();
+                    }
+                }, true);
+            }
         })();
         """
         self.web_view.page().runJavaScript(js)
