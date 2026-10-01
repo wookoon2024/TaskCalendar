@@ -331,8 +331,20 @@ class CompactAttachmentTree(QTreeWidget):
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
+        # InternalMove 대신 DragDrop + 수동 처리: Qt 기본 로직이 폴더 삽입을 지원하지 않으므로
         self.setDragDropMode(QTreeWidget.DragDropMode.DragDrop)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
+
+    # ------------------------------------------------------------------
+    # 내부 유틸: 아이템을 현재 위치에서 분리
+    # ------------------------------------------------------------------
+    def _detach_item(self, item: "QTreeWidgetItem") -> "QTreeWidgetItem":
+        parent = item.parent()
+        if parent:
+            parent.takeChild(parent.indexOfChild(item))
+        else:
+            self.takeTopLevelItem(self.indexOfTopLevelItem(item))
+        return item
 
     def drawBranches(self, painter, rect, index):
         """화살표 영역 제거 (폴더 아이콘 자체로 상태 표시 및 좌측 여백 극소화)"""
@@ -349,14 +361,12 @@ class CompactAttachmentTree(QTreeWidget):
                 painter.setPen(Qt.PenStyle.NoPen)
                 bg_color = QColor("#E0F2FE") if is_sel else QColor("#F1F5F9")
                 painter.setBrush(bg_color)
-                # option.rect 를 직접 사용해야 실제 행 위치와 정확히 일치
                 row_rect = QRect(0, option.rect.y() + 1, self.viewport().width(), option.rect.height() - 2)
                 painter.drawRoundedRect(row_rect, 4, 4)
             finally:
                 painter.restore()
 
         item_option = QStyleOptionViewItem(option)
-        # visualRect 대신 option.rect 기반으로 들여쓰기 적용
         item_option.rect = option.rect
         self.itemDelegate().paint(painter, item_option, index)
 
@@ -416,67 +426,108 @@ class CompactAttachmentTree(QTreeWidget):
 
     def dropEvent(self, event):
         pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-        item = self.itemAt(pos)
+        target_item = self.itemAt(pos)
 
-        # 1. 윈도우 탐색기 등 외부 파일 드롭인 경우
+        # ── 1. 외부 파일 드롭 (탐색기 등) ──────────────────────────────────
         if event.mimeData().hasUrls() and not event.mimeData().hasFormat("application/x-taskcalendar-att-internal"):
             paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
             if paths:
                 target_subfolder = ""
-                if item:
-                    item_data = item.data(0, Qt.UserRole) or {}
-                    if item_data.get("type") == "folder":
-                        target_subfolder = item_data.get("folder_path", "")
+                if target_item:
+                    d = target_item.data(0, Qt.UserRole) or {}
+                    if d.get("type") == "folder":
+                        target_subfolder = d.get("folder_path", "")
                     else:
-                        parent = item.parent()
+                        parent = target_item.parent()
                         if parent:
-                            p_data = parent.data(0, Qt.UserRole) or {}
-                            target_subfolder = p_data.get("folder_path", "")
+                            target_subfolder = (parent.data(0, Qt.UserRole) or {}).get("folder_path", "")
                 self.filesDropped.emit(paths, target_subfolder)
                 event.acceptProposedAction()
-                return
+            return
 
-        # 2. 내부 파일/폴더 드래그 이동인 경우
-        if event.mimeData().hasFormat("application/x-taskcalendar-att-internal"):
-            # 드롭 대상이 폴더 항목인지 먼저 확인
-            drop_on_folder = False
-            target_folder_item = None
-            if item:
-                item_data = item.data(0, Qt.UserRole) or {}
-                if item_data.get("type") == "folder":
-                    drop_on_folder = True
-                    target_folder_item = item
-
+        # ── 2. 내부 드래그 이동 (수동 처리) ────────────────────────────────
+        if not event.mimeData().hasFormat("application/x-taskcalendar-att-internal"):
             super().dropEvent(event)
+            return
 
-            # Qt 내부 드래그로 아이템이 이동된 뒤 구조 정리
-            self.blockSignals(True)
-            try:
-                # 파일 아이템이 폴더가 아닌 일반 파일 아이템의 자식이 되는 경우 방지
-                for i in range(self.topLevelItemCount() - 1, -1, -1):
-                    top = self.topLevelItem(i)
-                    data = top.data(0, Qt.UserRole) or {}
-                    if data.get("type") != "folder" and top.childCount() > 0:
-                        while top.childCount() > 0:
-                            ch = top.takeChild(0)
-                            self.addTopLevelItem(ch)
-                # 폴더를 모두 펼쳐서 이동 결과 바로 보이게
-                self.expandAll()
-            finally:
-                self.blockSignals(False)
-
-            # 화면을 즉시 강제 갱신 (이게 없으면 드롭 후 아이템이 안 보이거나 깨짐)
-            self.viewport().update()
-            self.update()
-
-            # QTimer로 다음 이벤트 루프에서 orderChanged 발행 (구조 안정화 후)
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(0, self.orderChanged.emit)
-
+        moving_items = [it for it in self.selectedItems()
+                        if it is not target_item]  # 자기 자신 위에 드롭 제외
+        if not moving_items:
             event.acceptProposedAction()
             return
 
-        super().dropEvent(event)
+        drop_pos = self.dropIndicatorPosition()  # OnItem / AboveItem / BelowItem / OnViewport
+        DIP = QTreeWidget.DropIndicatorPosition
+
+        self.blockSignals(True)
+        try:
+            # ── 케이스 A: 폴더 아이템 위에 드롭 → 그 폴더의 자식으로 삽입
+            if target_item and drop_pos == DIP.OnItem:
+                t_data = target_item.data(0, Qt.UserRole) or {}
+                if t_data.get("type") == "folder":
+                    # 파일만 폴더 안으로 이동 (폴더를 폴더 안에 넣는 것은 허용하지 않음)
+                    for it in moving_items:
+                        it_data = it.data(0, Qt.UserRole) or {}
+                        if it_data.get("type") != "folder":
+                            self._detach_item(it)
+                            target_item.addChild(it)
+                    target_item.setExpanded(True)
+                else:
+                    # 파일 위에 드롭 → 같은 부모의 그 파일 위치 앞에 삽입
+                    t_parent = target_item.parent()
+                    if t_parent:
+                        idx = t_parent.indexOfChild(target_item)
+                        for i, it in enumerate(moving_items):
+                            self._detach_item(it)
+                            t_parent.insertChild(idx + i, it)
+                        t_parent.setExpanded(True)
+                    else:
+                        idx = self.indexOfTopLevelItem(target_item)
+                        for i, it in enumerate(moving_items):
+                            self._detach_item(it)
+                            self.insertTopLevelItem(idx + i, it)
+
+            # ── 케이스 B: AboveItem / BelowItem → 같은 레벨에서 순서 변경
+            elif target_item and drop_pos in (DIP.AboveItem, DIP.BelowItem):
+                t_parent = target_item.parent()
+                if t_parent:
+                    idx = t_parent.indexOfChild(target_item)
+                    if drop_pos == DIP.BelowItem:
+                        idx += 1
+                    # 폴더 안으로 파일 삽입 허용, 폴더는 폴더 내부 이동 금지
+                    for i, it in enumerate(moving_items):
+                        it_data = it.data(0, Qt.UserRole) or {}
+                        if it_data.get("type") != "folder":
+                            self._detach_item(it)
+                            t_parent.insertChild(min(idx + i, t_parent.childCount()), it)
+                    t_parent.setExpanded(True)
+                else:
+                    # 최상위 레벨 순서 변경
+                    idx = self.indexOfTopLevelItem(target_item)
+                    if drop_pos == DIP.BelowItem:
+                        idx += 1
+                    for i, it in enumerate(moving_items):
+                        self._detach_item(it)
+                        self.insertTopLevelItem(min(idx + i, self.topLevelItemCount()), it)
+
+            # ── 케이스 C: OnViewport (빈 공간에 드롭) → 최상위 끝에 추가
+            else:
+                for it in moving_items:
+                    self._detach_item(it)
+                    self.addTopLevelItem(it)
+
+            # 폴더 모두 펼치기
+            self.expandAll()
+
+        finally:
+            self.blockSignals(False)
+
+        self.viewport().update()
+        self.update()
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self.orderChanged.emit)
+        event.acceptProposedAction()
+
 
 
 
