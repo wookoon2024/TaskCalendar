@@ -99,11 +99,24 @@ class _QuietStudioHandler(http.server.SimpleHTTPRequestHandler):
                 return str(target)
         return super().translate_path(clean_path)
 
+    extensions_map = {
+        **http.server.SimpleHTTPRequestHandler.extensions_map,
+        ".wasm": "application/wasm",
+        ".js": "application/javascript",
+        ".mjs": "application/javascript",
+        ".json": "application/json",
+        ".css": "text/css",
+        ".woff2": "font/woff2",
+        ".ttf": "font/ttf",
+    }
+
     def end_headers(self) -> None:
-        # WASM 및 ES 모듈 로딩을 위한 필수 보안 헤더 및 CORS 허용
+        # WASM 및 ES 모듈 스트리밍 컴파일 및 보안 헤더, CORS 허용
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+        # 브라우저 캐싱으로 WASM 및 정적 에셋 로딩 시간 단축
+        self.send_header("Cache-Control", "public, max-age=31536000")
         super().end_headers()
 
 
@@ -281,13 +294,13 @@ class RhwpEditorWidget(QWidget):
         if self._check_timer is not None:
             self._check_timer.stop()
         self._check_timer = QTimer(self)
-        self._check_timer.setInterval(60)
+        self._check_timer.setInterval(30)
         self._check_timer.timeout.connect(self._check_studio_engine_ready)
         self._check_timer.start()
 
     def _check_studio_engine_ready(self) -> None:
         self._check_count += 1
-        if self._check_count > 160:  # 최대 10초 대기
+        if self._check_count > 300:  # 최대 약 9초 대기
             if self._check_timer:
                 self._check_timer.stop()
             self._mark_engine_ready()

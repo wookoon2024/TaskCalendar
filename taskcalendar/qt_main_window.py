@@ -1237,6 +1237,7 @@ class MainWindow(QMainWindow):
         app_inst = QApplication.instance()
         if app_inst:
             app_inst.aboutToQuit.connect(self._on_app_about_to_quit)
+        QTimer.singleShot(1500, self._prewarm_work_manager)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -6135,6 +6136,15 @@ class MainWindow(QMainWindow):
                 self._task_manager_dialog.activateWindow()
         except Exception:
             logger.exception("Failed to open TaskManagerDialog")
+
+    def _prewarm_work_manager(self) -> None:
+        """백그라운드에서 업무 관리 창과 WASM 한글 에디터 엔진을 미리 로드하여 클릭 시 즉시 열리도록 함"""
+        try:
+            if getattr(self, "_work_manager_dialog", None) is None:
+                from taskcalendar.qt_work_manager import WorkManagerDialog
+                self._work_manager_dialog = WorkManagerDialog(None, self.repository, self)
+        except Exception:
+            logger.debug("Failed to prewarm work manager")
 
     def _open_work_manager(self) -> None:
         """신규 단위업무 및 편람/인수인계 창 열기"""
