@@ -1022,7 +1022,7 @@ class TaskManagerDialog(QDialog):
         self.main_window = main_window
         self.palette = get_dialog_palette(parent, repository, main_window)
 
-        self.setWindowTitle("업무")
+        self.setWindowTitle("문서 관리 (온나라/결재)")
         self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint | Qt.WindowMinimizeButtonHint)
         self.resize(1100, 700)
         self.setMinimumSize(850, 520)

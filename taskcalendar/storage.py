@@ -252,7 +252,7 @@ class EncryptedRepository:
         self.connection.commit()
 
     def _ensure_columns(self) -> None:
-        self.connection.execute(
+        self.connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS alarms (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -269,8 +269,65 @@ class EncryptedRepository:
                 hourly_interval INTEGER NOT NULL DEFAULT 1,
                 hourly_end_time TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS work_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS work_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER,
+                title TEXT NOT NULL,
+                cycle TEXT NOT NULL DEFAULT '수시',
+                assignee TEXT NOT NULL DEFAULT '',
+                deadline TEXT NOT NULL DEFAULT '',
+                content_text TEXT NOT NULL DEFAULT '',
+                content_html TEXT NOT NULL DEFAULT '',
+                hwpx_blob BLOB,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (category_id) REFERENCES work_categories(id) ON DELETE SET NULL
+            );
+            CREATE TABLE IF NOT EXISTS work_attachments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                work_id INTEGER NOT NULL,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_size TEXT NOT NULL DEFAULT '',
+                file_type TEXT NOT NULL DEFAULT '',
+                extracted_text TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (work_id) REFERENCES work_items(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS work_rag_chunks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                work_id INTEGER NOT NULL,
+                attachment_id INTEGER,
+                chunk_index INTEGER NOT NULL DEFAULT 0,
+                chunk_text TEXT NOT NULL,
+                embedding BLOB,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (work_id) REFERENCES work_items(id) ON DELETE CASCADE,
+                FOREIGN KEY (attachment_id) REFERENCES work_attachments(id) ON DELETE CASCADE
+            );
             """
         )
+        try:
+            self.connection.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS work_rag_fts USING fts5(
+                    work_id UNINDEXED,
+                    title,
+                    category,
+                    chunk_text
+                );
+                """
+            )
+        except Exception as fts_err:
+            logger.warning("FTS5 initialization notice: %s", fts_err)
         existing_alarms_cols = {row["name"] for row in self.connection.execute("PRAGMA table_info(alarms)").fetchall()}
         if "hourly_repeat" not in existing_alarms_cols:
             self.connection.execute("ALTER TABLE alarms ADD COLUMN hourly_repeat INTEGER NOT NULL DEFAULT 0")
@@ -1125,6 +1182,355 @@ class EncryptedRepository:
                 if entry.memo_group == group_id:
                     entry.memo_group = ""
                     self.upsert_entry(entry)
+        self.save()
+
+    # =========================================================================
+    # 업무 및 인수인계 매뉴얼 (Work Management & Knowledge Hub / RAG)
+    # =========================================================================
+
+    def list_work_categories(self) -> list[dict]:
+        """업무 분류 목록 조회"""
+        self._ensure_default_work_data_if_empty()
+        rows = self.connection.execute(
+            "SELECT id, name, sort_order, created_at, updated_at FROM work_categories ORDER BY sort_order ASC, id ASC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_work_category(self, name: str, sort_order: int = 0) -> int:
+        now = datetime.now().isoformat()
+        cursor = self.connection.execute(
+            "INSERT INTO work_categories (name, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (name.strip(), sort_order, now, now),
+        )
+        self.save()
+        return cursor.lastrowid
+
+    def update_work_category(self, cat_id: int, name: str) -> None:
+        now = datetime.now().isoformat()
+        self.connection.execute(
+            "UPDATE work_categories SET name = ?, updated_at = ? WHERE id = ?",
+            (name.strip(), now, cat_id),
+        )
+        self.save()
+
+    def delete_work_category(self, cat_id: int) -> None:
+        self.connection.execute("DELETE FROM work_categories WHERE id = ?", (cat_id,))
+        self.save()
+
+    def list_work_items(self, category_id: int | None = None) -> list[dict]:
+        """업무 항목 목록 조회 (첨부파일 목록 포함)"""
+        self._ensure_default_work_data_if_empty()
+        query = """
+            SELECT w.id, w.category_id, c.name AS category_name, w.title, w.cycle, w.assignee,
+                   w.deadline, w.content_text, w.content_html, w.hwpx_blob, w.sort_order,
+                   w.created_at, w.updated_at
+            FROM work_items w
+            LEFT JOIN work_categories c ON w.category_id = c.id
+        """
+        params = []
+        if category_id is not None:
+            query += " WHERE w.category_id = ?"
+            params.append(category_id)
+        query += " ORDER BY w.sort_order ASC, w.id ASC"
+
+        rows = self.connection.execute(query, params).fetchall()
+        items = []
+        for r in rows:
+            d = dict(r)
+            d["attachments"] = self.list_work_attachments(d["id"])
+            items.append(d)
+        return items
+
+    def get_work_item(self, work_id: int) -> dict | None:
+        row = self.connection.execute(
+            """
+            SELECT w.id, w.category_id, c.name AS category_name, w.title, w.cycle, w.assignee,
+                   w.deadline, w.content_text, w.content_html, w.hwpx_blob, w.sort_order,
+                   w.created_at, w.updated_at
+            FROM work_items w
+            LEFT JOIN work_categories c ON w.category_id = c.id
+            WHERE w.id = ?
+            """,
+            (work_id,),
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["attachments"] = self.list_work_attachments(work_id)
+        return d
+
+    def upsert_work_item(
+        self,
+        work_id: int | None,
+        title: str,
+        category_name: str = "일반 업무",
+        cycle: str = "수시",
+        assignee: str = "",
+        deadline: str = "",
+        content_text: str = "",
+        content_html: str = "",
+        hwpx_blob: bytes | None = None,
+        sort_order: int = 0,
+    ) -> int:
+        """업무 항목 생성 또는 수정 및 RAG 인덱싱 연동"""
+        now = datetime.now().isoformat()
+        cat_row = self.connection.execute(
+            "SELECT id FROM work_categories WHERE name = ?", (category_name.strip(),)
+        ).fetchone()
+        if cat_row:
+            cat_id = cat_row["id"]
+        else:
+            cat_id = self.add_work_category(category_name.strip())
+
+        if work_id is None or work_id <= 0:
+            cursor = self.connection.execute(
+                """
+                INSERT INTO work_items (
+                    category_id, title, cycle, assignee, deadline,
+                    content_text, content_html, hwpx_blob, sort_order, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (cat_id, title.strip(), cycle, assignee.strip(), deadline.strip(),
+                 content_text, content_html, hwpx_blob, sort_order, now, now),
+            )
+            work_id = cursor.lastrowid
+        else:
+            if hwpx_blob is not None:
+                self.connection.execute(
+                    """
+                    UPDATE work_items SET
+                        category_id = ?, title = ?, cycle = ?, assignee = ?, deadline = ?,
+                        content_text = ?, content_html = ?, hwpx_blob = ?, sort_order = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (cat_id, title.strip(), cycle, assignee.strip(), deadline.strip(),
+                     content_text, content_html, hwpx_blob, sort_order, now, work_id),
+                )
+            else:
+                self.connection.execute(
+                    """
+                    UPDATE work_items SET
+                        category_id = ?, title = ?, cycle = ?, assignee = ?, deadline = ?,
+                        content_text = ?, content_html = ?, sort_order = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (cat_id, title.strip(), cycle, assignee.strip(), deadline.strip(),
+                     content_text, content_html, sort_order, now, work_id),
+                )
+
+        self._update_work_rag_index(work_id, title, category_name, content_text)
+        self.save()
+        return work_id
+
+    def delete_work_item(self, work_id: int) -> None:
+        self.connection.execute("DELETE FROM work_items WHERE id = ?", (work_id,))
+        self.connection.execute("DELETE FROM work_attachments WHERE work_id = ?", (work_id,))
+        self.connection.execute("DELETE FROM work_rag_chunks WHERE work_id = ?", (work_id,))
+        try:
+            self.connection.execute("DELETE FROM work_rag_fts WHERE work_id = ?", (work_id,))
+        except Exception:
+            pass
+        self.save()
+
+    def list_work_attachments(self, work_id: int) -> list[dict]:
+        rows = self.connection.execute(
+            "SELECT id, work_id, file_name, file_path, file_size, file_type, extracted_text, created_at "
+            "FROM work_attachments WHERE work_id = ? ORDER BY id ASC",
+            (work_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def add_work_attachment(
+        self, work_id: int, file_name: str, file_path: str, file_size: str, file_type: str = "", extracted_text: str = ""
+    ) -> int:
+        now = datetime.now().isoformat()
+        cursor = self.connection.execute(
+            """
+            INSERT INTO work_attachments (work_id, file_name, file_path, file_size, file_type, extracted_text, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (work_id, file_name, file_path, file_size, file_type, extracted_text, now),
+        )
+        att_id = cursor.lastrowid
+        self.save()
+        return att_id
+
+    def delete_work_attachment(self, att_id: int) -> None:
+        self.connection.execute("DELETE FROM work_attachments WHERE id = ?", (att_id,))
+        self.connection.execute("DELETE FROM work_rag_chunks WHERE attachment_id = ?", (att_id,))
+        self.save()
+
+    def _update_work_rag_index(self, work_id: int, title: str, category: str, content_text: str) -> None:
+        """업무 문서의 본문을 청킹하여 RAG 및 FTS 색인 테이블에 등록"""
+        self.connection.execute("DELETE FROM work_rag_chunks WHERE work_id = ? AND attachment_id IS NULL", (work_id,))
+        try:
+            self.connection.execute("DELETE FROM work_rag_fts WHERE work_id = ?", (work_id,))
+        except Exception:
+            pass
+
+        if not content_text or not content_text.strip():
+            content_text = title
+
+        chunks = []
+        curr = []
+        curr_len = 0
+        for line in content_text.splitlines():
+            line_str = line.strip()
+            if not line_str:
+                continue
+            if curr_len + len(line_str) > 500:
+                chunks.append("\n".join(curr))
+                curr = [line_str]
+                curr_len = len(line_str)
+            else:
+                curr.append(line_str)
+                curr_len += len(line_str)
+        if curr:
+            chunks.append("\n".join(curr))
+
+        if not chunks:
+            chunks = [title]
+
+        now = datetime.now().isoformat()
+        for i, chunk in enumerate(chunks):
+            self.connection.execute(
+                """
+                INSERT INTO work_rag_chunks (work_id, chunk_index, chunk_text, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (work_id, i, chunk, now),
+            )
+            try:
+                self.connection.execute(
+                    "INSERT INTO work_rag_fts (work_id, title, category, chunk_text) VALUES (?, ?, ?, ?)",
+                    (work_id, title, category, chunk),
+                )
+            except Exception:
+                pass
+
+    def search_work_rag(self, query: str, limit: int = 15) -> list[dict]:
+        """FTS5 기반 고속 RAG/키워드 지식 검색"""
+        if not query or not query.strip():
+            return []
+        q = query.strip()
+        try:
+            fts_query = " OR ".join(f'"{token}"' for token in q.split() if token)
+            rows = self.connection.execute(
+                """
+                SELECT w.id, w.title, c.name AS category_name, w.cycle, w.assignee, snippet(work_rag_fts, 3, '<b>', '</b>', '...', 15) AS snippet
+                FROM work_rag_fts f
+                JOIN work_items w ON f.work_id = w.id
+                LEFT JOIN work_categories c ON w.category_id = c.id
+                WHERE work_rag_fts MATCH ?
+                LIMIT ?
+                """,
+                (fts_query, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        except Exception:
+            like = f"%{q}%"
+            rows = self.connection.execute(
+                """
+                SELECT w.id, w.title, c.name AS category_name, w.cycle, w.assignee, w.content_text AS snippet
+                FROM work_items w
+                LEFT JOIN work_categories c ON w.category_id = c.id
+                WHERE w.title LIKE ? OR w.content_text LIKE ? OR c.name LIKE ?
+                LIMIT ?
+                """,
+                (like, like, like, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def _ensure_default_work_data_if_empty(self) -> None:
+        """초기 실행 시 기본 분류 및 샘플 인수인계 편람 데이터 생성"""
+        count = self.connection.execute("SELECT COUNT(*) AS cnt FROM work_categories").fetchone()["cnt"]
+        if count > 0:
+            return
+
+        cat1_id = self.add_work_category("1. 부서 총괄 및 서무", 1)
+        cat2_id = self.add_work_category("2. 예산 및 회계 관리", 2)
+        cat3_id = self.add_work_category("3. 고유 사업 및 정책", 3)
+
+        sample1_text = (
+            "공용차량 운용 및 관리 매뉴얼\n\n"
+            "1. 차량 관리 및 정기점검\n"
+            "- 전 부서 공용차량은 매월 25일까지 운행일지를 서무담당자에게 제출합니다.\n"
+            "- 분기별 정기점검은 지정 정비소에서 실시하며 정비내역서를 첨부합니다.\n\n"
+            "2. 주의사항 [감사대비]\n"
+            "- 공휴일 또는 주말 차량 운행 시 반드시 사전 승인 결재문서 번호를 주행일지에 기재해야 합니다.\n"
+            "- 하이패스 통행료 청구서는 매월 초 도로공사 포털에서 일괄 다운로드하여 첨부합니다."
+        )
+        sample1_html = (
+            "<h2>공용차량 운용 및 관리 매뉴얼</h2>"
+            "<p><b>1. 차량 관리 및 정기점검</b></p>"
+            "<p>전 부서 공용차량은 매월 25일까지 운행일지를 서무담당자에게 제출합니다.</p>"
+            "<div style='background-color:#FFFBEB; border-left:4px solid #F59E0B; padding:8px 12px; margin:8px 0;'>"
+            "<b>⚠️ [감사주의]</b> 공휴일 또는 주말 차량 운행 시 사전 결재문서 번호 필수 기재</div>"
+        )
+        w1_id = self.upsert_work_item(
+            work_id=None,
+            title="공용차량 운용 및 관리 매뉴얼",
+            category_name="1. 부서 총괄 및 서무",
+            cycle="매월",
+            assignee="홍길동",
+            deadline="매월 25일",
+            content_text=sample1_text,
+            content_html=sample1_html,
+            sort_order=1,
+        )
+        self.add_work_attachment(w1_id, "차량운행일지_표준서식.xlsx", "", "18.4 KB", ".xlsx")
+        self.add_work_attachment(w1_id, "공용차량_관리규정(훈령).hwpx", "", "45.1 KB", ".hwpx")
+        self.add_work_attachment(w1_id, "2026년도_정기점검_예시.pdf", "", "112.0 KB", ".pdf")
+
+        sample2_text = (
+            "부서 일상경비 및 세출예산 집행\n\n"
+            "1. 예산 집행 개요\n"
+            "- 부서 일상경비 및 세출예산 집행 절차와 품의·원인행위·지출결의 가이드라인입니다.\n"
+            "- 관련규정: 지방재정법, 행정안전부 세출예산 집행기준\n\n"
+            "2. 카드 정산 주기\n"
+            "- 법인카드는 사용 후 3일 이내에 영수증을 회계담당자에게 인계합니다."
+        )
+        sample2_html = (
+            "<h2>부서 일상경비 및 세출예산 집행</h2>"
+            "<p><b>1. 예산 집행 개요</b></p>"
+            "<p>부서 일상경비 및 세출예산 집행 절차 가이드라인입니다.</p>"
+            "<div style='background-color:#F0FDF4; border-left:4px solid #10B981; padding:8px 12px; margin:8px 0;'>"
+            "<b>📌 [관련규정]</b> 지방재정법, 행정안전부 세출예산 집행기준</div>"
+        )
+        w2_id = self.upsert_work_item(
+            work_id=None,
+            title="부서 일상경비 및 세출예산 집행",
+            category_name="2. 예산 및 회계 관리",
+            cycle="매주",
+            assignee="김철수",
+            deadline="매주 금요일",
+            content_text=sample2_text,
+            content_html=sample2_html,
+            sort_order=2,
+        )
+        self.add_work_attachment(w2_id, "지출결의서_체크리스트.hwp", "", "32.0 KB", ".hwp")
+
+        sample3_text = (
+            "정보화시스템 정기 유지보수 점검\n\n"
+            "1. 유지보수 용역 점검표 작성 절차\n"
+            "- 용역업체 월간 보고서 검수 및 기성금 청구 안내\n"
+            "- 분기별 시스템 백업 점검 및 취약점 진단 점검표 수령"
+        )
+        sample3_html = (
+            "<h2>유지보수 용역 점검표 작성 절차</h2>"
+            "<p>용역업체 월간 보고서 검수 및 기성금 청구 안내</p>"
+        )
+        self.upsert_work_item(
+            work_id=None,
+            title="정보화시스템 정기 유지보수 점검",
+            category_name="3. 고유 사업 및 정책",
+            cycle="분기",
+            assignee="이영희",
+            deadline="분기말",
+            content_text=sample3_text,
+            content_html=sample3_html,
+            sort_order=3,
+        )
         self.save()
 
 

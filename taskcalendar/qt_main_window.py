@@ -1372,10 +1372,16 @@ class MainWindow(QMainWindow):
         self.memo_button.clicked.connect(lambda: self._set_sidebar_mode("memo"))
         tac_layout.addWidget(self.memo_button)
 
-        self.task_button = self._top_button("업무")
-        self.task_button.setToolTip("업무 (온나라/웹 업무 목록, 완료 체크, 엑셀 내보내기)")
-        self.task_button.clicked.connect(self._open_task_manager)
-        tac_layout.addWidget(self.task_button)
+        self.doc_button = self._top_button("문서")
+        self.doc_button.setToolTip("문서 (온나라/웹 수집 결재문서 목록, 완료 체크, 엑셀 내보내기)")
+        self.doc_button.clicked.connect(self._open_task_manager)
+        tac_layout.addWidget(self.doc_button)
+        self.task_button = self.doc_button  # 호환성 유지
+
+        self.work_button = self._top_button("업무")
+        self.work_button.setToolTip("업무 관리 및 인수인계 편람 (분류별 업무 편성, 에디터, 첨부파일, 엑셀형 시트)")
+        self.work_button.clicked.connect(self._open_work_manager)
+        tac_layout.addWidget(self.work_button)
 
         # 민원계산기 버튼 (추후 보완 후 재오픈 예정)
         # self.complaint_button = self._top_button("민원계산기")
@@ -6103,6 +6109,21 @@ class MainWindow(QMainWindow):
                 self._task_manager_dialog.activateWindow()
         except Exception:
             logger.exception("Failed to open TaskManagerDialog")
+
+    def _open_work_manager(self) -> None:
+        """신규 단위업무 및 편람/인수인계 창 열기"""
+        try:
+            from taskcalendar.qt_work_manager import WorkManagerDialog
+            if getattr(self, "_work_manager_dialog", None) is None or not self._work_manager_dialog.isVisible():
+                self._work_manager_dialog = WorkManagerDialog(self, self.repository, self)
+                self._work_manager_dialog.show()
+            else:
+                self._work_manager_dialog.apply_palette(self.palette)
+                self._work_manager_dialog.show()
+                self._work_manager_dialog.raise_()
+                self._work_manager_dialog.activateWindow()
+        except Exception:
+            logger.exception("Failed to open WorkManagerDialog")
 
     def receive_external_entry(self, data: dict) -> None:
         """Handle data received from Chrome extension via IPC protocol."""
