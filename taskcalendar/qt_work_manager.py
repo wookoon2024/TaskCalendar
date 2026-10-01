@@ -1057,6 +1057,37 @@ class WorkContextMenuGuideDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+def is_inside_attachment_folder(p: Path | str) -> bool:
+    """경로의 상위 폴더 중 하나가 '_첨부파일', '_files', '_attachments'로 끝나는지 확인"""
+    path_obj = Path(p)
+    for parent in path_obj.parents:
+        name_lower = parent.name.lower()
+        if (
+            name_lower.endswith("_첨부파일")
+            or name_lower.endswith("_files")
+            or name_lower.endswith("_attachments")
+        ):
+            return True
+    return False
+
+
+def find_associated_attachment_dir(file_p: Path | str) -> Path | None:
+    """업무 문서 파일에 대응하는 첨부파일 폴더가 인접하여 존재하는지 탐색"""
+    p = Path(file_p)
+    parent = p.parent
+    candidates = [
+        parent / f"{p.stem}_첨부파일",
+        parent / f"{p.name}_첨부파일",
+        parent / f"{p.stem}_files",
+        parent / f"{p.stem}_attachments",
+    ]
+    for cand in candidates:
+        if cand.exists() and cand.is_dir():
+            return cand
+    return None
+
+
+# ---------------------------------------------------------------------------
 # 불러오기 마법사 – 2단계: 폴더 또는 파일 불러오기
 # ---------------------------------------------------------------------------
 # 실제로 내용이 표시되는 확장자 목록 (extract_document_content 지원)
@@ -1091,12 +1122,37 @@ class WorkImportWizardDialog(QDialog):
         panel_alt = pal.get("panel_alt", "#F1F5F9")
         text     = pal.get("text",       "#1E293B")
         text_muted = pal.get("text_muted", "#64748B")
-        line     = pal.get("line",       "#E2E8F0")
+        line     = pal.get("line",       "#CBD5E1")
         accent   = pal.get("accent",     "#0284C7")
         self._pal = dict(bg=bg, panel=panel, panel_alt=panel_alt,
                          text=text, text_muted=text_muted, line=line, accent=accent)
 
-        self.setStyleSheet(f"background-color: {bg}; color: {text}; font-family: {ui_font_family()};")
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {bg};
+                color: {text};
+                font-family: {ui_font_family()};
+            }}
+            QLabel {{
+                color: {text};
+            }}
+            QPushButton {{
+                background-color: {panel};
+                border: 1px solid {line};
+                border-radius: 4px;
+                color: {text};
+                padding: 4px 10px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt};
+            }}
+            QCheckBox {{
+                color: {text};
+                font-size: 12px;
+                spacing: 6px;
+            }}
+        """)
 
         self._mode = self.MODE_FOLDER
         self._selected_folder: str = ""
@@ -1111,7 +1167,7 @@ class WorkImportWizardDialog(QDialog):
         bg, panel, panel_alt = pal["bg"], pal["panel"], pal["panel_alt"]
         text, text_muted, line, accent = pal["text"], pal["text_muted"], pal["line"], pal["accent"]
 
-        _BTN_W, _BTN_H = 90, 30
+        _BTN_W, _BTN_H = 90, 32
         _accent_ss = f"""
             QPushButton {{
                 border: none; border-radius: 4px;
@@ -1146,17 +1202,38 @@ class WorkImportWizardDialog(QDialog):
         lbl_hint.setStyleSheet(f"color: {text_muted}; font-size: 12px;")
         s1.addWidget(lbl_hint)
 
+        _rb_base_indicator = f"""
+            QRadioButton::indicator {{
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                border: 2px solid #94A3B8;
+                background-color: #FFFFFF;
+            }}
+            QRadioButton::indicator:hover {{
+                border: 2px solid {accent};
+            }}
+            QRadioButton::indicator:checked {{
+                border: 5px solid {accent};
+                background-color: #FFFFFF;
+            }}
+        """
+
         _rb_sel = f"""
             QRadioButton {{
                 padding: 10px 16px; border: 2px solid {accent};
                 border-radius: 6px; background-color: {panel_alt}; spacing: 10px;
+                color: {text}; font-size: 12px;
             }}
+            {_rb_base_indicator}
         """
         _rb_unsel = f"""
             QRadioButton {{
                 padding: 10px 16px; border: 2px solid transparent;
                 border-radius: 6px; spacing: 10px;
+                color: {text}; font-size: 12px;
             }}
+            {_rb_base_indicator}
         """
 
         self.rb_folder = QRadioButton(
@@ -1215,6 +1292,7 @@ class WorkImportWizardDialog(QDialog):
         self.edit_path = QLineEdit()
         self.edit_path.setPlaceholderText("선택한 경로가 여기에 표시됩니다")
         self.edit_path.setReadOnly(True)
+        self.edit_path.setFixedHeight(_BTN_H)
         self.edit_path.setStyleSheet(
             f"background-color: {panel_alt}; border: 1px solid {line}; "
             f"border-radius: 4px; padding: 4px 8px; color: {text};"
@@ -1223,8 +1301,8 @@ class WorkImportWizardDialog(QDialog):
         self.btn_pick_path.setFixedSize(_BTN_W, _BTN_H)
         self.btn_pick_path.setStyleSheet(
             f"QPushButton {{ border: 1px solid {line}; border-radius: 4px; "
-            f"background-color: {panel_alt}; color: {accent}; font-size: 12px; padding: 0 8px; }}"
-            f"QPushButton:hover {{ background-color: {line}; }}"
+            f"background-color: {panel}; color: {accent}; font-size: 12px; padding: 0 8px; }}"
+            f"QPushButton:hover {{ background-color: {panel_alt}; }}"
         )
         self.btn_pick_path.clicked.connect(self._on_pick_path)
         path_row.addWidget(self.lbl_path_caption)
@@ -1265,6 +1343,7 @@ class WorkImportWizardDialog(QDialog):
         cat_lay.setContentsMargins(0, 0, 0, 0)
         cat_lay.addWidget(QLabel("등록될 최상위 업무 분류명:"))
         self.cat_input = QLineEdit()
+        self.cat_input.setFixedHeight(_BTN_H)
         self.cat_input.setStyleSheet(
             f"background-color: {panel_alt}; border: 1px solid {line}; border-radius: 4px; padding: 4px 8px;"
         )
@@ -1277,6 +1356,7 @@ class WorkImportWizardDialog(QDialog):
         tc_lay.setContentsMargins(0, 0, 0, 0)
         tc_lay.addWidget(QLabel("등록 대상 업무분류:"))
         self.target_cat_combo = QComboBox()
+        self.target_cat_combo.setFixedHeight(_BTN_H)
         for c in self.categories:
             self.target_cat_combo.addItem(c)
         if not self.categories:
@@ -1296,7 +1376,7 @@ class WorkImportWizardDialog(QDialog):
         self.stacked.addWidget(step2)
 
         # ---------------------------------------------------------------
-        # 하단 버튼 – 모두 90 × 30 통일
+        # 하단 버튼 – 모두 세로 높이 32px 통일
         # ---------------------------------------------------------------
         nav = QHBoxLayout()
         self.btn_cancel = QPushButton("취소")
@@ -1313,7 +1393,7 @@ class WorkImportWizardDialog(QDialog):
         nav.addWidget(self.btn_prev)
 
         self.btn_next = QPushButton("다음 ▶")
-        self.btn_next.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_next.setFixedSize(110, _BTN_H)
         self.btn_next.setStyleSheet(_accent_ss)
         self.btn_next.clicked.connect(self._go_next)
         nav.addWidget(self.btn_next)
@@ -1456,12 +1536,17 @@ class FolderWorkImportDialog(QDialog):
     def _scan_folder(self) -> None:
         self.subfolder_count = 0
         self.all_files: list[Path] = []
+        self.att_files_count = 0
         if self.folder_path.exists() and self.folder_path.is_dir():
             for p in self.folder_path.rglob("*"):
                 if p.is_dir():
-                    self.subfolder_count += 1
+                    if not is_inside_attachment_folder(p / "dummy"):
+                        self.subfolder_count += 1
                 elif p.is_file():
-                    self.all_files.append(p)
+                    if is_inside_attachment_folder(p):
+                        self.att_files_count += 1
+                    else:
+                        self.all_files.append(p)
         self.ext_counter = Counter(f.suffix.lower() or "(확장자 없음)" for f in self.all_files)
 
     def _init_ui(self) -> None:
@@ -1480,6 +1565,17 @@ class FolderWorkImportDialog(QDialog):
             }}
             QLabel {{
                 color: {text};
+            }}
+            QPushButton {{
+                background-color: {panel};
+                border: 1px solid {line};
+                border-radius: 4px;
+                color: {text};
+                padding: 4px 10px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt};
             }}
             QCheckBox {{
                 color: {text};
@@ -1516,7 +1612,10 @@ class FolderWorkImportDialog(QDialog):
         stats_layout.setContentsMargins(8, 6, 8, 6)
 
         lbl_folders = QLabel(f"하위 폴더: <b>{self.subfolder_count}</b>개")
-        lbl_files = QLabel(f"총 파일: <b>{len(self.all_files)}</b>개")
+        file_msg = f"총 문서: <b>{len(self.all_files)}</b>개"
+        if self.att_files_count > 0:
+            file_msg += f" (연계 첨부파일 {self.att_files_count}개)"
+        lbl_files = QLabel(file_msg)
         lbl_types = QLabel(f"파일 형식: <b>{len(self.ext_counter)}</b>종류")
         stats_layout.addWidget(lbl_folders)
         stats_layout.addWidget(lbl_files)
@@ -1586,6 +1685,7 @@ class FolderWorkImportDialog(QDialog):
         cat_layout = QHBoxLayout()
         cat_layout.addWidget(QLabel("등록될 최상위 업무 분류명:"))
         self.cat_input = QLineEdit(self.folder_path.name)
+        self.cat_input.setFixedHeight(32)
         self.cat_input.setStyleSheet(f"background-color: {panel}; border: 1px solid {line}; border-radius: 4px; padding: 4px 8px;")
         cat_layout.addWidget(self.cat_input)
         layout.addLayout(cat_layout)
@@ -1595,17 +1695,17 @@ class FolderWorkImportDialog(QDialog):
         self.cb_attachments.setChecked(True)
         layout.addWidget(self.cb_attachments)
 
-        # 6. 하단 버튼
+        # 6. 하단 버튼 – 높이 32px 통일
         btn_layout = QHBoxLayout()
         btn_layout.addStretch(1)
 
         btn_cancel = QPushButton("취소")
-        btn_cancel.setFixedSize(74, 30)
+        btn_cancel.setFixedSize(90, 32)
         btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(btn_cancel)
 
         btn_ok = QPushButton("업무 등록 시작")
-        btn_ok.setFixedSize(110, 30)
+        btn_ok.setFixedSize(110, 32)
         btn_ok.setStyleSheet(f"""
             QPushButton {{
                 border: none;
@@ -1911,23 +2011,46 @@ class WorkExportWizardDialog(QDialog):
         lbl_f.setStyleSheet(f"color: {accent}; font-size: 12px; border: none;")
         f_layout.addWidget(lbl_f)
 
-        # 라디오버튼 – 선택 시 자신의 스타일로 직접 강조 (QFrame 래퍼 없음 → ○ 표시기 항상 노출)
+        # 라디오버튼 – 선택 시 자신의 스타일로 직접 강조 (선명한 인디케이터 표시)
+        _rb_base_indicator = f"""
+            QRadioButton::indicator {{
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                border: 2px solid #94A3B8;
+                background-color: #FFFFFF;
+            }}
+            QRadioButton::indicator:hover {{
+                border: 2px solid {accent};
+            }}
+            QRadioButton::indicator:checked {{
+                border: 5px solid {accent};
+                background-color: #FFFFFF;
+            }}
+        """
+
         _rb_sel = f"""
             QRadioButton {{
                 padding: 8px 14px;
                 border: 2px solid {accent};
                 border-radius: 6px;
                 background-color: {panel_alt};
-                spacing: 8px;
+                color: {text};
+                font-size: 12px;
+                spacing: 10px;
             }}
+            {_rb_base_indicator}
         """
         _rb_unsel = f"""
             QRadioButton {{
                 padding: 8px 14px;
                 border: 2px solid transparent;
                 border-radius: 6px;
-                spacing: 8px;
+                color: {text};
+                font-size: 12px;
+                spacing: 10px;
             }}
+            {_rb_base_indicator}
         """
 
         self.rb_hwpx = QRadioButton("한글 문서 (.hwpx / .hwp)  –  한글에서 바로 편집 가능한 정형 문서")
@@ -1961,22 +2084,23 @@ class WorkExportWizardDialog(QDialog):
         dir_h = QHBoxLayout()
         default_dir = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DocumentsLocation) or str(Path.home())
         self.dest_dir_input = QLineEdit(str(Path(default_dir) / "업무편람_내보내기"))
+        self.dest_dir_input.setFixedHeight(32)
         self.dest_dir_input.setStyleSheet(f"background-color: {panel_alt}; border: 1px solid {line}; border-radius: 4px; padding: 4px 8px;")
         dir_h.addWidget(self.dest_dir_input, 1)
 
         btn_browse = QPushButton("찾아보기...")
-        btn_browse.setFixedSize(90, 30)
+        btn_browse.setFixedSize(90, 32)
         btn_browse.setStyleSheet(f"""
             QPushButton {{
                 border: 1px solid {line};
                 border-radius: 4px;
-                background-color: {panel_alt};
+                background-color: {panel};
                 color: {accent};
                 font-size: 12px;
                 padding: 0 8px;
             }}
             QPushButton:hover {{
-                background-color: {line};
+                background-color: {panel_alt};
             }}
         """)
         btn_browse.clicked.connect(self._on_browse_dest_dir)
@@ -1992,9 +2116,9 @@ class WorkExportWizardDialog(QDialog):
         self.stacked.addWidget(step2_widget)
 
         # -------------------------------------------------------------
-        # 하단 탐색 버튼 – 모두 90 × 30 으로 통일
+        # 하단 탐색 버튼 – 모두 32px 높이 통일
         # -------------------------------------------------------------
-        _BTN_W, _BTN_H = 90, 30
+        _BTN_W, _BTN_H = 90, 32
         _btn_accent_ss = f"""
             QPushButton {{
                 border: none;
@@ -2024,10 +2148,11 @@ class WorkExportWizardDialog(QDialog):
         btn_nav_layout.addWidget(self.btn_prev)
 
         self.btn_next = QPushButton("다음 ▶")
-        self.btn_next.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_next.setFixedSize(110, _BTN_H)
         self.btn_next.setStyleSheet(_btn_accent_ss)
         self.btn_next.clicked.connect(self._go_next_step)
-        btn_nav_layout.addWidget(self.btn_next)
+        nav = btn_nav_layout
+        nav.addWidget(self.btn_next)
 
         main_layout.addLayout(btn_nav_layout)
 
@@ -5159,6 +5284,37 @@ class WorkManagerDialog(QDialog):
             except Exception as e:
                 logger.exception("Failed to copy imported document as attachment: %s", e)
 
+        # 연계된 첨부파일 폴더({문서명}_첨부파일 등)가 있는 경우 하위 파일 자동 복사 및 복원
+        att_dir = find_associated_attachment_dir(p)
+        if att_dir and self.repository and db_id:
+            try:
+                for att_item in sorted(att_dir.rglob("*")):
+                    if att_item.is_dir():
+                        continue
+                    rel_sub = str(att_item.relative_to(att_dir).parent).replace("\\", "/")
+                    if rel_sub == ".":
+                        rel_sub = ""
+                    dest_p, s_str, d_name = self.repository.copy_work_attachment_file(db_id, att_item, subfolder=rel_sub)
+                    a_id = self.repository.add_work_attachment(
+                        work_id=db_id,
+                        file_name=d_name,
+                        file_path=dest_p,
+                        file_size=s_str,
+                        file_type=att_item.suffix.lower(),
+                        folder_path=rel_sub,
+                    )
+                    attachments.append({
+                        "id": a_id,
+                        "name": d_name,
+                        "path": dest_p,
+                        "size": s_str,
+                        "folder_path": rel_sub,
+                        "file_type": att_item.suffix.lower(),
+                        "type": "file",
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to import associated attachments from {att_dir}: {e}")
+
         new_sheet = WorkSheetData(
             db_id=db_id,
             sheet_id=f"sheet_{db_id or (len(self._all_sheets) + 1)}",
@@ -5237,7 +5393,12 @@ class WorkManagerDialog(QDialog):
         root_name = dlg.get_category_name()
         copy_as_att = dlg.should_copy_attachments()
 
-        all_files = [f for f in root_dir.rglob("*") if f.is_file() and (f.suffix.lower() in selected_exts or (not f.suffix and "(확장자 없음)" in selected_exts))]
+        all_files = [
+            f for f in root_dir.rglob("*")
+            if f.is_file()
+            and not is_inside_attachment_folder(f)
+            and (f.suffix.lower() in selected_exts or (not f.suffix and "(확장자 없음)" in selected_exts))
+        ]
         if not all_files:
             QMessageBox.information(self, "알림", f"'{root_dir.name}' 폴더 내에 선택한 형식({', '.join(selected_exts)})의 파일이 없습니다.")
             return
@@ -5325,6 +5486,37 @@ class WorkManagerDialog(QDialog):
                     })
                 except Exception as e:
                     logger.warning(f"Failed to copy attachment for imported doc {file_p}: {e}")
+
+            # 연계된 첨부파일 폴더({문서명}_첨부파일 등)가 있는 경우 하위 파일 자동 복사 및 복원
+            att_dir = find_associated_attachment_dir(file_p)
+            if att_dir and self.repository and db_id:
+                try:
+                    for att_item in sorted(att_dir.rglob("*")):
+                        if att_item.is_dir():
+                            continue
+                        rel_sub = str(att_item.relative_to(att_dir).parent).replace("\\", "/")
+                        if rel_sub == ".":
+                            rel_sub = ""
+                        dest_p, s_str, d_name = self.repository.copy_work_attachment_file(db_id, att_item, subfolder=rel_sub)
+                        a_id = self.repository.add_work_attachment(
+                            work_id=db_id,
+                            file_name=d_name,
+                            file_path=dest_p,
+                            file_size=s_str,
+                            file_type=att_item.suffix.lower(),
+                            folder_path=rel_sub,
+                        )
+                        attachments.append({
+                            "id": a_id,
+                            "name": d_name,
+                            "path": dest_p,
+                            "size": s_str,
+                            "folder_path": rel_sub,
+                            "file_type": att_item.suffix.lower(),
+                            "type": "file",
+                        })
+                except Exception as e:
+                    logger.warning(f"Failed to import associated attachments from {att_dir}: {e}")
 
             sheet = WorkSheetData(
                 db_id=db_id,
