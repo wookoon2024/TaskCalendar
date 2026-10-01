@@ -212,6 +212,8 @@ class RhwpEditorWidget(QWidget):
 
     def export_document_data(self, callback) -> None:
         """현재 편집 중인 문서의 순수 텍스트 및 HWPX 바이너리 추출 callback(text: str, hwpx_bytes: bytes | None)"""
+        import json as _json
+
         if self._fallback_editor is not None:
             callback(self._fallback_editor.toPlainText(), None)
             return
@@ -222,31 +224,46 @@ class RhwpEditorWidget(QWidget):
 
         js = """
         (function() {
-            var doc = window.rhwpStudio?.plugins?.deps?.wasm?.doc;
-            if (!doc) return null;
-            var text = doc.getTextFileText ? doc.getTextFileText() : "";
-            var hwpxB64 = null;
-            if (doc.exportHwpx) {
-                var bytes = doc.exportHwpx();
-                var bin = '';
-                var len = bytes.byteLength;
-                for (var i = 0; i < len; i++) {
-                    bin += String.fromCharCode(bytes[i]);
+            try {
+                var doc = window.rhwpStudio?.plugins?.deps?.wasm?.doc;
+                if (!doc) return JSON.stringify({ text: "", hwpxB64: null });
+                var rawText = doc.getTextFileText ? doc.getTextFileText() : "";
+                var parsedText = rawText;
+                try {
+                    parsedText = JSON.parse(rawText);
+                } catch(e) {}
+                var hwpxB64 = null;
+                if (doc.exportHwpx) {
+                    var bytes = doc.exportHwpx();
+                    if (bytes && bytes.byteLength > 0) {
+                        var bin = '';
+                        var len = bytes.byteLength;
+                        for (var i = 0; i < len; i++) {
+                            bin += String.fromCharCode(bytes[i]);
+                        }
+                        hwpxB64 = window.btoa(bin);
+                    }
                 }
-                hwpxB64 = window.btoa(bin);
+                return JSON.stringify({ text: parsedText, hwpxB64: hwpxB64 });
+            } catch(err) {
+                return JSON.stringify({ text: "", hwpxB64: null, err: String(err) });
             }
-            return { text: text, hwpxB64: hwpxB64 };
         })();
         """
 
         def _on_js_result(res):
-            if not res or not isinstance(res, dict):
+            if not res or not isinstance(res, str):
                 callback("", None)
                 return
-            text = res.get("text", "")
-            hwpx_b64 = res.get("hwpxB64")
-            hwpx_bytes = base64.b64decode(hwpx_b64) if hwpx_b64 else None
-            callback(text, hwpx_bytes)
+            try:
+                data = _json.loads(res)
+                text = data.get("text", "")
+                hwpx_b64 = data.get("hwpxB64")
+                hwpx_bytes = base64.b64decode(hwpx_b64) if hwpx_b64 else None
+                callback(text, hwpx_bytes)
+            except Exception as e:
+                logger.exception("Failed to parse export_document_data JSON: %s", e)
+                callback("", None)
 
         self.web_view.page().runJavaScript(js, _on_js_result)
 

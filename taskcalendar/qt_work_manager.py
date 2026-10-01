@@ -190,8 +190,8 @@ class WorkManagerDialog(QDialog):
     - 하단: 엑셀/한글 스타일 멀티 시트(Tab) 바
     """
 
-    def __init__(self, parent: QWidget | None, repository: EncryptedRepository, main_window=None) -> None:
-        super().__init__(parent)
+    def __init__(self, parent: QWidget | None = None, repository: EncryptedRepository = None, main_window=None) -> None:
+        super().__init__(None)  # 독립 탑레벨 윈도우로 동작하여 캘린더 부모창 깜빡임/숨김 차단
         self.repository = repository
         self.main_window = main_window
 
@@ -203,21 +203,28 @@ class WorkManagerDialog(QDialog):
         self.palette = p
 
         self.setWindowTitle("업무 관리 및 인수인계 편람")
-        self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint | Qt.WindowMinimizeButtonHint)
+        self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
         self.resize(1180, 740)
         self.setMinimumSize(880, 540)
         self.setAttribute(Qt.WA_StyledBackground, True)
 
         # 시트 및 카테고리 데이터
         self._categories: list[str] = []
-        self._sheets: list[WorkSheetData] = []
-        self._active_sheet_index: int = 0
+        self._all_sheets: list[WorkSheetData] = []  # DB에 존재하는 전체 업무 목록 (좌측 트리에 표시)
+        self._open_sheets: list[WorkSheetData] = []  # 현재 하단 탭에 열려있는 업무 목록
+        self._active_sheet_index: int = -1
         self._is_loading_sheet: bool = False
 
         self._load_data_from_db()
         self._init_ui()
-        if self._sheets:
-            self._load_sheet_to_editor(0)
+        if self._all_sheets:
+            # 시작 시 전체를 열지 않고 첫 번째 문서만 1개 탭으로 기본 오픈
+            self.open_sheet(self._all_sheets[0])
+
+    @property
+    def _sheets(self) -> list[WorkSheetData]:
+        """외부 및 하위 호환용: 현재 열려있는 시트 목록 반환"""
+        return self._open_sheets
 
     def _load_data_from_db(self) -> None:
         """SQLite DB에서 업무 분류 및 시트 데이터 로드"""
@@ -231,7 +238,7 @@ class WorkManagerDialog(QDialog):
             self._categories = ["1. 부서 총괄 및 서무", "2. 예산 및 회계 관리", "3. 고유 사업 및 정책"]
 
         item_rows = self.repository.list_work_items()
-        self._sheets = []
+        self._all_sheets = []
         for r in item_rows:
             raw_atts = r.get("attachments", [])
             norm_atts = []
@@ -255,9 +262,9 @@ class WorkManagerDialog(QDialog):
                 hwpx_blob=r.get("hwpx_blob"),
                 attachments=norm_atts,
             )
-            self._sheets.append(sheet)
+            self._all_sheets.append(sheet)
 
-        if not self._sheets:
+        if not self._all_sheets:
             self._init_sample_data()
 
     def _init_sample_data(self) -> None:
@@ -316,7 +323,7 @@ class WorkManagerDialog(QDialog):
         </div>
         """
 
-        self._sheets = [
+        self._all_sheets = [
             WorkSheetData(
                 sheet_id="sheet_1",
                 title="공용차량 운용 및 관리 매뉴얼",
@@ -546,6 +553,8 @@ class WorkManagerDialog(QDialog):
             }}
         """)
         self.category_tree.itemClicked.connect(self._on_tree_item_clicked)
+        self.category_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.category_tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         left_layout.addWidget(self.category_tree)
         left_h_layout.addWidget(left_main_widget, 1)
 
@@ -1037,12 +1046,12 @@ class WorkManagerDialog(QDialog):
             self._expand_right_panel()
 
     def _refresh_sheet_tabs(self) -> None:
-        """하단 엑셀 스타일 시트 탭 바 갱신"""
+        """하단 엑셀 스타일 시트 탭 바 갱신 (열려있는 문서 탭만 표시)"""
         self.sheet_tab_bar.blockSignals(True)
         while self.sheet_tab_bar.count() > 0:
             self.sheet_tab_bar.removeTab(0)
 
-        for sheet in self._sheets:
+        for sheet in self._open_sheets:
             short_title = sheet.title if len(sheet.title) <= 15 else (sheet.title[:14] + "…")
             self.sheet_tab_bar.addTab(f"📄 {short_title}")
 
@@ -1053,40 +1062,66 @@ class WorkManagerDialog(QDialog):
 
     def _on_sheet_tab_changed(self, index: int) -> None:
         """하단 시트 탭 클릭 시 해당 업무 로드"""
-        if index < 0 or index >= len(self._sheets):
+        if index < 0 or index >= len(self._open_sheets):
             return
         self._save_current_sheet_data()
         self._active_sheet_index = index
         self._load_sheet_to_editor(index)
 
+    def open_sheet(self, sheet: WorkSheetData) -> None:
+        """문서를 하단 탭에 열고 중앙 에디터에 로드 (이미 열려있으면 해당 탭으로 전환)"""
+        if sheet not in self._open_sheets:
+            self._open_sheets.append(sheet)
+            short_title = sheet.title if len(sheet.title) <= 15 else (sheet.title[:14] + "…")
+            self.sheet_tab_bar.blockSignals(True)
+            self.sheet_tab_bar.addTab(f"📄 {short_title}")
+            self.sheet_tab_bar.blockSignals(False)
+
+        tab_idx = self._open_sheets.index(sheet)
+        self.sheet_tab_bar.blockSignals(True)
+        self.sheet_tab_bar.setCurrentIndex(tab_idx)
+        self.sheet_tab_bar.blockSignals(False)
+        self._active_sheet_index = tab_idx
+        self._load_sheet_to_editor(tab_idx)
+
     def _on_sheet_tab_close(self, index: int) -> None:
-        """시트 탭 닫기/삭제 요청"""
-        if len(self._sheets) <= 1:
-            QMessageBox.information(self, "안내", "최소 1개 이상의 업무 시트가 있어야 합니다.")
+        """시트 탭 닫기 (문서 삭제가 아니며, 하단 탭에서만 닫히고 좌측 목록에는 그대로 유지)"""
+        if index < 0 or index >= len(self._open_sheets):
             return
 
-        target = self._sheets[index]
-        res = QMessageBox.question(
-            self,
-            "업무 시트 삭제 확인",
-            f"'{target.title}' 업무 시트를 정말 삭제하시겠습니까?\n작성된 매뉴얼 및 연결 정보가 제거됩니다.",
-            QMessageBox.Yes | QMessageBox.No,
-        )
-        if res == QMessageBox.Yes:
-            if self.repository and target.db_id:
-                self.repository.delete_work_item(target.db_id)
-            self._sheets.pop(index)
-            if self._active_sheet_index >= len(self._sheets):
-                self._active_sheet_index = len(self._sheets) - 1
-            self._refresh_sheet_tabs()
-            self._refresh_category_tree()
-            self._load_sheet_to_editor(self._active_sheet_index)
+        self._save_current_sheet_data()
+        self._open_sheets.pop(index)
+        self.sheet_tab_bar.blockSignals(True)
+        self.sheet_tab_bar.removeTab(index)
+        self.sheet_tab_bar.blockSignals(False)
+
+        if self._open_sheets:
+            new_idx = min(index, len(self._open_sheets) - 1)
+            self.sheet_tab_bar.blockSignals(True)
+            self.sheet_tab_bar.setCurrentIndex(new_idx)
+            self.sheet_tab_bar.blockSignals(False)
+            self._active_sheet_index = new_idx
+            self._load_sheet_to_editor(new_idx)
+        else:
+            self._active_sheet_index = -1
+            self._clear_editor_view()
+
+    def _clear_editor_view(self) -> None:
+        """열려있는 탭이 없을 때 에디터 및 우측 패널을 빈 상태로 초기화"""
+        self.work_title_input.setText("")
+        self.meta_assignee_input.setText("")
+        self.meta_deadline_input.setText("")
+        self.editor.load_document("열린 문서 없음", "좌측 업무 분류에서 열람할 문서를 선택하거나 ➕ 새 업무 버튼을 클릭하세요.", None)
+        self._refresh_attachments_list([])
+        self.category_tree.blockSignals(True)
+        self.category_tree.clearSelection()
+        self.category_tree.blockSignals(False)
 
     def _on_sheet_tab_double_clicked(self, index: int) -> None:
         """하단 시트 탭 더블 클릭 시 시트 이름 변경 (엑셀 스타일)"""
-        if index < 0 or index >= len(self._sheets):
+        if index < 0 or index >= len(self._open_sheets):
             return
-        sheet = self._sheets[index]
+        sheet = self._open_sheets[index]
         new_title, ok = QInputDialog.getText(
             self, "업무 시트 이름 변경", "새 시트 이름:", text=sheet.title
         )
@@ -1104,70 +1139,106 @@ class WorkManagerDialog(QDialog):
                     content_text=sheet.content_text,
                     content_html=sheet.content_html,
                     hwpx_blob=sheet.hwpx_blob,
-                    sort_order=index,
                 )
-            self._refresh_sheet_tabs()
+            short_title = sheet.title if len(sheet.title) <= 15 else (sheet.title[:14] + "…")
+            self.sheet_tab_bar.setTabText(index, f"📄 {short_title}")
             self._refresh_category_tree()
 
     def _on_tab_context_menu(self, pos: QPoint) -> None:
         """하단 시트 탭 우클릭 컨텍스트 메뉴"""
         tab_idx = self.sheet_tab_bar.tabAt(pos)
-        if tab_idx < 0 or tab_idx >= len(self._sheets):
+        if tab_idx < 0 or tab_idx >= len(self._open_sheets):
             return
+        target = self._open_sheets[tab_idx]
         menu = QMenu(self)
-        act_rename = menu.addAction("✏️ 시트 이름 바꾸기")
+        act_close = menu.addAction("✕ 탭 닫기")
+        act_rename = menu.addAction("✏️ 이름 바꾸기")
         act_duplicate = menu.addAction("📋 시트 복제")
         menu.addSeparator()
-        act_delete = menu.addAction("🗑️ 시트 삭제")
+        act_delete = menu.addAction("🗑️ 업무 삭제 (DB 영구 삭제)")
 
         action = menu.exec(self.sheet_tab_bar.mapToGlobal(pos))
-        if action == act_rename:
+        if action == act_close:
+            self._on_sheet_tab_close(tab_idx)
+        elif action == act_rename:
             self._on_sheet_tab_double_clicked(tab_idx)
         elif action == act_duplicate:
-            src = self._sheets[tab_idx]
-            new_title = f"{src.title} (사본)"
-            db_id = None
-            if self.repository:
-                db_id = self.repository.upsert_work_item(
-                    work_id=None,
-                    title=new_title,
-                    category_name=src.category,
-                    cycle=src.cycle,
-                    assignee=src.assignee,
-                    deadline=src.deadline,
-                    content_text=src.content_text,
-                    content_html=src.content_html,
-                    hwpx_blob=src.hwpx_blob,
-                    sort_order=len(self._sheets) + 1,
-                )
-            new_sheet = WorkSheetData(
-                db_id=db_id,
-                sheet_id=f"sheet_{db_id or len(self._sheets)+1}",
+            self._duplicate_sheet(target)
+        elif action == act_delete:
+            self._delete_sheet_permanently(target)
+
+    def _duplicate_sheet(self, src: WorkSheetData) -> None:
+        """시트 복제 및 새 탭 오픈"""
+        new_title = f"{src.title} (사본)"
+        db_id = None
+        if self.repository:
+            db_id = self.repository.upsert_work_item(
+                work_id=None,
                 title=new_title,
-                category=src.category,
+                category_name=src.category,
                 cycle=src.cycle,
                 assignee=src.assignee,
                 deadline=src.deadline,
-                content_html=src.content_html,
                 content_text=src.content_text,
+                content_html=src.content_html,
                 hwpx_blob=src.hwpx_blob,
-                attachments=list(src.attachments),
+                sort_order=len(self._all_sheets) + 1,
             )
-            self._sheets.insert(tab_idx + 1, new_sheet)
-            self._active_sheet_index = tab_idx + 1
-            self._refresh_sheet_tabs()
+        new_sheet = WorkSheetData(
+            db_id=db_id,
+            sheet_id=f"sheet_{db_id or len(self._all_sheets)+1}",
+            title=new_title,
+            category=src.category,
+            cycle=src.cycle,
+            assignee=src.assignee,
+            deadline=src.deadline,
+            content_html=src.content_html,
+            content_text=src.content_text,
+            hwpx_blob=src.hwpx_blob,
+            attachments=list(src.attachments),
+        )
+        self._all_sheets.append(new_sheet)
+        self._refresh_category_tree()
+        self.open_sheet(new_sheet)
+
+    def _delete_sheet_permanently(self, target: WorkSheetData) -> None:
+        """업무 문서 DB 영구 삭제 및 탭/트리 반영"""
+        res = QMessageBox.question(
+            self,
+            "업무 삭제 확인",
+            f"'{target.title}' 업무 문서를 영구히 삭제하시겠습니까?\n작성된 매뉴얼 및 연결 정보가 DB에서 제거됩니다.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if res == QMessageBox.Yes:
+            if self.repository and target.db_id:
+                self.repository.delete_work_item(target.db_id)
+            if target in self._all_sheets:
+                self._all_sheets.remove(target)
+            if target in self._open_sheets:
+                idx = self._open_sheets.index(target)
+                self._open_sheets.pop(idx)
+                self.sheet_tab_bar.blockSignals(True)
+                self.sheet_tab_bar.removeTab(idx)
+                self.sheet_tab_bar.blockSignals(False)
+                if self._open_sheets:
+                    new_idx = min(idx, len(self._open_sheets) - 1)
+                    self.sheet_tab_bar.blockSignals(True)
+                    self.sheet_tab_bar.setCurrentIndex(new_idx)
+                    self.sheet_tab_bar.blockSignals(False)
+                    self._active_sheet_index = new_idx
+                    self._load_sheet_to_editor(new_idx)
+                else:
+                    self._active_sheet_index = -1
+                    self._clear_editor_view()
             self._refresh_category_tree()
-            self._load_sheet_to_editor(self._active_sheet_index)
-        elif action == act_delete:
-            self._on_sheet_tab_close(tab_idx)
 
     def _load_sheet_to_editor(self, index: int) -> None:
         """선택된 시트 데이터를 중앙 에디터와 우측 패널에 주입"""
-        if index < 0 or index >= len(self._sheets):
+        if index < 0 or index >= len(self._open_sheets):
             return
 
         self._is_loading_sheet = True
-        sheet = self._sheets[index]
+        sheet = self._open_sheets[index]
 
         self.work_title_input.setText(sheet.title)
 
@@ -1199,13 +1270,22 @@ class WorkManagerDialog(QDialog):
         self._is_loading_sheet = False
 
     def _sync_tree_selection(self, index: int) -> None:
-        """좌측 카테고리 트리의 선택 항목을 현재 시트 인덱스와 동기화"""
+        """좌측 카테고리 트리의 선택 항목을 현재 열린 시트와 동기화"""
         self.category_tree.blockSignals(True)
+        if index < 0 or index >= len(self._open_sheets):
+            self.category_tree.clearSelection()
+            self.category_tree.blockSignals(False)
+            return
+
+        current_sheet = self._open_sheets[index]
         for i in range(self.category_tree.topLevelItemCount()):
             top = self.category_tree.topLevelItem(i)
             for j in range(top.childCount()):
                 child = top.child(j)
-                if child.data(0, Qt.UserRole) == index:
+                item_sheet = child.data(0, Qt.UserRole)
+                if item_sheet is current_sheet or (
+                    current_sheet.db_id and getattr(item_sheet, "db_id", None) == current_sheet.db_id
+                ):
                     self.category_tree.setCurrentItem(child)
                     self.category_tree.blockSignals(False)
                     return
@@ -1215,8 +1295,8 @@ class WorkManagerDialog(QDialog):
         """현재 편집 중인 시트 내용 메모리 저장 및 메타 DB 저장"""
         if self._is_loading_sheet:
             return
-        if 0 <= self._active_sheet_index < len(self._sheets):
-            current = self._sheets[self._active_sheet_index]
+        if 0 <= self._active_sheet_index < len(self._open_sheets):
+            current = self._open_sheets[self._active_sheet_index]
             current.title = self.work_title_input.text().strip() or "새 업무"
             current.category = self.meta_cat_combo.currentText()
             current.cycle = self.meta_cycle_combo.currentText()
@@ -1225,9 +1305,13 @@ class WorkManagerDialog(QDialog):
 
     def _on_save_button_clicked(self) -> None:
         """저장 버튼(또는 Ctrl+S) 클릭 시 rhwp 에디터 내용 추출 및 DB 영구 저장"""
+        if self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
+            QMessageBox.information(self, "안내", "저장할 열린 문서가 없습니다.")
+            return
+
         def _after_export(text: str, hwpx_bytes: bytes | None):
-            if 0 <= self._active_sheet_index < len(self._sheets):
-                current = self._sheets[self._active_sheet_index]
+            if 0 <= self._active_sheet_index < len(self._open_sheets):
+                current = self._open_sheets[self._active_sheet_index]
                 current.title = self.work_title_input.text().strip() or "새 업무"
                 current.category = self.meta_cat_combo.currentText()
                 current.cycle = self.meta_cycle_combo.currentText()
@@ -1249,18 +1333,19 @@ class WorkManagerDialog(QDialog):
                         content_text=current.content_text,
                         content_html=current.content_html,
                         hwpx_blob=current.hwpx_blob,
-                        sort_order=self._active_sheet_index,
+                        sort_order=self._all_sheets.index(current) if current in self._all_sheets else 0,
                     )
-                self._refresh_sheet_tabs()
+                short_title = current.title if len(current.title) <= 15 else (current.title[:14] + "…")
+                self.sheet_tab_bar.setTabText(self._active_sheet_index, f"📄 {short_title}")
                 self._refresh_category_tree()
                 QMessageBox.information(self, "저장 완료", f"'{current.title}' 업무 매뉴얼이 DB에 성공적으로 저장되었습니다.")
 
         self.editor.export_document_data(_after_export)
 
     def _on_add_new_sheet(self) -> None:
-        """새 업무 시트 생성"""
+        """새 업무 시트 생성 및 탭 열기"""
         self._save_current_sheet_data()
-        new_title = f"신규 단위업무 {len(self._sheets) + 1}"
+        new_title = f"신규 단위업무 {len(self._all_sheets) + 1}"
         default_cat = self._categories[0] if self._categories else "기본 업무"
         default_text = f"【 {new_title} 】\n\n1. 업무 개요\n업무 내용을 입력하세요..."
         db_id = None
@@ -1271,21 +1356,19 @@ class WorkManagerDialog(QDialog):
                 category_name=default_cat,
                 cycle="수시",
                 content_text=default_text,
-                sort_order=len(self._sheets) + 1,
+                sort_order=len(self._all_sheets) + 1,
             )
         new_sheet = WorkSheetData(
             db_id=db_id,
-            sheet_id=f"sheet_{db_id or (len(self._sheets) + 1)}",
+            sheet_id=f"sheet_{db_id or (len(self._all_sheets) + 1)}",
             title=new_title,
             category=default_cat,
             cycle="수시",
             content_text=default_text,
         )
-        self._sheets.append(new_sheet)
-        self._active_sheet_index = len(self._sheets) - 1
-        self._refresh_sheet_tabs()
+        self._all_sheets.append(new_sheet)
         self._refresh_category_tree()
-        self._load_sheet_to_editor(self._active_sheet_index)
+        self.open_sheet(new_sheet)
 
     # =========================================================================
     # 좌측 카테고리 트리 & 우측 첨부파일 관리
@@ -1298,7 +1381,7 @@ class WorkManagerDialog(QDialog):
         self.meta_cat_combo.blockSignals(False)
 
     def _refresh_category_tree(self) -> None:
-        """좌측 업무 분류 트리 재구성"""
+        """좌측 업무 분류 트리 재구성 (전체 문서 목록 표시)"""
         self.category_tree.clear()
         cat_items_map = {}
 
@@ -1312,7 +1395,7 @@ class WorkManagerDialog(QDialog):
             self.category_tree.addTopLevelItem(item)
             cat_items_map[cat] = item
 
-        for idx, sheet in enumerate(self._sheets):
+        for sheet in self._all_sheets:
             parent_item = cat_items_map.get(sheet.category)
             if not parent_item:
                 if not self.category_tree.topLevelItemCount():
@@ -1322,7 +1405,7 @@ class WorkManagerDialog(QDialog):
                     parent_item = self.category_tree.topLevelItem(0)
 
             child = QTreeWidgetItem([f"📄 {sheet.title}"])
-            child.setData(0, Qt.UserRole, idx)
+            child.setData(0, Qt.UserRole, sheet)
             child.setToolTip(0, sheet.title)
             parent_item.addChild(child)
             parent_item.setExpanded(True)
@@ -1330,10 +1413,51 @@ class WorkManagerDialog(QDialog):
         self._sync_tree_selection(self._active_sheet_index)
 
     def _on_tree_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
-        idx = item.data(0, Qt.UserRole)
-        if idx is not None and isinstance(idx, int) and 0 <= idx < len(self._sheets):
-            if idx != self._active_sheet_index:
-                self.sheet_tab_bar.setCurrentIndex(idx)
+        """좌측 트리 문서 클릭 시 하단 탭으로 열기 (이미 열려있으면 해당 탭으로 전환)"""
+        sheet = item.data(0, Qt.UserRole)
+        if isinstance(sheet, WorkSheetData):
+            self.open_sheet(sheet)
+
+    def _on_tree_context_menu(self, pos: QPoint) -> None:
+        """좌측 트리 항목 우클릭 컨텍스트 메뉴"""
+        item = self.category_tree.itemAt(pos)
+        if not item:
+            return
+        sheet = item.data(0, Qt.UserRole)
+        menu = QMenu(self)
+        if isinstance(sheet, WorkSheetData):
+            act_open = menu.addAction("📄 열기")
+            act_rename = menu.addAction("✏️ 이름 바꾸기")
+            menu.addSeparator()
+            act_delete = menu.addAction("🗑️ 업무 삭제 (DB 영구 삭제)")
+            action = menu.exec(self.category_tree.mapToGlobal(pos))
+            if action == act_open:
+                self.open_sheet(sheet)
+            elif action == act_rename:
+                new_title, ok = QInputDialog.getText(self, "업무 이름 변경", "새 이름:", text=sheet.title)
+                if ok and new_title.strip():
+                    sheet.title = new_title.strip()
+                    if self.repository and sheet.db_id:
+                        self.repository.upsert_work_item(
+                            work_id=sheet.db_id,
+                            title=sheet.title,
+                            category_name=sheet.category,
+                            cycle=sheet.cycle,
+                            assignee=sheet.assignee,
+                            deadline=sheet.deadline,
+                            content_text=sheet.content_text,
+                            content_html=sheet.content_html,
+                            hwpx_blob=sheet.hwpx_blob,
+                        )
+                    if sheet in self._open_sheets:
+                        o_idx = self._open_sheets.index(sheet)
+                        short_title = sheet.title if len(sheet.title) <= 15 else (sheet.title[:14] + "…")
+                        self.sheet_tab_bar.setTabText(o_idx, f"📄 {short_title}")
+                        if o_idx == self._active_sheet_index:
+                            self.work_title_input.setText(sheet.title)
+                    self._refresh_category_tree()
+            elif action == act_delete:
+                self._delete_sheet_permanently(sheet)
 
     def _on_add_category(self) -> None:
         cat_name, ok = QInputDialog.getText(self, "새 업무 분류 추가", "분류 명칭을 입력하세요 (예: 4. 대민 행정 서비스):")
@@ -1349,7 +1473,6 @@ class WorkManagerDialog(QDialog):
     def _refresh_attachments_list(self, files: list[dict]) -> None:
         self.file_list.clear()
         self.right_title.setText(f"📎 첨부파일 ({len(files)})")
-
         for f in files:
             name = f.get("name", "첨부파일")
             size = f.get("size", "")
@@ -1360,6 +1483,8 @@ class WorkManagerDialog(QDialog):
             self.file_list.addItem(item)
 
     def _on_add_attachment(self) -> None:
+        if self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
+            return
         path, _ = QFileDialog.getOpenFileName(
             self,
             "업무 관련 서식 및 첨부파일 선택",
@@ -1371,7 +1496,7 @@ class WorkManagerDialog(QDialog):
             size_kb = round(p.stat().st_size / 1024, 1)
             size_str = f"{size_kb} KB" if size_kb < 1024 else f"{round(size_kb/1024, 1)} MB"
 
-            curr = self._sheets[self._active_sheet_index]
+            curr = self._open_sheets[self._active_sheet_index]
             att_id = None
             if self.repository and curr.db_id:
                 att_id = self.repository.add_work_attachment(
@@ -1399,9 +1524,9 @@ class WorkManagerDialog(QDialog):
 
     def _delete_selected_attachment(self) -> None:
         row = self.file_list.currentRow()
-        if row < 0:
+        if row < 0 or self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
             return
-        curr = self._sheets[self._active_sheet_index]
+        curr = self._open_sheets[self._active_sheet_index]
         if 0 <= row < len(curr.attachments):
             att = curr.attachments[row]
             if self.repository and att.get("id"):
@@ -1417,34 +1542,34 @@ class WorkManagerDialog(QDialog):
     # =========================================================================
 
     def _on_title_text_changed(self, text: str) -> None:
-        if self._is_loading_sheet:
+        if self._is_loading_sheet or self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
             return
-        curr = self._sheets[self._active_sheet_index]
+        curr = self._open_sheets[self._active_sheet_index]
         curr.title = text.strip() or "새 업무"
         short_title = curr.title if len(curr.title) <= 15 else (curr.title[:14] + "…")
         self.sheet_tab_bar.setTabText(self._active_sheet_index, f"📄 {short_title}")
         self._refresh_category_tree()
 
     def _on_meta_cat_changed(self, cat: str) -> None:
-        if self._is_loading_sheet:
+        if self._is_loading_sheet or self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
             return
-        self._sheets[self._active_sheet_index].category = cat
+        self._open_sheets[self._active_sheet_index].category = cat
         self._refresh_category_tree()
 
     def _on_meta_cycle_changed(self, cycle: str) -> None:
-        if self._is_loading_sheet:
+        if self._is_loading_sheet or self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
             return
-        self._sheets[self._active_sheet_index].cycle = cycle
+        self._open_sheets[self._active_sheet_index].cycle = cycle
 
     def _on_meta_assignee_changed(self, val: str) -> None:
-        if self._is_loading_sheet:
+        if self._is_loading_sheet or self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
             return
-        self._sheets[self._active_sheet_index].assignee = val
+        self._open_sheets[self._active_sheet_index].assignee = val
 
     def _on_meta_deadline_changed(self, val: str) -> None:
-        if self._is_loading_sheet:
+        if self._is_loading_sheet or self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
             return
-        self._sheets[self._active_sheet_index].deadline = val
+        self._open_sheets[self._active_sheet_index].deadline = val
 
     def _on_editor_text_changed(self) -> None:
         pass
@@ -1455,6 +1580,7 @@ class WorkManagerDialog(QDialog):
         if not query:
             for i in range(self.sheet_tab_bar.count()):
                 self.sheet_tab_bar.setTabVisible(i, True)
+            self._refresh_category_tree()
             return
 
         rag_matched_ids = set()
@@ -1463,7 +1589,7 @@ class WorkManagerDialog(QDialog):
             for r in results:
                 rag_matched_ids.add(r["id"])
 
-        for idx, sheet in enumerate(self._sheets):
+        for idx, sheet in enumerate(self._open_sheets):
             matched = (
                 (sheet.db_id and sheet.db_id in rag_matched_ids)
                 or query in sheet.title.lower()
@@ -1474,6 +1600,30 @@ class WorkManagerDialog(QDialog):
                 or any(query in att.get("name", "").lower() for att in sheet.attachments)
             )
             self.sheet_tab_bar.setTabVisible(idx, matched)
+
+        # 좌측 카테고리 트리 필터링 적용
+        for i in range(self.category_tree.topLevelItemCount()):
+            top = self.category_tree.topLevelItem(i)
+            has_visible_child = False
+            for j in range(top.childCount()):
+                child = top.child(j)
+                sheet = child.data(0, Qt.UserRole)
+                if isinstance(sheet, WorkSheetData):
+                    matched = (
+                        (sheet.db_id and sheet.db_id in rag_matched_ids)
+                        or query in sheet.title.lower()
+                        or query in sheet.category.lower()
+                        or query in sheet.assignee.lower()
+                        or query in sheet.content_text.lower()
+                        or query in sheet.content_html.lower()
+                        or any(query in att.get("name", "").lower() for att in sheet.attachments)
+                    )
+                    child.setHidden(not matched)
+                    if matched:
+                        has_visible_child = True
+            top.setHidden(not has_visible_child)
+            if has_visible_child:
+                top.setExpanded(True)
 
     def _format_bold(self) -> None:
         fmt = QTextCharFormat()

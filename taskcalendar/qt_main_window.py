@@ -6114,8 +6114,8 @@ class MainWindow(QMainWindow):
         """신규 단위업무 및 편람/인수인계 창 열기"""
         try:
             from taskcalendar.qt_work_manager import WorkManagerDialog
-            if getattr(self, "_work_manager_dialog", None) is None or not self._work_manager_dialog.isVisible():
-                self._work_manager_dialog = WorkManagerDialog(self, self.repository, self)
+            if getattr(self, "_work_manager_dialog", None) is None:
+                self._work_manager_dialog = WorkManagerDialog(None, self.repository, self)
                 self._work_manager_dialog.show()
             else:
                 self._work_manager_dialog.apply_palette(self.palette)
