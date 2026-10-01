@@ -119,6 +119,7 @@ class RhwpEditorWidget(QWidget):
             self.server = RhwpStudioServer.get_instance()
             self.web_view = QWebEngineView(self)
             self.web_view.loadFinished.connect(self._on_load_finished)
+            self.web_view.page().titleChanged.connect(self._on_web_title_changed)
 
             studio_url = self.server.get_url()
             self.web_view.setUrl(QUrl(studio_url))
@@ -131,8 +132,41 @@ class RhwpEditorWidget(QWidget):
             layout.addWidget(self._fallback_editor, 1)
             self.web_view = None
 
+    def _on_web_title_changed(self, title: str) -> None:
+        if title.startswith("rhwp_modified:"):
+            self.contentChanged.emit()
+
+    def _inject_change_hook(self) -> None:
+        if not self.web_view:
+            return
+        js = """
+        (function() {
+            if (window._hasModifiedHook) return;
+            window._hasModifiedHook = true;
+            function notifyMod() {
+                document.title = 'rhwp_modified:' + Date.now();
+            }
+            window.addEventListener('keydown', function(e) {
+                if (!['Control', 'Alt', 'Shift', 'Meta', 'CapsLock', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+                    notifyMod();
+                }
+            }, true);
+            window.addEventListener('paste', notifyMod, true);
+            window.addEventListener('cut', notifyMod, true);
+            document.addEventListener('click', function(e) {
+                var t = e.target;
+                if (t && (t.closest('button') || t.closest('.ribbon') || t.closest('.toolbar'))) {
+                    notifyMod();
+                }
+            }, true);
+        })();
+        """
+        self.web_view.page().runJavaScript(js)
+
     def _on_load_finished(self, ok: bool) -> None:
         self._is_loaded = ok
+        if ok:
+            self._inject_change_hook()
         if ok and self._pending_load is not None:
             title, text, hwpx_bytes = self._pending_load
             self._pending_load = None
@@ -189,6 +223,7 @@ class RhwpEditorWidget(QWidget):
             }})();
             """
         self.web_view.page().runJavaScript(js)
+        QTimer.singleShot(500, self._inject_change_hook)
 
     def export_document_data(self, callback) -> None:
         """현재 편집 중인 문서의 순수 텍스트 및 HWPX 바이너리 추출 callback(text: str, hwpx_bytes: bytes | None)"""

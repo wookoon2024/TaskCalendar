@@ -357,6 +357,13 @@ class EncryptedRepository:
             if name not in existing:
                 self.connection.execute(sql)
 
+        existing_work_cat_cols = {row["name"] for row in self.connection.execute("PRAGMA table_info(work_categories)").fetchall()}
+        if "parent_id" not in existing_work_cat_cols:
+            try:
+                self.connection.execute("ALTER TABLE work_categories ADD COLUMN parent_id INTEGER DEFAULT NULL")
+            except Exception as cat_err:
+                logger.warning("Could not add parent_id column to work_categories: %s", cat_err)
+
         # Performance indices
         self.connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_type_dates ON entries(entry_type, start_date, end_date)")
         self.connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_type_day ON entries(entry_type, day)")
@@ -1189,18 +1196,18 @@ class EncryptedRepository:
     # =========================================================================
 
     def list_work_categories(self) -> list[dict]:
-        """업무 분류 목록 조회"""
+        """업무 분류 목록 조회 (parent_id 포함)"""
         self._ensure_default_work_data_if_empty()
         rows = self.connection.execute(
-            "SELECT id, name, sort_order, created_at, updated_at FROM work_categories ORDER BY sort_order ASC, id ASC"
+            "SELECT id, name, parent_id, sort_order, created_at, updated_at FROM work_categories ORDER BY sort_order ASC, id ASC"
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def add_work_category(self, name: str, sort_order: int = 0) -> int:
+    def add_work_category(self, name: str, sort_order: int = 0, parent_id: int | None = None) -> int:
         now = datetime.now().isoformat()
         cursor = self.connection.execute(
-            "INSERT INTO work_categories (name, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?)",
-            (name.strip(), sort_order, now, now),
+            "INSERT INTO work_categories (name, sort_order, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (name.strip(), sort_order, parent_id, now, now),
         )
         self.save()
         return cursor.lastrowid
@@ -1213,7 +1220,19 @@ class EncryptedRepository:
         )
         self.save()
 
+    def update_work_category_parent(self, cat_id: int, parent_id: int | None, sort_order: int) -> None:
+        now = datetime.now().isoformat()
+        self.connection.execute(
+            "UPDATE work_categories SET parent_id = ?, sort_order = ?, updated_at = ? WHERE id = ?",
+            (parent_id, sort_order, now, cat_id),
+        )
+        self.save()
+
     def delete_work_category(self, cat_id: int) -> None:
+        # 하위 카테고리도 재귀 삭제
+        sub_rows = self.connection.execute("SELECT id FROM work_categories WHERE parent_id = ?", (cat_id,)).fetchall()
+        for r in sub_rows:
+            self.delete_work_category(r["id"])
         self.connection.execute("DELETE FROM work_categories WHERE id = ?", (cat_id,))
         self.save()
 
@@ -1264,6 +1283,7 @@ class EncryptedRepository:
         work_id: int | None,
         title: str,
         category_name: str = "일반 업무",
+        category_id: int | None = None,
         cycle: str = "수시",
         assignee: str = "",
         deadline: str = "",
@@ -1274,13 +1294,15 @@ class EncryptedRepository:
     ) -> int:
         """업무 항목 생성 또는 수정 및 RAG 인덱싱 연동"""
         now = datetime.now().isoformat()
-        cat_row = self.connection.execute(
-            "SELECT id FROM work_categories WHERE name = ?", (category_name.strip(),)
-        ).fetchone()
-        if cat_row:
-            cat_id = cat_row["id"]
-        else:
-            cat_id = self.add_work_category(category_name.strip())
+        cat_id = category_id
+        if cat_id is None:
+            cat_row = self.connection.execute(
+                "SELECT id FROM work_categories WHERE name = ?", (category_name.strip(),)
+            ).fetchone()
+            if cat_row:
+                cat_id = cat_row["id"]
+            else:
+                cat_id = self.add_work_category(category_name.strip())
 
         if work_id is None or work_id <= 0:
             cursor = self.connection.execute(
