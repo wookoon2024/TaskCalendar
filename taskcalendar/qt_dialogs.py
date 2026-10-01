@@ -463,14 +463,40 @@ def _screen_geometry_for(x: int, y: int, w: int, h: int) -> QRect:
     app = QApplication.instance()
     if app is not None:
         rect = QRect(int(x), int(y), max(1, int(w)), max(1, int(h)))
+        best_screen = None
+        best_area = -1
         for screen in app.screens():
             geo = screen.availableGeometry()
-            if geo.intersects(rect):
-                return geo
+            inter = geo.intersected(rect)
+            area = inter.width() * inter.height()
+            if area > best_area:
+                best_area = area
+                best_screen = geo
+        if best_screen is not None and best_area > 0:
+            return best_screen
         scr = app.primaryScreen()
         if scr is not None:
             return scr.availableGeometry()
+        screens = app.screens()
+        if screens:
+            return screens[0].availableGeometry()
     return QRect(0, 0, 1920, 1080)
+
+
+def clamp_rect_into_screen(avail: QRect, x: int, y: int, w: int, h: int, min_w: int, min_h: int) -> tuple[int, int, int, int]:
+    """창이 화면 작업 영역을 넘지 않도록 위치와 크기를 함께 보정한다.
+
+    크기 자체가 작업 영역보다 크면 화면에 맞는 크기로 줄여주고,
+    그렇지 않으면 위치만 화면 안쪽으로 당긴다.
+    """
+    max_w = max(min_w, avail.width())
+    max_h = max(min_h, avail.height())
+    w = max(min_w, min(int(w), max_w))
+    h = max(min_h, min(int(h), max_h))
+
+    x = max(avail.left(), min(int(x), avail.left() + max_w - w))
+    y = max(avail.top(), min(int(y), avail.top() + max_h - h))
+    return x, y, w, h
 
 
 def snap_window_rect(current_geo: QRect, other_geos: list[QRect], screen_geo: QRect, threshold: int = 16) -> QPoint:
@@ -1034,7 +1060,7 @@ class EntryDialog(QDialog):
             self._expanded_width = 380
             self._expanded_height = 360
             self._collapsed_width = None
-            self._expand_anchor_right = bool(repo) and repo.get_setting("memo_expand_anchor", "left") == "right"
+            self._expand_anchor_right = bool(repo) and repo.get_setting("memo_expand_anchor", "right") == "right"
             self._anchored_to_right = False
             
             # Load remembered geometry, collapse state, and opacity
@@ -1117,7 +1143,7 @@ class EntryDialog(QDialog):
                         init_x = saved_col_x
                     else:
                         # Fallback for legacy saved data where pts[0] was shifted left
-                        if (self._expand_anchor_right or getattr(self, "_anchored_to_right", False)) and (exp_x + self._expanded_width <= screen_right + 50):
+                        if (self._expand_anchor_right or getattr(self, "_anchored_to_right", False) or exp_x + self._expanded_width >= screen_right - 16) and (exp_x + self._expanded_width <= screen_right + 50):
                             init_x = exp_x + self._expanded_width - target_w
                         else:
                             init_x = exp_x
@@ -1129,6 +1155,8 @@ class EntryDialog(QDialog):
                             max(avail.top(), min(exp_y, avail.bottom() - 36)),
                         )
                     )
+                    if nx + target_w > screen_right:
+                        nx = max(avail.left(), screen_right - target_w)
                     self.setGeometry(nx, ny, target_w, 36)
                     self._anchored_to_right = getattr(self, "_anchored_to_right", False) or (nx + self._expanded_width > screen_right) or (nx + target_w >= screen_right - 16)
                 else:
@@ -1140,6 +1168,8 @@ class EntryDialog(QDialog):
                             max(avail.top(), min(exp_y, avail.bottom() - 36)),
                         )
                     )
+                    if nx + self._expanded_width > screen_right:
+                        nx = max(avail.left(), screen_right - self._expanded_width)
                     self.setGeometry(nx, ny, self._expanded_width, self._expanded_height)
                     self._anchored_to_right = getattr(self, "_anchored_to_right", False) or (nx + self._expanded_width > screen_right) or (nx + self.width() >= screen_right - 16)
 
@@ -2325,8 +2355,7 @@ class EntryDialog(QDialog):
             geom.setHeight(max(150, geom.height() + delta.y()))
 
         other_geos = self._other_window_geometries()
-        screen = self.screen()
-        screen_geo = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+        screen_geo = _screen_geometry_for(geom.x(), geom.y(), geom.width(), geom.height())
         snapped_geom = snap_resize_rect(geom, self._resize_dir, other_geos, screen_geo, threshold=16)
 
         if snapped_geom.width() < 180:
@@ -2399,10 +2428,8 @@ class EntryDialog(QDialog):
         old_right = self.x() + self.width()
 
         should_shift_left = (r_dir == "l")
-        anchor_right_opt = getattr(self, "_expand_anchor_right", False)
-        is_anchored = getattr(self, "_anchored_to_right", False)
         if not should_shift_left:
-            if (self.x() + new_w > screen_right) or (anchor_right_opt and (is_anchored or old_right >= screen_right - 16)) or is_anchored:
+            if (self.x() + new_w > screen_right) or getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16) or getattr(self, "_expand_anchor_right", False):
                 should_shift_left = True
                 self._anchored_to_right = True
 
@@ -2415,7 +2442,8 @@ class EntryDialog(QDialog):
                 new_x = avail.left()
             self.move(new_x, self.y())
         else:
-            if self.x() + new_w > screen_right:
+            new_x = self.x()
+            if new_x + new_w > screen_right:
                 new_x = max(avail.left(), screen_right - new_w)
                 self.move(new_x, self.y())
         self._collapsed_width = new_w
@@ -3195,29 +3223,34 @@ class EntryDialog(QDialog):
         if expanding is None:
             expanding = width > self.width()
 
-        anchor_right_opt = getattr(self, "_expand_anchor_right", False)
-        is_anchored = getattr(self, "_anchored_to_right", False)
+        is_snapped_to_right = (old_right >= screen_right - 16)
+        anchored = getattr(self, "_anchored_to_right", False)
+        prefer_right = getattr(self, "_expand_anchor_right", False)
 
         if expanding:
-            # 펼칠 때: 화면 오른쪽을 넘치거나, 이미 우측에 고정되어 있거나, 화면 우측 끝(16px 이내)에 붙어있을 때
-            # 오른쪽 모서리를 기준으로 고정하여 왼쪽으로 커지게 함
-            if (target_x + width > screen_right) or is_anchored or (old_right >= screen_right - 16) or (anchor_right_opt and is_anchored):
+            # 펼칠 때: 화면 우측을 벗어나거나, 우측에 붙어있거나, 우측 고정 상태면 왼쪽으로 확장
+            if (target_x + width > screen_right) or is_snapped_to_right or anchored or prefer_right:
                 target_x = old_right - width
                 self._anchored_to_right = True
-            elif anchor_right_opt:
+            else:
                 self._anchored_to_right = False
         else:
-            # 접을 때: 우측 모서리에 고정되어 있던 창이면 오른쪽 모서리를 유지하며 접힘
-            if is_anchored and (old_right <= screen_right + 10):
+            # 접을 때: 우측 기준이었거나 우측에 붙어있다면 우측 모서리 유지 (펼치기 전 자리로 복귀)
+            if (anchored or is_snapped_to_right or prefer_right) and (old_right <= screen_right + 16):
                 target_x = old_right - width
+                self._anchored_to_right = True
 
-        # 어떤 경우에도(설정 여부와 무관하게) 창이 화면 오른쪽 밖으로 나가지 않게 최종 보호
-        if target_x + width > screen_right:
-            target_x = max(avail.left(), screen_right - width)
-        if target_x < avail.left():
-            target_x = avail.left()
-
-        self.setGeometry(target_x, self.y(), width, height)
+        # 위치와 크기를 한 번에 보정해 화면 밖으로 나가지 않게 한다
+        target_x, target_y, target_w, target_h = clamp_rect_into_screen(
+            avail,
+            target_x,
+            self.y(),
+            width,
+            height,
+            self.minimumWidth(),
+            self.minimumHeight(),
+        )
+        self.setGeometry(target_x, target_y, target_w, target_h)
 
     def _toggle_collapse(self) -> None:
         self._is_collapsed = not getattr(self, "_is_collapsed", False)
@@ -3231,7 +3264,7 @@ class EntryDialog(QDialog):
                 self.content_wrap.hide()
             self.setMinimumHeight(36)
             self.setMaximumHeight(36)
-            target_w = max(self.minimumWidth(), getattr(self, "_collapsed_width", None) or self._expanded_width)
+            target_w = max(self.minimumWidth(), getattr(self, "_collapsed_width", None) or 180)
             self._resize_with_anchor(target_w, 36, expanding=False)
             if hasattr(self, "_collapse_btn") and self._collapse_btn is not None:
                 self._collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg"))))
@@ -3308,6 +3341,7 @@ class EntryDialog(QDialog):
         if hasattr(self, "_drag_origin"):
             moved = self.pos() != self._drag_origin
             delattr(self, "_drag_origin")
+        avail = _screen_geometry_for(self.x(), self.y(), self.width(), self.height())
         # 기준 모서리는 사용자가 창을 '실제로 옮겼을 때'만 다시 정한다.
         # 제목줄을 단순히 클릭하거나 접기/펼치기만 해도 재계산되면, 펼친 뒤 판정이
         # 뒤집혀 접을 때 엉뚱한 자리로 튄다.
@@ -4034,7 +4068,7 @@ class FloatingGroupDialog(QDialog):
         self._expanded_width = 360
         self._collapsed_width = self.group_dict.get("collapsed_width", None)
         _owner_repo = getattr(parent, "repository", None)
-        self._expand_anchor_right = bool(_owner_repo) and _owner_repo.get_setting("memo_expand_anchor", "left") == "right"
+        self._expand_anchor_right = bool(_owner_repo) and _owner_repo.get_setting("memo_expand_anchor", "right") == "right"
         self._anchored_to_right = False
         self._drag_pos: QPoint | None = None
         self._cards: list[MiniMemoCardWidget] = []
@@ -4082,7 +4116,7 @@ class FloatingGroupDialog(QDialog):
                 if saved_col_x is not None:
                     init_x = int(saved_col_x)
                 else:
-                    if (self._expand_anchor_right or getattr(self, "_anchored_to_right", False)) and (exp_x + self._expanded_width <= screen_right + 50):
+                    if (self._expand_anchor_right or getattr(self, "_anchored_to_right", False) or exp_x + self._expanded_width >= screen_right - 16) and (exp_x + self._expanded_width <= screen_right + 50):
                         init_x = exp_x + self._expanded_width - target_w
                     else:
                         init_x = exp_x
@@ -4094,6 +4128,8 @@ class FloatingGroupDialog(QDialog):
                         max(avail.top(), min(exp_y, avail.bottom() - 36)),
                     )
                 )
+                if nx + target_w > screen_right:
+                    nx = max(avail.left(), screen_right - target_w)
                 self.setGeometry(nx, ny, target_w, 36)
                 self._anchored_to_right = getattr(self, "_anchored_to_right", False) or (nx + self._expanded_width > screen_right) or (nx + target_w >= screen_right - 16)
             else:
@@ -4105,6 +4141,8 @@ class FloatingGroupDialog(QDialog):
                         max(avail.top(), min(exp_y, avail.bottom() - 36)),
                     )
                 )
+                if nx + self._expanded_width > screen_right:
+                    nx = max(avail.left(), screen_right - self._expanded_width)
                 self.setGeometry(nx, ny, self._expanded_width, self._expanded_height)
                 self._anchored_to_right = getattr(self, "_anchored_to_right", False) or (nx + self._expanded_width > screen_right) or (nx + self.width() >= screen_right - 16)
         else:
@@ -4757,7 +4795,7 @@ class FloatingGroupDialog(QDialog):
             self.content_wrap.hide()
             self.setMinimumHeight(36)
             self.setMaximumHeight(36)
-            target_w = max(self.minimumWidth(), getattr(self, "_collapsed_width", None) or self._expanded_width)
+            target_w = max(self.minimumWidth(), getattr(self, "_collapsed_width", None) or 250)
             self._resize_with_anchor(target_w, 36, expanding=False)
         else:
             curr_w = self.width()
@@ -4784,29 +4822,34 @@ class FloatingGroupDialog(QDialog):
         if expanding is None:
             expanding = width > self.width()
 
-        anchor_right_opt = getattr(self, "_expand_anchor_right", False)
-        is_anchored = getattr(self, "_anchored_to_right", False)
+        is_snapped_to_right = (old_right >= screen_right - 16)
+        anchored = getattr(self, "_anchored_to_right", False)
+        prefer_right = getattr(self, "_expand_anchor_right", False)
 
         if expanding:
-            # 펼칠 때: 화면 오른쪽을 넘치거나, 이미 우측에 고정되어 있거나, 화면 우측 끝(16px 이내)에 붙어있을 때
-            # 오른쪽 모서리를 기준으로 고정하여 왼쪽으로 커지게 함
-            if (target_x + width > screen_right) or is_anchored or (old_right >= screen_right - 16) or (anchor_right_opt and is_anchored):
+            # 펼칠 때: 화면 우측을 벗어나거나, 우측에 붙어있거나, 우측 고정 상태면 왼쪽으로 확장
+            if (target_x + width > screen_right) or is_snapped_to_right or anchored or prefer_right:
                 target_x = old_right - width
                 self._anchored_to_right = True
-            elif anchor_right_opt:
+            else:
                 self._anchored_to_right = False
         else:
-            # 접을 때: 우측 모서리에 고정되어 있던 창이면 오른쪽 모서리를 유지하며 접힘
-            if is_anchored and (old_right <= screen_right + 10):
+            # 접을 때: 우측 기준이었거나 우측에 붙어있다면 우측 모서리 유지 (펼치기 전 자리로 복귀)
+            if (anchored or is_snapped_to_right or prefer_right) and (old_right <= screen_right + 16):
                 target_x = old_right - width
+                self._anchored_to_right = True
 
-        # 어떤 경우에도(설정 여부와 무관하게) 창이 화면 오른쪽 밖으로 나가지 않게 최종 보호
-        if target_x + width > screen_right:
-            target_x = max(avail.left(), screen_right - width)
-        if target_x < avail.left():
-            target_x = avail.left()
-
-        self.setGeometry(target_x, self.y(), width, height)
+        # 위치와 크기를 한 번에 보정해 화면 밖으로 나가지 않게 한다
+        target_x, target_y, target_w, target_h = clamp_rect_into_screen(
+            avail,
+            target_x,
+            self.y(),
+            width,
+            height,
+            self.minimumWidth(),
+            self.minimumHeight(),
+        )
+        self.setGeometry(target_x, target_y, target_w, target_h)
 
     def paintEvent(self, event) -> None:
         opt = QStyleOption()
@@ -4944,7 +4987,8 @@ class FloatingGroupDialog(QDialog):
         if hasattr(self, "_drag_pos") and self._drag_pos is not None:
             target_pos = global_pos - self._drag_pos
             curr_geo = QRect(target_pos, self.size())
-            snapped_pos = snap_window_rect(curr_geo, self._other_window_geometries(), self._screen_geometry(), threshold=16)
+            screen_geo = _screen_geometry_for(target_pos.x(), target_pos.y(), self.width(), self.height())
+            snapped_pos = snap_window_rect(curr_geo, self._other_window_geometries(), screen_geo, threshold=16)
             self.move(snapped_pos)
 
     def _end_window_drag(self) -> None:
@@ -5210,10 +5254,8 @@ class FloatingGroupDialog(QDialog):
         old_right = self.x() + self.width()
 
         should_shift_left = (r_dir == "l")
-        anchor_right_opt = getattr(self, "_expand_anchor_right", False)
-        is_anchored = getattr(self, "_anchored_to_right", False)
         if not should_shift_left:
-            if (self.x() + new_w > screen_right) or (anchor_right_opt and (is_anchored or old_right >= screen_right - 16)) or is_anchored:
+            if (self.x() + new_w > screen_right) or getattr(self, "_anchored_to_right", False) or (old_right >= screen_right - 16) or getattr(self, "_expand_anchor_right", False):
                 should_shift_left = True
                 self._anchored_to_right = True
 
@@ -5226,7 +5268,8 @@ class FloatingGroupDialog(QDialog):
                 new_x = avail.left()
             self.move(new_x, self.y())
         else:
-            if self.x() + new_w > screen_right:
+            new_x = self.x()
+            if new_x + new_w > screen_right:
                 new_x = max(avail.left(), screen_right - new_w)
                 self.move(new_x, self.y())
         self._collapsed_width = new_w
@@ -5725,7 +5768,7 @@ class SettingsDialog(QDialog):
         memo_default_size: str = "380,360",
         memo_default_font_size: int = 11,
         memo_title_only: bool = True,
-        memo_expand_anchor: str = "left",
+        memo_expand_anchor: str = "right",
         show_window_controls: bool = True,
         show_task_count_on_calendar: bool = True,
         available_task_statuses: list[str] | None = None,
@@ -5782,10 +5825,15 @@ class SettingsDialog(QDialog):
 
         self.nav_list = QListWidget()
         self.nav_list.setObjectName("navSidebar")
-        self.nav_list.setFixedWidth(140)
+        self.nav_list.setFixedWidth(145)
         self.nav_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.nav_list.setSpacing(4)
+        
+        nav_font = QFont(ui_font_family)
+        nav_font.setPointSizeF(max(1.0, scale_px(14) * 72.0 / 96.0))
+        nav_font.setWeight(QFont.Weight.DemiBold)
+        self.nav_list.setFont(nav_font)
         
         items = [
             ("⚙️ 기본", 0),
@@ -5798,7 +5846,8 @@ class SettingsDialog(QDialog):
         for label, idx in items:
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, idx)
-            item.setSizeHint(QSize(120, 38))
+            item.setFont(nav_font)
+            item.setSizeHint(QSize(125, 40))
             self.nav_list.addItem(item)
             
         body_layout.addWidget(self.nav_list)
@@ -6044,6 +6093,7 @@ class SettingsDialog(QDialog):
 
         self.ui_font_family_combo = QFontComboBox()
         self.ui_font_family_combo.setCurrentFont(QFont(ui_font_family))
+        self.ui_font_family_combo.setEditable(False)
         self.ui_font_family_combo.setFixedWidth(280)
         family_label = QLabel("글꼴")
         family_label.setObjectName("muted")
@@ -6068,8 +6118,17 @@ class SettingsDialog(QDialog):
         scale_label = QLabel("글자 크기")
         scale_label.setObjectName("muted")
         font_layout.addRow(scale_label, self.ui_font_scale_combo)
-
-        self.ui_font_preview = QLabel("가나다 ABC 123 - 미리보기")
+        self.ui_font_preview = QLabel("다람쥐 헌 쳇바퀴에 타고파. 123,456,789원 (가나다라 ABC)")
+        self.ui_font_preview.setAlignment(Qt.AlignCenter)
+        self.ui_font_preview.setStyleSheet(
+            f"background: {self.palette['panel_alt']}; "
+            f"color: {self.palette['text']}; "
+            f"border: 1px solid {self.palette['line']}; "
+            f"border-radius: 6px; "
+            f"padding: 10px 14px; "
+            f"min-height: 42px; "
+            f"margin-top: 4px;"
+        )
         font_layout.addRow(self.ui_font_preview)
         self._update_font_preview()
         self.ui_font_family_combo.currentFontChanged.connect(self._update_font_preview)
@@ -6675,8 +6734,15 @@ class SettingsDialog(QDialog):
             return
         family = self.ui_font_family_combo.currentFont().family() or DEFAULT_FAMILY
         scale = SCALE_OPTIONS.get(str(self.ui_font_scale_combo.currentData()), 1.0)
+        app = QApplication.instance()
+        screen = app.primaryScreen() if app else None
+        dpi = float(screen.logicalDotsPerInch()) if screen is not None else 96.0
+        if dpi <= 0:
+            dpi = 96.0
         preview_font = QFont(family)
-        preview_font.setPixelSize(max(1, round(13 * scale)))
+        preview_font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality)
+        preview_font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+        preview_font.setPointSizeF(max(1.0, scale_px(13 * scale) * 72.0 / dpi))
         self.ui_font_preview.setFont(preview_font)
 
     def _get_current_cal_shortcut_from_ui(self) -> str:

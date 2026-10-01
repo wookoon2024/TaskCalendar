@@ -108,9 +108,8 @@ def scale_key(scale: float | None = None) -> str:
 
 
 def font_family_css() -> str:
-    """QSS의 font-family 값(폴백 포함)."""
-    families = [_family] + [f for f in FALLBACK_FAMILIES if f != _family]
-    return ", ".join(f"'{name}'" for name in families) + ", sans-serif"
+    """QSS의 font-family 값. (QSS는 쉼표 구분 폴백 목록을 지원하지 않으므로 단일 패밀리 반환)"""
+    return f'"{_family}"'
 
 
 def scale_px(value: float) -> int:

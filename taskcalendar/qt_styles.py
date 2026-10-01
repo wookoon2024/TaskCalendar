@@ -63,6 +63,9 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
     arrow_svg = asset_path("chevron_down.svg").as_posix()
 
     return f"""
+    QWidget {{
+        font-family: {font_family_css()};
+    }}
     QDialog, QDialog#entryDialog {{
         background: {bg};
         color: {text};
@@ -180,7 +183,7 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         background: {accent_soft};
         border-color: {accent};
     }}
-    QLineEdit, QDateEdit, QTimeEdit, QSpinBox, QPlainTextEdit, QTextEdit {{
+    QLineEdit, QComboBox, QFontComboBox, QDateEdit, QTimeEdit, QSpinBox, QPlainTextEdit, QTextEdit {{
         background: {panel};
         border: 1px solid {line};
         border-radius: 8px;
@@ -189,7 +192,7 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         selection-background-color: {accent_soft};
         selection-color: {text};
     }}
-    QComboBox {{
+    QComboBox, QFontComboBox {{
         background: {panel};
         border: 1px solid {line};
         border-radius: 8px;
@@ -199,10 +202,10 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         selection-background-color: {accent_soft};
         selection-color: {text};
     }}
-    QComboBox:hover, QComboBox:focus {{
+    QComboBox:hover, QComboBox:focus, QFontComboBox:hover, QFontComboBox:focus {{
         border-color: {accent};
     }}
-    QComboBox::drop-down {{
+    QComboBox::drop-down, QFontComboBox::drop-down {{
         subcontrol-origin: padding;
         subcontrol-position: center right;
         width: 22px;
@@ -211,12 +214,12 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         border-bottom-right-radius: 7px;
         background: transparent;
     }}
-    QComboBox::down-arrow {{
+    QComboBox::down-arrow, QFontComboBox::down-arrow {{
         image: url("{arrow_svg}");
         width: 10px;
         height: 10px;
     }}
-    QComboBox QAbstractItemView {{
+    QComboBox QAbstractItemView, QFontComboBox QAbstractItemView {{
         border: 1px solid {line};
         border-radius: 6px;
         background-color: {panel};
@@ -225,6 +228,11 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         selection-color: {text};
         outline: 0px;
         padding: 4px;
+    }}
+    QComboBox QLineEdit, QFontComboBox QLineEdit {{
+        border: none;
+        background: transparent;
+        padding: 0px;
     }}
     QPlainTextEdit, QTextEdit {{
         padding: 8px;
@@ -343,12 +351,16 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         border-radius: 10px;
         outline: none;
         padding: 6px;
+        font-family: {font_family_css()};
+        font-size: 14px;
+        font-weight: 600;
     }}
     QListWidget#navSidebar::item {{
-        height: 38px;
-        min-height: 38px;
+        height: 40px;
+        min-height: 40px;
         padding-left: 10px;
-        font-size: 13px;
+        font-family: {font_family_css()};
+        font-size: 14px;
         font-weight: 600;
         color: {text};
         border-radius: 6px;
@@ -362,7 +374,7 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         color: {text};
         font-weight: 700;
     }}
-    QComboBox:disabled, QDateEdit:disabled, QTimeEdit:disabled, QSpinBox:disabled {{
+    QComboBox:disabled, QFontComboBox:disabled, QDateEdit:disabled, QTimeEdit:disabled, QSpinBox:disabled {{
         background: {panel_alt};
         color: {muted};
         border: 1px solid {line};

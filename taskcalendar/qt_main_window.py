@@ -236,6 +236,9 @@ class QtGlobalHotkeyManager:
 
 def app_stylesheet(p: dict[str, str]) -> str:
     return f"""
+    QWidget {{
+        font-family: {font_family_css()};
+    }}
     QMainWindow {{
         background: {p['bg']};
         color: {p['text']};
@@ -5970,7 +5973,7 @@ class MainWindow(QMainWindow):
             memo_default_size=self.repository.get_setting("memo_default_size", "380,360"),
             memo_default_font_size=int(self.repository.get_setting("memo_default_font_size", "11")),
             memo_title_only=getattr(self, "memo_title_only", True),
-            memo_expand_anchor=self.repository.get_setting("memo_expand_anchor", "left"),
+            memo_expand_anchor=self.repository.get_setting("memo_expand_anchor", "right"),
             show_window_controls=getattr(self, "_window_controls_visible", True),
             show_task_count_on_calendar=getattr(self, "show_task_count_on_calendar", True),
             available_task_statuses=available_statuses,
@@ -6044,7 +6047,7 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("memo_default_font_size", str(dialog.result.get("memo_default_font_size", 11)))
             new_title_only = bool(dialog.result.get("memo_title_only", True))
             self.repository.set_setting("memo_title_only", "1" if new_title_only else "0")
-            new_anchor = str(dialog.result.get("memo_expand_anchor", "left"))
+            new_anchor = str(dialog.result.get("memo_expand_anchor", "right"))
             self.repository.set_setting("memo_expand_anchor", new_anchor)
             is_right_anchor = (new_anchor == "right")
             for dlg in list(getattr(self, "_active_memo_dialogs", {}).values()):
