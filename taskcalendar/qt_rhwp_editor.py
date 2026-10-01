@@ -20,6 +20,54 @@ from PySide6.QtWidgets import (
 
 logger = logging.getLogger(__name__)
 
+# 기본 글꼴(Pretendard 12pt) 적용 스니펫.
+# - 본문이 있으면 전체 선택 후 적용하고 캐럿을 끝으로 옮겨, 기존 본문과 이후 입력 모두 Pretendard가 되게 한다.
+# - 빈 문서면 다음 입력에 적용되도록 "대기 글자 모양"을 지정한다(선택 영역이 없을 때 엔진이 쓰는 방식).
+#   단, 대기 글자 모양은 에디터가 활성(포커스) 상태여야 유지되므로 먼저 focus()를 호출한다.
+# 기본 글꼴(Pretendard 12pt) 적용 스니펫:
+# - 문서의 루트 바탕글(Style 0) 모양 자체를 Pretendard 12pt로 설정하여
+#   새 문서 작성 및 입력 시 함초롬바탕과의 깜빡임/충돌 없이 즉시 Pretendard로 동작하게 한다.
+_PRETENDARD_DEFAULTS_JS = """
+(function() {
+    try {
+        var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+        if (!deps || !deps.wasm) return;
+        var wasm = deps.wasm;
+        var fid = wasm.findOrCreateFontId ? wasm.findOrCreateFontId('Pretendard') : -1;
+        if (fid !== undefined && fid !== null && fid >= 0) {
+            var charMods = {
+                fontId: fid,
+                fontSize: 1200,
+                fontFamilies: ['Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard']
+            };
+            if (wasm.updateStyleShapes) {
+                wasm.updateStyleShapes(0, JSON.stringify(charMods), '{}');
+            }
+            if (deps.eventBus && wasm.getCharPropertiesAt) {
+                try {
+                    deps.eventBus.emit('cursor-format-changed', wasm.getCharPropertiesAt(0, 0, 0));
+                } catch(e) {}
+            }
+        }
+        var fontSelect = document.getElementById('font-name');
+        if (fontSelect) {
+            var opt = fontSelect.querySelector('option[value="Pretendard"]');
+            if (!opt) {
+                opt = document.createElement('option');
+                opt.value = 'Pretendard';
+                opt.textContent = 'Pretendard';
+                fontSelect.insertBefore(opt, fontSelect.firstChild);
+            }
+            fontSelect.value = 'Pretendard';
+        }
+        var sizeInput = document.getElementById('font-size');
+        if (sizeInput) { sizeInput.value = '12.0'; }
+    } catch (e) {
+        console.error('[PretendardDefaults] error:', e);
+    }
+})();
+"""
+
 try:
     from PySide6.QtWebEngineWidgets import QWebEngineView
     _HAS_WEBENGINE = True
@@ -172,40 +220,10 @@ class RhwpEditorWidget(QWidget):
         self.web_view.page().runJavaScript(js)
 
     def _apply_default_font_and_size(self) -> None:
-        """한글 에디터 기본 글꼴을 Pretendard 12pt로 설정"""
+        """한글 에디터 기본 글꼴을 Pretendard 12pt로 설정 (문서가 있으면 본문 전체에 적용)"""
         if not self.web_view:
             return
-        js = """
-        (function() {
-            try {
-                var deps = window.rhwpStudio?.plugins?.deps;
-                var wasm = deps?.wasm;
-                var bus = deps?.eventBus;
-                if (wasm && bus) {
-                    var fid = wasm.findOrCreateFontId?.('Pretendard');
-                    if (fid !== undefined && fid >= 0) {
-                        bus.emit('format-char', { fontId: fid, fontSize: 1200 });
-                    }
-                }
-                var fontSelect = document.getElementById('font-name');
-                if (fontSelect) {
-                    var opt = fontSelect.querySelector('option[value="Pretendard"]');
-                    if (!opt) {
-                        opt = document.createElement('option');
-                        opt.value = 'Pretendard';
-                        opt.textContent = 'Pretendard';
-                        fontSelect.insertBefore(opt, fontSelect.firstChild);
-                    }
-                    fontSelect.value = 'Pretendard';
-                }
-                var sizeInput = document.getElementById('font-size');
-                if (sizeInput) {
-                    sizeInput.value = '12.0';
-                }
-            } catch(e) {}
-        })();
-        """
-        self.web_view.page().runJavaScript(js)
+        self.web_view.page().runJavaScript(_PRETENDARD_DEFAULTS_JS)
 
     def _on_load_finished(self, ok: bool) -> None:
         self._is_loaded = ok
@@ -253,46 +271,41 @@ class RhwpEditorWidget(QWidget):
             escaped_text = text.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
             js = f"""
             (async function() {{
-                var deps = window.rhwpStudio?.plugins?.deps;
+                var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
                 if (!deps) return;
-                deps.createBlankDocument?.();
-                var doc = deps.wasm?.doc;
-                if (doc && doc.insertText) {{
+                deps.createBlankDocument && deps.createBlankDocument();
+                var wasm = deps.wasm;
+                var doc = wasm && wasm.doc;
+                if (wasm && wasm.updateStyleShapes) {{
+                    try {{
+                        var fid = wasm.findOrCreateFontId ? wasm.findOrCreateFontId('Pretendard') : -1;
+                        if (fid !== undefined && fid !== null && fid >= 0) {{
+                            var charMods = {{
+                                fontId: fid,
+                                fontSize: 1200,
+                                fontFamilies: ['Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard']
+                            }};
+                            wasm.updateStyleShapes(0, JSON.stringify(charMods), '{{}}');
+                        }}
+                    }} catch(e) {{}}
+                }}
+                if (doc && doc.insertText && `{escaped_text}`) {{
                     try {{
                         doc.insertText(0, 0, 0, `{escaped_text}`);
-                        var bytes = doc.exportHwpx();
-                        await deps.loadDocument(bytes, "{safe_title}.hwpx");
-                    }} catch(e) {{
+                    }} catch (e) {{
                         console.error(e);
                     }}
                 }}
-                setTimeout(function() {{
+                if (doc && doc.exportHwpx) {{
                     try {{
-                        var wasm = deps?.wasm;
-                        var bus = deps?.eventBus;
-                        if (wasm && bus) {{
-                            var fid = wasm.findOrCreateFontId?.('Pretendard');
-                            if (fid !== undefined && fid >= 0) {{
-                                bus.emit('format-char', {{ fontId: fid, fontSize: 1200 }});
-                            }}
-                        }}
-                        var fontSelect = document.getElementById('font-name');
-                        if (fontSelect) {{
-                            var opt = fontSelect.querySelector('option[value="Pretendard"]');
-                            if (!opt) {{
-                                opt = document.createElement('option');
-                                opt.value = 'Pretendard';
-                                opt.textContent = 'Pretendard';
-                                fontSelect.insertBefore(opt, fontSelect.firstChild);
-                            }}
-                            fontSelect.value = 'Pretendard';
-                        }}
-                        var sizeInput = document.getElementById('font-size');
-                        if (sizeInput) {{
-                            sizeInput.value = '12.0';
-                        }}
-                    }} catch(err) {{}}
-                }}, 150);
+                        var bytes = doc.exportHwpx();
+                        await deps.loadDocument(bytes, "{safe_title}.hwpx");
+                    }} catch (e) {{}}
+                }}
+                var fontSelect = document.getElementById('font-name');
+                if (fontSelect) fontSelect.value = 'Pretendard';
+                var sizeInput = document.getElementById('font-size');
+                if (sizeInput) sizeInput.value = '12.0';
             }})();
             """
         self.web_view.page().runJavaScript(js)

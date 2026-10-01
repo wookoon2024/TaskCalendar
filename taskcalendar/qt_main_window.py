@@ -1389,8 +1389,8 @@ class MainWindow(QMainWindow):
         # self.complaint_button.clicked.connect(self._open_complaint_calculator)
         # tac_layout.addWidget(self.complaint_button)
 
-        self.service_button = self._top_button("부가 기능")
-        self.service_button.setToolTip("부가 기능 (알람 설정, 날짜 계산기 등)")
+        self.service_button = self._top_button("기능")
+        self.service_button.setToolTip("기능 (알람 설정, 날짜 계산기 등)")
         self.service_menu = QMenu(self)
         self.service_menu.setStyleSheet("""
             QMenu {
@@ -1419,7 +1419,8 @@ class MainWindow(QMainWindow):
         self.service_button.clicked.connect(self._show_service_menu)
         tac_layout.addWidget(self.service_button)
 
-        settings_button = self._top_button("환경설정")
+        settings_button = self._top_button("설정")
+        settings_button.setToolTip("환경설정")
         settings_button.clicked.connect(self._open_settings)
         tac_layout.addWidget(settings_button)
 
