@@ -32,6 +32,7 @@ TaskCalendar_*.zip
 chrome_extension.zip
 *.zip
 !Calendar_v*.zip
+*.whl
 
 bin/
 distutils-precedence.pth

@@ -110,9 +110,6 @@ class RhwpEditorWidget(QWidget):
         self._is_loaded = False
         self._pending_html: str | None = None
         self._pending_load: tuple[str, str, bytes | None] | None = None
-        self._fit_timer = QTimer(self)
-        self._fit_timer.setSingleShot(True)
-        self._fit_timer.timeout.connect(self.fit_page)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -134,17 +131,8 @@ class RhwpEditorWidget(QWidget):
             layout.addWidget(self._fallback_editor, 1)
             self.web_view = None
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        if self._is_loaded and self.web_view:
-            self._fit_timer.start(120)
-
     def _on_load_finished(self, ok: bool) -> None:
         self._is_loaded = ok
-        if ok:
-            # 기본 쪽맞춤(Fit Page) 자동 실행 (WASM 엔진 초기화 고려)
-            QTimer.singleShot(300, self.fit_page)
-            QTimer.singleShot(800, self.fit_page)
         if ok and self._pending_load is not None:
             title, text, hwpx_bytes = self._pending_load
             self._pending_load = None
@@ -154,7 +142,7 @@ class RhwpEditorWidget(QWidget):
             self._pending_html = None
 
     def load_document(self, title: str, text: str = "", hwpx_bytes: bytes | None = None) -> None:
-        """HWPX 바이너리 또는 텍스트를 rhwp-studio에 로드하고 쪽맞춤 뷰 설정"""
+        """HWPX 바이너리 또는 텍스트를 rhwp-studio에 로드"""
         if self._fallback_editor is not None:
             self._fallback_editor.setPlainText(text)
             return
@@ -178,10 +166,6 @@ class RhwpEditorWidget(QWidget):
                 var deps = window.rhwpStudio?.plugins?.deps;
                 if (deps && deps.loadDocument) {{
                     await deps.loadDocument(bytes, "{safe_title}.hwpx");
-                    setTimeout(() => {{
-                        var btn = document.getElementById('sb-zoom-fit');
-                        if (btn) btn.click();
-                    }}, 300);
                 }}
             }})();
             """
@@ -202,10 +186,6 @@ class RhwpEditorWidget(QWidget):
                         console.error(e);
                     }}
                 }}
-                setTimeout(() => {{
-                    var btn = document.getElementById('sb-zoom-fit');
-                    if (btn) btn.click();
-                }}, 300);
             }})();
             """
         self.web_view.page().runJavaScript(js)
