@@ -12,6 +12,7 @@ from pathlib import Path
 
 from PySide6.QtCore import (
     QEvent,
+    QEventLoop,
     QMarginsF,
     QMimeData,
     QPoint,
@@ -3659,37 +3660,42 @@ class WorkManagerDialog(QDialog):
 
     def _save_sheet_sync(self, sheet: WorkSheetData) -> None:
         """시트 내용 동기 저장 (탭 닫기 또는 창 닫기 시)"""
-        if sheet in self._open_sheets and self._open_sheets.index(sheet) == self._active_sheet_index:
-            self._save_current_sheet_data()
-            # 현재 에디터 내용 추출 후 저장
-            loop = QEventLoop()
-            def _on_exported(text: str, hwpx_bytes: bytes | None):
-                if text:
-                    sheet.content_text = text
-                if hwpx_bytes:
-                    sheet.hwpx_blob = hwpx_bytes
-                loop.quit()
+        try:
+            if sheet in self._open_sheets and self._open_sheets.index(sheet) == self._active_sheet_index:
+                self._save_current_sheet_data()
+                # 현재 에디터 내용 추출 후 저장
+                loop = QEventLoop()
+                def _on_exported(text: str, hwpx_bytes: bytes | None):
+                    if text:
+                        sheet.content_text = text
+                    if hwpx_bytes:
+                        sheet.hwpx_blob = hwpx_bytes
+                    if loop.isRunning():
+                        loop.quit()
 
-            self.editor.export_document_data(_on_exported)
-            QTimer.singleShot(800, loop.quit)
-            loop.exec()
+                self.editor.export_document_data(_on_exported)
+                QTimer.singleShot(800, lambda: loop.quit() if loop.isRunning() else None)
+                loop.exec()
 
-        if self.repository:
-            sheet.db_id = self.repository.upsert_work_item(
-                work_id=sheet.db_id,
-                title=sheet.title,
-                category_name=sheet.category,
-                category_id=sheet.category_id,
-                cycle=sheet.cycle,
-                assignee=sheet.assignee,
-                deadline=sheet.deadline,
-                content_text=sheet.content_text,
-                content_html=sheet.content_html,
-                hwpx_blob=sheet.hwpx_blob,
-                sort_order=self._all_sheets.index(sheet) if sheet in self._all_sheets else 0,
-            )
-        sheet.is_dirty = False
-        self._update_tab_title(sheet)
+            if self.repository:
+                sheet.db_id = self.repository.upsert_work_item(
+                    work_id=sheet.db_id,
+                    title=sheet.title,
+                    category_name=sheet.category,
+                    category_id=sheet.category_id,
+                    cycle=sheet.cycle,
+                    assignee=sheet.assignee,
+                    deadline=sheet.deadline,
+                    content_text=sheet.content_text,
+                    content_html=sheet.content_html,
+                    hwpx_blob=sheet.hwpx_blob,
+                    sort_order=self._all_sheets.index(sheet) if sheet in self._all_sheets else 0,
+                )
+        except Exception as e:
+            logger.exception("Failed to save sheet sync: %s", e)
+        finally:
+            sheet.is_dirty = False
+            self._update_tab_title(sheet)
 
     def _reload_sheet_from_db(self, sheet: WorkSheetData) -> None:
         """시트의 미저장 변경 내용을 버리고 DB의 원래 저장된 데이터로 롤백"""
