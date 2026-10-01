@@ -1433,22 +1433,29 @@ class WorkExportWizardDialog(QDialog):
         format_group_box = QFrame()
         format_group_box.setStyleSheet(f"background-color: {panel}; border: none; border-radius: 6px; padding: 12px;")
         f_layout = QVBoxLayout(format_group_box)
-        f_layout.setSpacing(8)
+        f_layout.setSpacing(6)
         lbl_f = QLabel("<b>내보내기 문서 형식 선택</b>")
         lbl_f.setStyleSheet(f"color: {accent}; font-size: 12px; border: none;")
         f_layout.addWidget(lbl_f)
 
-        # 라디오버튼 – 이모티콘 없음, 선택 시 배경 강조를 위해 QFrame 래퍼 사용
-        def _make_rb_card(rb: "QRadioButton") -> "QFrame":
-            card = QFrame()
-            card.setObjectName("rb_card")
-            card.setStyleSheet(
-                f"QFrame#rb_card {{ border: 2px solid transparent; border-radius: 6px; padding: 6px 10px; }}"
-            )
-            h = QHBoxLayout(card)
-            h.setContentsMargins(0, 0, 0, 0)
-            h.addWidget(rb)
-            return card
+        # 라디오버튼 – 선택 시 자신의 스타일로 직접 강조 (QFrame 래퍼 없음 → ○ 표시기 항상 노출)
+        _rb_sel = f"""
+            QRadioButton {{
+                padding: 8px 14px;
+                border: 2px solid {accent};
+                border-radius: 6px;
+                background-color: {panel_alt};
+                spacing: 8px;
+            }}
+        """
+        _rb_unsel = f"""
+            QRadioButton {{
+                padding: 8px 14px;
+                border: 2px solid transparent;
+                border-radius: 6px;
+                spacing: 8px;
+            }}
+        """
 
         self.rb_hwpx = QRadioButton("한글 문서 (.hwpx / .hwp)  –  한글에서 바로 편집 가능한 정형 문서")
         self.rb_hwpx.setChecked(True)
@@ -1457,21 +1464,16 @@ class WorkExportWizardDialog(QDialog):
         self.format_btn_group.addButton(self.rb_hwpx)
         self.format_btn_group.addButton(self.rb_pdf)
 
-        self._rb_card_hwpx = _make_rb_card(self.rb_hwpx)
-        self._rb_card_pdf = _make_rb_card(self.rb_pdf)
+        def _update_rb_style():
+            self.rb_hwpx.setStyleSheet(_rb_sel if self.rb_hwpx.isChecked() else _rb_unsel)
+            self.rb_pdf.setStyleSheet(_rb_sel if self.rb_pdf.isChecked() else _rb_unsel)
 
-        def _update_rb_cards():
-            sel = f"QFrame#rb_card {{ border: 2px solid {accent}; border-radius: 6px; padding: 6px 10px; background-color: {panel_alt}; }}"
-            unsel = f"QFrame#rb_card {{ border: 2px solid transparent; border-radius: 6px; padding: 6px 10px; }}"
-            self._rb_card_hwpx.setStyleSheet(sel if self.rb_hwpx.isChecked() else unsel)
-            self._rb_card_pdf.setStyleSheet(sel if self.rb_pdf.isChecked() else unsel)
+        self.rb_hwpx.toggled.connect(lambda _: _update_rb_style())
+        self.rb_pdf.toggled.connect(lambda _: _update_rb_style())
+        _update_rb_style()
 
-        self.rb_hwpx.toggled.connect(lambda _: _update_rb_cards())
-        self.rb_pdf.toggled.connect(lambda _: _update_rb_cards())
-        _update_rb_cards()
-
-        f_layout.addWidget(self._rb_card_hwpx)
-        f_layout.addWidget(self._rb_card_pdf)
+        f_layout.addWidget(self.rb_hwpx)
+        f_layout.addWidget(self.rb_pdf)
         s2_layout.addWidget(format_group_box)
 
         # 저장 폴더 그룹 (테두리 없음)
@@ -1490,7 +1492,20 @@ class WorkExportWizardDialog(QDialog):
         dir_h.addWidget(self.dest_dir_input, 1)
 
         btn_browse = QPushButton("찾아보기...")
-        btn_browse.setFixedSize(74, 30)
+        btn_browse.setFixedSize(90, 30)
+        btn_browse.setStyleSheet(f"""
+            QPushButton {{
+                border: 1px solid {line};
+                border-radius: 4px;
+                background-color: {panel_alt};
+                color: {accent};
+                font-size: 12px;
+                padding: 0 8px;
+            }}
+            QPushButton:hover {{
+                background-color: {line};
+            }}
+        """)
         btn_browse.clicked.connect(self._on_browse_dest_dir)
         dir_h.addWidget(btn_browse)
         d_layout.addLayout(dir_h)
@@ -1504,25 +1519,10 @@ class WorkExportWizardDialog(QDialog):
         self.stacked.addWidget(step2_widget)
 
         # -------------------------------------------------------------
-        # 하단 탐색 버튼
+        # 하단 탐색 버튼 – 모두 90 × 30 으로 통일
         # -------------------------------------------------------------
-        btn_nav_layout = QHBoxLayout()
-        self.btn_cancel = QPushButton("취소")
-        self.btn_cancel.setFixedSize(74, 30)
-        self.btn_cancel.clicked.connect(self.reject)
-        btn_nav_layout.addWidget(self.btn_cancel)
-
-        btn_nav_layout.addStretch(1)
-
-        self.btn_prev = QPushButton("◀ 이전")
-        self.btn_prev.setFixedSize(74, 30)
-        self.btn_prev.clicked.connect(self._go_prev_step)
-        self.btn_prev.hide()
-        btn_nav_layout.addWidget(self.btn_prev)
-
-        self.btn_next = QPushButton("다음 ▶")
-        self.btn_next.setFixedSize(84, 30)
-        self.btn_next.setStyleSheet(f"""
+        _BTN_W, _BTN_H = 90, 30
+        _btn_accent_ss = f"""
             QPushButton {{
                 border: none;
                 border-radius: 4px;
@@ -1534,11 +1534,30 @@ class WorkExportWizardDialog(QDialog):
             QPushButton:hover {{
                 background-color: #0274AD;
             }}
-        """)
+        """
+
+        btn_nav_layout = QHBoxLayout()
+        self.btn_cancel = QPushButton("취소")
+        self.btn_cancel.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_nav_layout.addWidget(self.btn_cancel)
+
+        btn_nav_layout.addStretch(1)
+
+        self.btn_prev = QPushButton("◀ 이전")
+        self.btn_prev.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_prev.clicked.connect(self._go_prev_step)
+        self.btn_prev.hide()
+        btn_nav_layout.addWidget(self.btn_prev)
+
+        self.btn_next = QPushButton("다음 ▶")
+        self.btn_next.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_next.setStyleSheet(_btn_accent_ss)
         self.btn_next.clicked.connect(self._go_next_step)
         btn_nav_layout.addWidget(self.btn_next)
 
         main_layout.addLayout(btn_nav_layout)
+
 
     def _populate_tree(self) -> None:
         self.tree.blockSignals(True)
