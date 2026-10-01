@@ -1168,13 +1168,38 @@ class WorkImportWizardDialog(QDialog):
         text, text_muted, line, accent = pal["text"], pal["text_muted"], pal["line"], pal["accent"]
 
         _BTN_W, _BTN_H = 90, 32
+        _btn_nav_style = f"""
+            QPushButton {{
+                background-color: #FFFFFF;
+                border: 1px solid {line};
+                border-radius: 4px;
+                color: {text};
+                font-size: 12px;
+                font-weight: normal;
+                padding: 0px 8px;
+                min-height: 32px;
+                max-height: 32px;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt};
+            }}
+        """
         _accent_ss = f"""
             QPushButton {{
-                border: none; border-radius: 4px;
-                background-color: {accent}; color: #FFFFFF;
-                font-size: 12px; font-weight: bold;
+                background-color: {accent};
+                border: 1px solid {accent};
+                border-radius: 4px;
+                color: #FFFFFF;
+                font-size: 12px;
+                font-weight: bold;
+                padding: 0px 8px;
+                min-height: 32px;
+                max-height: 32px;
             }}
-            QPushButton:hover {{ background-color: #0274AD; }}
+            QPushButton:hover {{
+                background-color: #0274AD;
+                border-color: #0274AD;
+            }}
         """
 
         main_layout = QVBoxLayout(self)
@@ -1191,7 +1216,7 @@ class WorkImportWizardDialog(QDialog):
         main_layout.addWidget(self.stacked, 1)
 
         # ---------------------------------------------------------------
-        # STEP 1 – 방식 선택
+        # STEP 1 – 방식 선택 (동그라미 없는 모던 카드형 선택)
         # ---------------------------------------------------------------
         step1 = QWidget()
         s1 = QVBoxLayout(step1)
@@ -1202,38 +1227,43 @@ class WorkImportWizardDialog(QDialog):
         lbl_hint.setStyleSheet(f"color: {text_muted}; font-size: 12px;")
         s1.addWidget(lbl_hint)
 
-        _rb_base_indicator = f"""
-            QRadioButton::indicator {{
-                width: 16px;
-                height: 16px;
-                border-radius: 8px;
-                border: 2px solid #94A3B8;
-                background-color: #FFFFFF;
-            }}
-            QRadioButton::indicator:hover {{
-                border: 2px solid {accent};
-            }}
-            QRadioButton::indicator:checked {{
-                border: 5px solid {accent};
-                background-color: #FFFFFF;
-            }}
-        """
-
         _rb_sel = f"""
             QRadioButton {{
-                padding: 10px 16px; border: 2px solid {accent};
-                border-radius: 6px; background-color: {panel_alt}; spacing: 10px;
-                color: {text}; font-size: 12px;
+                padding: 10px 16px;
+                border: 2px solid {accent};
+                border-radius: 6px;
+                background-color: {panel_alt};
+                color: {text};
+                font-size: 12px;
+                font-weight: bold;
             }}
-            {_rb_base_indicator}
+            QRadioButton::indicator {{
+                width: 0px;
+                height: 0px;
+                border: none;
+                background: transparent;
+            }}
         """
         _rb_unsel = f"""
             QRadioButton {{
-                padding: 10px 16px; border: 2px solid transparent;
-                border-radius: 6px; spacing: 10px;
-                color: {text}; font-size: 12px;
+                padding: 10px 16px;
+                border: 1px solid {line};
+                border-radius: 6px;
+                background-color: {panel};
+                color: {text};
+                font-size: 12px;
+                font-weight: normal;
             }}
-            {_rb_base_indicator}
+            QRadioButton:hover {{
+                border-color: {accent};
+                background-color: {panel_alt};
+            }}
+            QRadioButton::indicator {{
+                width: 0px;
+                height: 0px;
+                border: none;
+                background: transparent;
+            }}
         """
 
         self.rb_folder = QRadioButton(
@@ -1381,6 +1411,7 @@ class WorkImportWizardDialog(QDialog):
         nav = QHBoxLayout()
         self.btn_cancel = QPushButton("취소")
         self.btn_cancel.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_cancel.setStyleSheet(_btn_nav_style)
         self.btn_cancel.clicked.connect(self.reject)
         nav.addWidget(self.btn_cancel)
 
@@ -1388,6 +1419,7 @@ class WorkImportWizardDialog(QDialog):
 
         self.btn_prev = QPushButton("◀ 이전")
         self.btn_prev.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_prev.setStyleSheet(_btn_nav_style)
         self.btn_prev.clicked.connect(self._go_prev)
         self.btn_prev.hide()
         nav.addWidget(self.btn_prev)
@@ -1932,6 +1964,17 @@ class WorkExportWizardDialog(QDialog):
             QLabel {{
                 color: {text};
             }}
+            QPushButton {{
+                background-color: {panel};
+                border: 1px solid {line};
+                border-radius: 4px;
+                color: {text};
+                font-size: 12px;
+                padding: 0px 8px;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt};
+            }}
             QTreeWidget {{
                 background-color: {panel};
                 border: 1px solid {line};
@@ -2011,46 +2054,44 @@ class WorkExportWizardDialog(QDialog):
         lbl_f.setStyleSheet(f"color: {accent}; font-size: 12px; border: none;")
         f_layout.addWidget(lbl_f)
 
-        # 라디오버튼 – 선택 시 자신의 스타일로 직접 강조 (선명한 인디케이터 표시)
-        _rb_base_indicator = f"""
-            QRadioButton::indicator {{
-                width: 16px;
-                height: 16px;
-                border-radius: 8px;
-                border: 2px solid #94A3B8;
-                background-color: #FFFFFF;
-            }}
-            QRadioButton::indicator:hover {{
-                border: 2px solid {accent};
-            }}
-            QRadioButton::indicator:checked {{
-                border: 5px solid {accent};
-                background-color: #FFFFFF;
-            }}
-        """
-
+        # 라디오버튼 – 선택 시 자신의 스타일로 직접 강조 (동그라미 없는 모던 카드형 선택)
         _rb_sel = f"""
             QRadioButton {{
-                padding: 8px 14px;
+                padding: 10px 16px;
                 border: 2px solid {accent};
                 border-radius: 6px;
                 background-color: {panel_alt};
                 color: {text};
                 font-size: 12px;
-                spacing: 10px;
+                font-weight: bold;
             }}
-            {_rb_base_indicator}
+            QRadioButton::indicator {{
+                width: 0px;
+                height: 0px;
+                border: none;
+                background: transparent;
+            }}
         """
         _rb_unsel = f"""
             QRadioButton {{
-                padding: 8px 14px;
-                border: 2px solid transparent;
+                padding: 10px 16px;
+                border: 1px solid {line};
                 border-radius: 6px;
+                background-color: {panel};
                 color: {text};
                 font-size: 12px;
-                spacing: 10px;
+                font-weight: normal;
             }}
-            {_rb_base_indicator}
+            QRadioButton:hover {{
+                border-color: {accent};
+                background-color: {panel_alt};
+            }}
+            QRadioButton::indicator {{
+                width: 0px;
+                height: 0px;
+                border: none;
+                background: transparent;
+            }}
         """
 
         self.rb_hwpx = QRadioButton("한글 문서 (.hwpx / .hwp)  –  한글에서 바로 편집 가능한 정형 문서")
@@ -2098,6 +2139,8 @@ class WorkExportWizardDialog(QDialog):
                 color: {accent};
                 font-size: 12px;
                 padding: 0 8px;
+                min-height: 32px;
+                max-height: 32px;
             }}
             QPushButton:hover {{
                 background-color: {panel_alt};
@@ -2116,26 +2159,47 @@ class WorkExportWizardDialog(QDialog):
         self.stacked.addWidget(step2_widget)
 
         # -------------------------------------------------------------
-        # 하단 탐색 버튼 – 모두 32px 높이 통일
+        # 하단 탐색 버튼 – 모두 32px 높이 통일 및 일관된 스타일
         # -------------------------------------------------------------
         _BTN_W, _BTN_H = 90, 32
+        _btn_nav_style = f"""
+            QPushButton {{
+                background-color: #FFFFFF;
+                border: 1px solid {line};
+                border-radius: 4px;
+                color: {text};
+                font-size: 12px;
+                font-weight: normal;
+                padding: 0px 8px;
+                min-height: 32px;
+                max-height: 32px;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt};
+            }}
+        """
         _btn_accent_ss = f"""
             QPushButton {{
-                border: none;
-                border-radius: 4px;
                 background-color: {accent};
+                border: 1px solid {accent};
+                border-radius: 4px;
                 color: #FFFFFF;
                 font-size: 12px;
                 font-weight: bold;
+                padding: 0px 8px;
+                min-height: 32px;
+                max-height: 32px;
             }}
             QPushButton:hover {{
                 background-color: #0274AD;
+                border-color: #0274AD;
             }}
         """
 
         btn_nav_layout = QHBoxLayout()
         self.btn_cancel = QPushButton("취소")
         self.btn_cancel.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_cancel.setStyleSheet(_btn_nav_style)
         self.btn_cancel.clicked.connect(self.reject)
         btn_nav_layout.addWidget(self.btn_cancel)
 
@@ -2143,6 +2207,7 @@ class WorkExportWizardDialog(QDialog):
 
         self.btn_prev = QPushButton("◀ 이전")
         self.btn_prev.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_prev.setStyleSheet(_btn_nav_style)
         self.btn_prev.clicked.connect(self._go_prev_step)
         self.btn_prev.hide()
         btn_nav_layout.addWidget(self.btn_prev)
