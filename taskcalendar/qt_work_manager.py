@@ -957,7 +957,381 @@ class WorkContextMenuGuideDialog(QDialog):
         return self.cb_dont_ask.isChecked()
 
 
+# ---------------------------------------------------------------------------
+# 불러오기 마법사 – 2단계: 폴더 또는 파일 불러오기
+# ---------------------------------------------------------------------------
+# 실제로 내용이 표시되는 확장자 목록 (extract_document_content 지원)
+_IMPORT_VIEWABLE_EXTS = {
+    ".hwp", ".hwpx",                      # 한글 – 원본 바이너리 그대로 표시
+    ".txt", ".md", ".csv", ".json",       # 텍스트 계열 – 플레인 텍스트 표시
+    ".xlsx", ".xls",                      # 엑셀 – 텍스트 추출
+}
+# 텍스트만 추출(미리보기 한계) 형식 – 등록은 되지만 경고 표시
+_IMPORT_TEXT_ONLY_EXTS = {".pdf", ".docx", ".doc"}
+
+
+class WorkImportWizardDialog(QDialog):
+    """불러오기 2단계 마법사.
+    Step 1: 방식 선택 (폴더 / 파일 선택)
+    Step 2: 경로 선택 + 업무분류명 + 첨부파일 옵션
+    """
+
+    MODE_FOLDER = "folder"
+    MODE_FILES = "files"
+
+    def __init__(self, parent=None, categories: list[str] = None, palette: dict | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("업무 불러오기 마법사")
+        self.setFixedSize(540, 420)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        self.categories = categories or []
+        pal = palette or resolve_palette(False)
+        bg       = pal.get("bg",         "#F8FAFC")
+        panel    = pal.get("panel",      "#FFFFFF")
+        panel_alt = pal.get("panel_alt", "#F1F5F9")
+        text     = pal.get("text",       "#1E293B")
+        text_muted = pal.get("text_muted", "#64748B")
+        line     = pal.get("line",       "#E2E8F0")
+        accent   = pal.get("accent",     "#0284C7")
+        self._pal = dict(bg=bg, panel=panel, panel_alt=panel_alt,
+                         text=text, text_muted=text_muted, line=line, accent=accent)
+
+        self.setStyleSheet(f"background-color: {bg}; color: {text}; font-family: {ui_font_family()};")
+
+        self._mode = self.MODE_FOLDER
+        self._selected_folder: str = ""
+        self._selected_files: list[str] = []
+
+        self._step = 0
+        self._init_ui()
+
+    # ------------------------------------------------------------------
+    def _init_ui(self) -> None:
+        pal = self._pal
+        bg, panel, panel_alt = pal["bg"], pal["panel"], pal["panel_alt"]
+        text, text_muted, line, accent = pal["text"], pal["text_muted"], pal["line"], pal["accent"]
+
+        _BTN_W, _BTN_H = 90, 30
+        _accent_ss = f"""
+            QPushButton {{
+                border: none; border-radius: 4px;
+                background-color: {accent}; color: #FFFFFF;
+                font-size: 12px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: #0274AD; }}
+        """
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(24, 20, 24, 20)
+        main_layout.setSpacing(16)
+
+        # 단계 표시 헤더
+        self.lbl_step = QLabel()
+        self.lbl_step.setStyleSheet(f"color: {accent}; font-size: 13px; font-weight: bold;")
+        main_layout.addWidget(self.lbl_step)
+
+        # 스택
+        self.stacked = QStackedWidget()
+        main_layout.addWidget(self.stacked, 1)
+
+        # ---------------------------------------------------------------
+        # STEP 1 – 방식 선택
+        # ---------------------------------------------------------------
+        step1 = QWidget()
+        s1 = QVBoxLayout(step1)
+        s1.setContentsMargins(0, 0, 0, 0)
+        s1.setSpacing(10)
+
+        lbl_hint = QLabel("가져올 방식을 선택하세요.")
+        lbl_hint.setStyleSheet(f"color: {text_muted}; font-size: 12px;")
+        s1.addWidget(lbl_hint)
+
+        _rb_sel = f"""
+            QRadioButton {{
+                padding: 10px 16px; border: 2px solid {accent};
+                border-radius: 6px; background-color: {panel_alt}; spacing: 10px;
+            }}
+        """
+        _rb_unsel = f"""
+            QRadioButton {{
+                padding: 10px 16px; border: 2px solid transparent;
+                border-radius: 6px; spacing: 10px;
+            }}
+        """
+
+        self.rb_folder = QRadioButton(
+            "폴더 불러오기  –  하위 파일을 업무 분류 및 문서로 일괄 등록"
+        )
+        self.rb_folder.setChecked(True)
+        self.rb_files = QRadioButton(
+            "파일 불러오기  –  문서 파일 1개 또는 여러 개를 업무로 등록"
+        )
+        self._mode_btn_group = QButtonGroup(self)
+        self._mode_btn_group.addButton(self.rb_folder)
+        self._mode_btn_group.addButton(self.rb_files)
+
+        def _upd_rb():
+            self.rb_folder.setStyleSheet(_rb_sel if self.rb_folder.isChecked() else _rb_unsel)
+            self.rb_files.setStyleSheet(_rb_sel if self.rb_files.isChecked() else _rb_unsel)
+        self.rb_folder.toggled.connect(lambda _: _upd_rb())
+        self.rb_files.toggled.connect(lambda _: _upd_rb())
+        _upd_rb()
+
+        s1.addWidget(self.rb_folder)
+        s1.addWidget(self.rb_files)
+
+        # 지원 형식 안내
+        note_box = QFrame()
+        note_box.setStyleSheet(f"background-color: {panel}; border-radius: 6px; padding: 10px;")
+        note_lay = QVBoxLayout(note_box)
+        note_lay.setContentsMargins(10, 8, 10, 8)
+        note_lay.setSpacing(4)
+        note_lbl = QLabel("<b>등록 가능한 문서 형식</b>")
+        note_lbl.setStyleSheet(f"color: {accent}; font-size: 11px; border: none;")
+        note_lay.addWidget(note_lbl)
+        sup_exts = sorted(_IMPORT_VIEWABLE_EXTS | _IMPORT_TEXT_ONLY_EXTS)
+        note_detail = QLabel(
+            "내용 완전 표시:  " + "  ".join(sorted(_IMPORT_VIEWABLE_EXTS)) + "\n"
+            "텍스트만 추출:  " + "  ".join(sorted(_IMPORT_TEXT_ONLY_EXTS)) + "  (내용은 등록되나 서식 손실)"
+        )
+        note_detail.setStyleSheet(f"color: {text_muted}; font-size: 11px; border: none;")
+        note_lay.addWidget(note_detail)
+        s1.addWidget(note_box)
+        s1.addStretch(1)
+        self.stacked.addWidget(step1)
+
+        # ---------------------------------------------------------------
+        # STEP 2 – 경로 선택 + 옵션
+        # ---------------------------------------------------------------
+        step2 = QWidget()
+        s2 = QVBoxLayout(step2)
+        s2.setContentsMargins(0, 0, 0, 0)
+        s2.setSpacing(10)
+
+        # 경로 행
+        path_row = QHBoxLayout()
+        self.lbl_path_caption = QLabel("폴더 경로:")
+        self.lbl_path_caption.setStyleSheet(f"color: {text_muted}; font-size: 12px;")
+        self.edit_path = QLineEdit()
+        self.edit_path.setPlaceholderText("선택한 경로가 여기에 표시됩니다")
+        self.edit_path.setReadOnly(True)
+        self.edit_path.setStyleSheet(
+            f"background-color: {panel_alt}; border: 1px solid {line}; "
+            f"border-radius: 4px; padding: 4px 8px; color: {text};"
+        )
+        self.btn_pick_path = QPushButton("선택...")
+        self.btn_pick_path.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_pick_path.setStyleSheet(
+            f"QPushButton {{ border: 1px solid {line}; border-radius: 4px; "
+            f"background-color: {panel_alt}; color: {accent}; font-size: 12px; padding: 0 8px; }}"
+            f"QPushButton:hover {{ background-color: {line}; }}"
+        )
+        self.btn_pick_path.clicked.connect(self._on_pick_path)
+        path_row.addWidget(self.lbl_path_caption)
+        path_row.addWidget(self.edit_path, 1)
+        path_row.addWidget(self.btn_pick_path)
+        s2.addLayout(path_row)
+
+        # 파일 목록 (파일 모드 전용)
+        self.file_list_frame = QFrame()
+        self.file_list_frame.setStyleSheet(
+            f"background-color: {panel}; border: 1px solid {line}; border-radius: 6px;"
+        )
+        fl = QVBoxLayout(self.file_list_frame)
+        fl.setContentsMargins(8, 8, 8, 8)
+        fl.setSpacing(4)
+        fl_hdr = QHBoxLayout()
+        self.lbl_file_count = QLabel("선택된 파일 없음")
+        self.lbl_file_count.setStyleSheet(f"color: {text_muted}; font-size: 11px; border: none;")
+        fl_hdr.addWidget(self.lbl_file_count)
+        fl_hdr.addStretch(1)
+        btn_clear = QPushButton("목록 지우기")
+        btn_clear.setFixedHeight(22)
+        btn_clear.setStyleSheet(f"border: none; color: {text_muted}; font-size: 11px; background: transparent;")
+        btn_clear.clicked.connect(self._clear_files)
+        fl_hdr.addWidget(btn_clear)
+        fl.addLayout(fl_hdr)
+        self.file_list_widget = QListWidget()
+        self.file_list_widget.setFixedHeight(100)
+        self.file_list_widget.setStyleSheet(
+            f"border: none; background: transparent; color: {text}; font-size: 11px;"
+        )
+        fl.addWidget(self.file_list_widget)
+        s2.addWidget(self.file_list_frame)
+
+        # 업무분류명 (폴더 모드 전용)
+        self.cat_frame = QFrame()
+        cat_lay = QHBoxLayout(self.cat_frame)
+        cat_lay.setContentsMargins(0, 0, 0, 0)
+        cat_lay.addWidget(QLabel("등록될 최상위 업무 분류명:"))
+        self.cat_input = QLineEdit()
+        self.cat_input.setStyleSheet(
+            f"background-color: {panel_alt}; border: 1px solid {line}; border-radius: 4px; padding: 4px 8px;"
+        )
+        cat_lay.addWidget(self.cat_input, 1)
+        s2.addWidget(self.cat_frame)
+
+        # 대상 업무분류 콤보 (파일 모드 전용)
+        self.target_cat_frame = QFrame()
+        tc_lay = QHBoxLayout(self.target_cat_frame)
+        tc_lay.setContentsMargins(0, 0, 0, 0)
+        tc_lay.addWidget(QLabel("등록 대상 업무분류:"))
+        self.target_cat_combo = QComboBox()
+        for c in self.categories:
+            self.target_cat_combo.addItem(c)
+        if not self.categories:
+            self.target_cat_combo.addItem("일반 업무")
+        self.target_cat_combo.setStyleSheet(
+            f"background-color: {panel_alt}; border: 1px solid {line}; border-radius: 4px; padding: 2px 8px;"
+        )
+        tc_lay.addWidget(self.target_cat_combo, 1)
+        s2.addWidget(self.target_cat_frame)
+
+        # 첨부파일 복사 옵션
+        self.cb_copy_att = QCheckBox("원본 파일을 각 업무 문서의 첨부파일로도 자동 보관")
+        self.cb_copy_att.setChecked(True)
+        s2.addWidget(self.cb_copy_att)
+
+        s2.addStretch(1)
+        self.stacked.addWidget(step2)
+
+        # ---------------------------------------------------------------
+        # 하단 버튼 – 모두 90 × 30 통일
+        # ---------------------------------------------------------------
+        nav = QHBoxLayout()
+        self.btn_cancel = QPushButton("취소")
+        self.btn_cancel.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_cancel.clicked.connect(self.reject)
+        nav.addWidget(self.btn_cancel)
+
+        nav.addStretch(1)
+
+        self.btn_prev = QPushButton("◀ 이전")
+        self.btn_prev.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_prev.clicked.connect(self._go_prev)
+        self.btn_prev.hide()
+        nav.addWidget(self.btn_prev)
+
+        self.btn_next = QPushButton("다음 ▶")
+        self.btn_next.setFixedSize(_BTN_W, _BTN_H)
+        self.btn_next.setStyleSheet(_accent_ss)
+        self.btn_next.clicked.connect(self._go_next)
+        nav.addWidget(self.btn_next)
+
+        main_layout.addLayout(nav)
+
+        self._go_to_step(0)
+
+    # ------------------------------------------------------------------
+    def _go_to_step(self, step: int) -> None:
+        self._step = step
+        self.stacked.setCurrentIndex(step)
+        self.btn_prev.setVisible(step > 0)
+        if step == 0:
+            self.lbl_step.setText("1단계 / 2단계:  불러오기 방식 선택")
+            self.btn_next.setText("다음 ▶")
+        else:
+            mode = self.MODE_FOLDER if self.rb_folder.isChecked() else self.MODE_FILES
+            self._mode = mode
+            self.lbl_step.setText("2단계 / 2단계:  파일 또는 폴더 선택 및 옵션")
+            self.btn_next.setText("불러오기 실행")
+            # 모드에 따라 위젯 표시 조정
+            is_folder = (mode == self.MODE_FOLDER)
+            self.lbl_path_caption.setText("폴더 경로:" if is_folder else "파일 경로:")
+            self.file_list_frame.setVisible(not is_folder)
+            self.cat_frame.setVisible(is_folder)
+            self.target_cat_frame.setVisible(not is_folder)
+            # 폴더 모드면 기본 분류명 초기화
+            if is_folder and not self.cat_input.text():
+                self.cat_input.setPlaceholderText("폴더명이 자동 입력됩니다")
+
+    def _go_prev(self) -> None:
+        self._go_to_step(self._step - 1)
+
+    def _go_next(self) -> None:
+        if self._step == 0:
+            self._go_to_step(1)
+        else:
+            self._try_accept()
+
+    # ------------------------------------------------------------------
+    def _on_pick_path(self) -> None:
+        if self._mode == self.MODE_FOLDER:
+            d = QFileDialog.getExistingDirectory(self, "가져올 업무 폴더 선택", self._selected_folder or "")
+            if d:
+                self._selected_folder = d
+                self.edit_path.setText(d)
+                if not self.cat_input.text():
+                    self.cat_input.setText(Path(d).name)
+        else:
+            all_exts = sorted(_IMPORT_VIEWABLE_EXTS | _IMPORT_TEXT_ONLY_EXTS)
+            ext_filter = "지원 문서 (" + " ".join(f"*{e}" for e in all_exts) + ");;모든 파일 (*.*)"
+            paths, _ = QFileDialog.getOpenFileNames(self, "업무로 등록할 문서 파일 선택", "", ext_filter)
+            if paths:
+                supported = _IMPORT_VIEWABLE_EXTS | _IMPORT_TEXT_ONLY_EXTS
+                ok, bad = [], []
+                for p in paths:
+                    (ok if Path(p).suffix.lower() in supported else bad).append(p)
+                if bad:
+                    QMessageBox.warning(
+                        self,
+                        "지원되지 않는 파일",
+                        "아래 파일은 내용을 표시할 수 없어 제외됩니다:\n"
+                        + "\n".join(Path(b).name for b in bad),
+                    )
+                if ok:
+                    self._selected_files.extend(ok)
+                    self._refresh_file_list()
+
+    def _refresh_file_list(self) -> None:
+        self.file_list_widget.clear()
+        for p in self._selected_files:
+            self.file_list_widget.addItem(Path(p).name)
+        n = len(self._selected_files)
+        self.lbl_file_count.setText(f"선택된 파일 {n}개" if n else "선택된 파일 없음")
+        self.edit_path.setText(", ".join(Path(p).name for p in self._selected_files) if n else "")
+
+    def _clear_files(self) -> None:
+        self._selected_files.clear()
+        self._refresh_file_list()
+
+    # ------------------------------------------------------------------
+    def _try_accept(self) -> None:
+        if self._mode == self.MODE_FOLDER:
+            if not self._selected_folder:
+                QMessageBox.warning(self, "폴더 미선택", "가져올 폴더를 선택해주세요.")
+                return
+        else:
+            if not self._selected_files:
+                QMessageBox.warning(self, "파일 미선택", "가져올 파일을 1개 이상 선택해주세요.")
+                return
+        self.accept()
+
+    # ------------------------------------------------------------------
+    # 결과 조회
+    # ------------------------------------------------------------------
+    def get_mode(self) -> str:
+        return self._mode
+
+    def get_folder(self) -> str:
+        return self._selected_folder
+
+    def get_files(self) -> list[str]:
+        return list(self._selected_files)
+
+    def get_category_name(self) -> str:
+        return self.cat_input.text().strip() or (Path(self._selected_folder).name if self._selected_folder else "")
+
+    def get_target_category(self) -> str:
+        return self.target_cat_combo.currentText()
+
+    def get_copy_attachment(self) -> bool:
+        return self.cb_copy_att.isChecked()
+
+
 class FolderWorkImportDialog(QDialog):
+
     """
     폴더를 업무로 등록하기 전 사전 분석 모달:
     - 포함된 하위 폴더 수 및 파일 수 표시
@@ -4694,28 +5068,36 @@ class WorkManagerDialog(QDialog):
             )
 
     def _on_import_menu(self) -> None:
-        """상단 [불러오기] 버튼 클릭 시 폴더 또는 파일 불러오기 팝업 메뉴 표시"""
-        menu = QMenu(self)
-        act_folder = menu.addAction("📁 폴더 불러오기 (하위 폴더/파일을 업무 분류 및 문서로 일괄 등록)")
-        act_files = menu.addAction("📄 파일 불러오기 (문서들을 업무로 등록)")
+        """상단 [불러오기] 버튼 클릭 시 불러오기 마법사 실행"""
+        dlg = WorkImportWizardDialog(
+            parent=self,
+            categories=self._categories,
+            palette=self.palette,
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
 
-        btn = self.sender()
-        pos = btn.mapToGlobal(QPoint(0, btn.height())) if btn else QCursor.pos()
-        action = menu.exec(pos)
-        if action == act_folder:
-            selected_dir = QFileDialog.getExistingDirectory(self, "가져올 업무 폴더 선택")
-            if selected_dir:
-                self.import_work_folder(selected_dir)
-        elif action == act_files:
-            paths, _ = QFileDialog.getOpenFileNames(
-                self,
-                "업무로 등록할 문서 파일 선택",
-                "",
-                "모든 지원 문서 (*.hwp *.hwpx *.pdf *.docx *.txt *.xlsx *.csv);;모든 파일 (*.*)",
-            )
-            if paths:
-                for p in paths:
-                    self.import_document_file(p)
+        mode = dlg.get_mode()
+        copy_att = dlg.get_copy_attachment()
+
+        if mode == WorkImportWizardDialog.MODE_FOLDER:
+            folder = dlg.get_folder()
+            if folder:
+                # FolderWorkImportDialog(사전 분석 모달)로 이어서 처리
+                self.import_work_folder(folder)
+        else:
+            target_cat = dlg.get_target_category()
+            target_cat_id = None
+            for cat in self._category_rows:
+                if cat["name"] == target_cat:
+                    target_cat_id = cat["id"]
+                    break
+            for p in dlg.get_files():
+                self.import_document_file(
+                    p,
+                    target_cat_name=target_cat,
+                    target_cat_id=target_cat_id,
+                )
 
     def _on_export_wizard(self) -> None:
         """상단 [내보내기] 버튼 클릭 시 내보내기 마법사 다이얼로그 실행"""
