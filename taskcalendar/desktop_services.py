@@ -373,6 +373,129 @@ def unregister_protocol_handler() -> bool:
         return False
 
 
+def register_explorer_context_menus() -> bool:
+    """
+    Windows 탐색기 우클릭 컨텍스트 메뉴 등록 (HKCU 레지스트리):
+    1. 모든 파일(*) 우클릭 시:
+       - "📋 TaskCalendar 업무로 등록"
+       - "📎 TaskCalendar 업무 첨부파일로 등록"
+    2. 모든 폴더(Directory) 우클릭 시:
+       - "📋 TaskCalendar 업무로 등록" (폴더 및 하위 구조를 업무분류/문서로 일괄 등록)
+       - "📎 TaskCalendar 업무 첨부파일로 등록" (폴더 채로 첨부파일 보관)
+    """
+    try:
+        exe_path = sys.executable if getattr(sys, "frozen", False) else None
+        if not exe_path:
+            main_path = Path(__file__).resolve().parent.parent / "main.py"
+            gui_python = Path(sys.executable).with_name("pythonw.exe")
+            executable = gui_python if gui_python.exists() else Path(sys.executable)
+            cmd_import = f'"{executable}" "{main_path}" "--import-work" "%1"'
+            cmd_attach = f'"{executable}" "{main_path}" "--attach-work" "%1"'
+            cmd_import_folder = f'"{executable}" "{main_path}" "--import-work-folder" "%1"'
+            cmd_attach_folder = f'"{executable}" "{main_path}" "--attach-work-folder" "%1"'
+        else:
+            cmd_import = f'"{exe_path}" "--import-work" "%1"'
+            cmd_attach = f'"{exe_path}" "--attach-work" "%1"'
+            cmd_import_folder = f'"{exe_path}" "--import-work-folder" "%1"'
+            cmd_attach_folder = f'"{exe_path}" "--attach-work-folder" "%1"'
+
+        from taskcalendar.paths import asset_path
+        ico_path = asset_path("app_icon.ico")
+        icon_str = f'"{exe_path}",0' if exe_path else f'"{ico_path}"'
+
+        # 0. 구버전 분리 키 정리
+        unregister_explorer_context_menus()
+
+        # Windows 11에서 "추가 옵션 표시" 없이 우클릭 시 즉시 메뉴가 표시되도록 등록
+        try:
+            win11_key = r"Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, win11_key, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "")
+        except Exception:
+            pass
+
+        # 1. 파일 우클릭: "업무로 등록" (*\shell\TaskCalendar.1.WorkDoc) - 아이콘 제거
+        key_doc = r"Software\Classes\*\shell\TaskCalendar.1.WorkDoc"
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_doc, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "TaskCalendar 업무로 등록")
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_doc + r"\command", 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, cmd_import)
+
+        # 2. 파일 우클릭: "업무 첨부파일로 등록" (*\shell\TaskCalendar.2.WorkAttach) - 아이콘 제거
+        key_attach = r"Software\Classes\*\shell\TaskCalendar.2.WorkAttach"
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_attach, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "TaskCalendar 업무 첨부파일로 등록")
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_attach + r"\command", 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, cmd_attach)
+
+        # 3. 폴더 우클릭: "업무로 등록" (Directory\shell\TaskCalendar.1.WorkFolder) - 아이콘 제거
+        key_f_doc = r"Software\Classes\Directory\shell\TaskCalendar.1.WorkFolder"
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_f_doc, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "TaskCalendar 업무로 등록")
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_f_doc + r"\command", 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, cmd_import_folder)
+
+        # 4. 폴더 우클릭: "업무 첨부파일로 등록" (Directory\shell\TaskCalendar.2.AttachFolder) - 아이콘 제거
+        key_f_attach = r"Software\Classes\Directory\shell\TaskCalendar.2.AttachFolder"
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_f_attach, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "TaskCalendar 업무 첨부파일로 등록")
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_f_attach + r"\command", 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, cmd_attach_folder)
+
+        logger.info("[register_explorer_context_menus] Registered Windows Explorer context menus successfully (no icons, Win11 direct)")
+        return True
+    except Exception:
+        logger.exception("Failed to register Windows Explorer context menus")
+        return False
+
+
+def unregister_explorer_context_menus() -> bool:
+    """Windows 탐색기 우클릭 컨텍스트 메뉴 제거 (구버전 및 신버전 키 정리)"""
+    try:
+        # 구버전 SystemFileAssociations 정리
+        doc_exts = [".hwp", ".hwpx", ".txt", ".md", ".pdf", ".docx", ".xlsx", ".csv"]
+        for ext in doc_exts:
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\SystemFileAssociations\{ext}\shell\TaskCalendar.WorkDoc\command")
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\SystemFileAssociations\{ext}\shell\TaskCalendar.WorkDoc")
+            except Exception:
+                pass
+        # 구버전 단독 TaskCalendar.WorkAttach 정리
+        try:
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\*\shell\TaskCalendar.WorkAttach\command")
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\*\shell\TaskCalendar.WorkAttach")
+        except Exception:
+            pass
+        # 파일 키 정리
+        for sub in ("TaskCalendar.1.WorkDoc", "TaskCalendar.2.WorkAttach"):
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\*\shell\{sub}\command")
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\*\shell\{sub}")
+            except Exception:
+                pass
+        # 폴더 키 정리
+        for sub in ("TaskCalendar.1.WorkFolder", "TaskCalendar.2.AttachFolder"):
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\Directory\shell\{sub}\command")
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\Directory\shell\{sub}")
+            except Exception:
+                pass
+        logger.info("[unregister_explorer_context_menus] Unregistered Windows Explorer context menus")
+        return True
+    except Exception:
+        return False
+
+
+def is_explorer_context_menu_registered() -> bool:
+    """Check if TaskCalendar Windows Explorer context menus are registered."""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\*\shell\TaskCalendar.1.WorkDoc\command", 0, winreg.KEY_READ) as key:
+            val, _ = winreg.QueryValueEx(key, "")
+            return bool(val)
+    except (FileNotFoundError, OSError):
+        return False
+
+
 def is_protocol_handler_registered() -> bool:
     """Check if taskcalendar:// protocol handler is registered."""
     try:

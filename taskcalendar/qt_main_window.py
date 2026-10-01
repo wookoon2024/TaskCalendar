@@ -5981,6 +5981,10 @@ class MainWindow(QMainWindow):
             calendar_sidebar_title_only=getattr(self, "calendar_sidebar_title_only", False),
             ui_font_family=self.repository.get_setting("ui_font_family", fonts.DEFAULT_FAMILY),
             ui_font_scale=self.repository.get_setting("ui_font_scale", fonts.DEFAULT_SCALE),
+            work_enable_context_menu=self.repository.get_setting("work_enable_context_menu", "0") == "1",
+            work_copy_attachments_default=self.repository.get_setting("work_copy_attachments_default", "1") != "0",
+            work_delete_attachments_default=self.repository.get_setting("work_delete_attachments_default", "1") != "0",
+            work_default_cycle=self.repository.get_setting("work_default_cycle", "수시"),
         )
         if dialog.exec() and dialog.result is not None:
             action = str(dialog.result.get("action", "apply"))
@@ -6076,6 +6080,24 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("ui_font_scale", new_font_scale)
             font_changed = (new_font_family != old_font_family) or (new_font_scale != old_font_scale)
 
+            # 업무(Work) 설정
+            if "work_enable_context_menu" in dialog.result:
+                new_ctx = bool(dialog.result["work_enable_context_menu"])
+                old_ctx = self.repository.get_setting("work_enable_context_menu", "0") == "1"
+                self.repository.set_setting("work_enable_context_menu", "1" if new_ctx else "0")
+                if new_ctx != old_ctx:
+                    from taskcalendar.desktop_services import register_explorer_context_menus, unregister_explorer_context_menus
+                    if new_ctx:
+                        register_explorer_context_menus()
+                    else:
+                        unregister_explorer_context_menus()
+            if "work_copy_attachments_default" in dialog.result:
+                self.repository.set_setting("work_copy_attachments_default", "1" if dialog.result["work_copy_attachments_default"] else "0")
+            if "work_delete_attachments_default" in dialog.result:
+                self.repository.set_setting("work_delete_attachments_default", "1" if dialog.result["work_delete_attachments_default"] else "0")
+            if "work_default_cycle" in dialog.result:
+                self.repository.set_setting("work_default_cycle", str(dialog.result["work_default_cycle"]))
+
             if not self._sticker_animation_enabled:
                 self._sticker_animation_state.clear()
             self.repository.save()
@@ -6136,7 +6158,41 @@ class MainWindow(QMainWindow):
 
             logger.info(f"[receive_external_entry] Received: {data}")
             action = data.get("action", "add")
-            if action != "add":
+            if action in ("import_work", "attach_work", "import_work_folder", "attach_work_folder"):
+                file_path = data.get("file_path", "")
+                folder_path = data.get("folder_path", "")
+                target_path = folder_path if folder_path else file_path
+                if self.isMinimized() or not self.isVisible():
+                    self._restore_window_state()
+                else:
+                    if self.isMaximized():
+                        self.showMaximized()
+                    else:
+                        self.show()
+                    self.raise_()
+                    self.activateWindow()
+                force_window_to_foreground(int(self.winId()))
+
+                self._open_work_manager()
+                dlg = getattr(self, "_work_manager_dialog", None)
+                if dlg and target_path:
+                    dlg.show()
+                    dlg.raise_()
+                    dlg.activateWindow()
+                    try:
+                        force_window_to_foreground(int(dlg.winId()))
+                    except Exception:
+                        pass
+                    if action == "import_work":
+                        QTimer.singleShot(200, lambda: dlg.import_document_file(target_path))
+                    elif action == "attach_work":
+                        QTimer.singleShot(200, lambda: dlg.import_attachment_file(target_path))
+                    elif action == "import_work_folder":
+                        QTimer.singleShot(200, lambda: dlg.import_work_folder(target_path))
+                    elif action == "attach_work_folder":
+                        QTimer.singleShot(200, lambda: dlg.import_attachment_folder(target_path))
+                return
+            elif action != "add":
                 logger.warning(f"[receive_external_entry] Unknown action: {action}")
                 return
 

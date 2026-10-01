@@ -2,28 +2,27 @@ from __future__ import annotations
 
 import base64
 import http.server
+import json
 import logging
 import socket
 import threading
 from pathlib import Path
-from PySide6.QtCore import QObject, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QProgressBar,
     QPushButton,
+    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
 
 logger = logging.getLogger(__name__)
 
-# 기본 글꼴(Pretendard 12pt) 적용 스니펫.
-# - 본문이 있으면 전체 선택 후 적용하고 캐럿을 끝으로 옮겨, 기존 본문과 이후 입력 모두 Pretendard가 되게 한다.
-# - 빈 문서면 다음 입력에 적용되도록 "대기 글자 모양"을 지정한다(선택 영역이 없을 때 엔진이 쓰는 방식).
-#   단, 대기 글자 모양은 에디터가 활성(포커스) 상태여야 유지되므로 먼저 focus()를 호출한다.
 # 기본 글꼴(Pretendard 12pt) 적용 스니펫:
 # - 문서의 루트 바탕글(Style 0) 모양 자체를 Pretendard 12pt로 설정하여
 #   새 문서 작성 및 입력 시 함초롬바탕과의 깜빡임/충돌 없이 즉시 Pretendard로 동작하게 한다.
@@ -31,7 +30,7 @@ _PRETENDARD_DEFAULTS_JS = """
 (function() {
     try {
         var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
-        if (!deps || !deps.wasm) return;
+        if (!deps || !deps.wasm || !deps.wasm.doc) return;
         var wasm = deps.wasm;
         var fid = wasm.findOrCreateFontId ? wasm.findOrCreateFontId('Pretendard') : -1;
         if (fid !== undefined && fid !== null && fid >= 0) {
@@ -41,7 +40,9 @@ _PRETENDARD_DEFAULTS_JS = """
                 fontFamilies: ['Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard']
             };
             if (wasm.updateStyleShapes) {
-                wasm.updateStyleShapes(0, JSON.stringify(charMods), '{}');
+                try {
+                    wasm.updateStyleShapes(0, JSON.stringify(charMods), '{}');
+                } catch(e) {}
             }
             if (deps.eventBus && wasm.getCharPropertiesAt) {
                 try {
@@ -63,7 +64,7 @@ _PRETENDARD_DEFAULTS_JS = """
         var sizeInput = document.getElementById('font-size');
         if (sizeInput) { sizeInput.value = '12.0'; }
     } catch (e) {
-        console.error('[PretendardDefaults] error:', e);
+        // 엔진 준비 중 조기 호출 시 조용히 무시
     }
 })();
 """
@@ -163,12 +164,56 @@ class RhwpEditorWidget(QWidget):
         self.palette = palette or {}
         self._html_content = ""
         self._is_loaded = False
+        self._is_engine_ready = False
+        self._check_timer: QTimer | None = None
+        self._check_count = 0
         self._pending_html: str | None = None
         self._pending_load: tuple[str, str, bytes | None] | None = None
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        panel = self.palette.get("panel", "#FFFFFF")
+        text = self.palette.get("text", "#1F2328")
+        text_muted = self.palette.get("text_muted", "#64748B")
+        accent = self.palette.get("accent", "#2563EB")
+
+        self.stack_layout = QStackedLayout(self)
+        self.stack_layout.setContentsMargins(0, 0, 0, 0)
+
+        # 1. 엔진 로딩 화면 위젯
+        self.loading_widget = QWidget(self)
+        self.loading_widget.setStyleSheet(f"background-color: {panel};")
+        loading_layout = QVBoxLayout(self.loading_widget)
+        loading_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        loading_layout.setSpacing(12)
+
+        loading_title = QLabel("한글(HWPX) 문서 편집기를 불러오는 중입니다...")
+        loading_title.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {text}; border: none;")
+        loading_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        loading_layout.addWidget(loading_title)
+
+        self.progress_bar = QProgressBar(self.loading_widget)
+        self.progress_bar.setRange(0, 0)  # 무한 반복 인디케이터 (Marquee)
+        self.progress_bar.setFixedWidth(280)
+        self.progress_bar.setFixedHeight(5)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background-color: #E2E8F0;
+                border: none;
+                border-radius: 2px;
+            }}
+            QProgressBar::chunk {{
+                background-color: {accent};
+                border-radius: 2px;
+            }}
+        """)
+        loading_layout.addWidget(self.progress_bar, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        loading_subtitle = QLabel("WebAssembly 문서 엔진을 초기화하고 있습니다.")
+        loading_subtitle.setStyleSheet(f"font-size: 11px; color: {text_muted}; border: none;")
+        loading_subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        loading_layout.addWidget(loading_subtitle)
+
+        self.stack_layout.addWidget(self.loading_widget)  # Index 0: 로딩 화면
 
         if _HAS_WEBENGINE:
             self.server = RhwpStudioServer.get_instance()
@@ -178,14 +223,15 @@ class RhwpEditorWidget(QWidget):
 
             studio_url = self.server.get_url()
             self.web_view.setUrl(QUrl(studio_url))
-            layout.addWidget(self.web_view, 1)
+            self.stack_layout.addWidget(self.web_view)  # Index 1: 에디터 뷰
             self._fallback_editor = None
         else:
             from taskcalendar.rich_text_edit import RichTextEdit
             self._fallback_editor = RichTextEdit(self)
             self._fallback_editor.setFont(QFont("Pretendard", 12))
             self._fallback_editor.textChanged.connect(self.contentChanged.emit)
-            layout.addWidget(self._fallback_editor, 1)
+            self.stack_layout.addWidget(self._fallback_editor)
+            self.stack_layout.setCurrentWidget(self._fallback_editor)
             self.web_view = None
 
     def _on_web_title_changed(self, title: str) -> None:
@@ -226,15 +272,63 @@ class RhwpEditorWidget(QWidget):
         self.web_view.page().runJavaScript(_PRETENDARD_DEFAULTS_JS)
 
     def _on_load_finished(self, ok: bool) -> None:
-        self._is_loaded = ok
-        if ok:
+        if not ok:
+            logger.error("Failed to load rhwp-studio web view")
+            return
+        # WebEngine의 HTML 다운로드가 끝난 후에도 WebAssembly 컴파일 및 내부 문서 인스턴스화가 비동기로 진행됨
+        # WASM doc 엔진이 완전히 준비될 때까지 안전하게 대기 후 표시
+        self._check_count = 0
+        if self._check_timer is not None:
+            self._check_timer.stop()
+        self._check_timer = QTimer(self)
+        self._check_timer.setInterval(60)
+        self._check_timer.timeout.connect(self._check_studio_engine_ready)
+        self._check_timer.start()
+
+    def _check_studio_engine_ready(self) -> None:
+        self._check_count += 1
+        if self._check_count > 160:  # 최대 10초 대기
+            if self._check_timer:
+                self._check_timer.stop()
+            self._mark_engine_ready()
+            return
+
+        check_js = """
+        (function() {
+            try {
+                var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                if (!deps || !deps.loadDocument || !deps.wasm) return false;
+                var wasm = deps.wasm;
+                if (!wasm.doc && !wasm.createEmptyDocument) return false;
+                if (typeof wasm.findOrCreateFontId !== 'function') return false;
+                return true;
+            } catch(e) {
+                return false;
+            }
+        })();
+        """
+        if self.web_view:
+            self.web_view.page().runJavaScript(check_js, self._on_engine_check_result)
+
+    def _on_engine_check_result(self, is_ready: bool) -> None:
+        if is_ready:
+            if self._check_timer:
+                self._check_timer.stop()
+            self._mark_engine_ready()
+
+    def _mark_engine_ready(self) -> None:
+        self._is_loaded = True
+        self._is_engine_ready = True
+        if self.web_view:
+            self.stack_layout.setCurrentWidget(self.web_view)
             self._inject_change_hook()
             self._apply_default_font_and_size()
-        if ok and self._pending_load is not None:
+
+        if self._pending_load is not None:
             title, text, hwpx_bytes = self._pending_load
             self._pending_load = None
             self.load_document(title, text, hwpx_bytes)
-        elif ok and self._pending_html is not None:
+        elif self._pending_html is not None:
             self.set_html(self._pending_html)
             self._pending_html = None
 
@@ -245,11 +339,14 @@ class RhwpEditorWidget(QWidget):
             self._fallback_editor.setPlainText(text)
             return
 
-        if not self._is_loaded or not self.web_view:
+        if not self._is_loaded or not self._is_engine_ready or not self.web_view:
             self._pending_load = (title, text, hwpx_bytes)
             return
 
         safe_title = title.replace('"', '\\"').replace("'", "\\'") or "문서"
+        ext = ".hwp" if (title.lower().endswith(".hwp") and not title.lower().endswith(".hwpx")) else ".hwpx"
+        doc_filename = safe_title if safe_title.lower().endswith(('.hwp', '.hwpx')) else f"{safe_title}{ext}"
+
         if hwpx_bytes:
             b64_str = base64.b64encode(hwpx_bytes).decode("ascii")
             js = f"""
@@ -263,17 +360,21 @@ class RhwpEditorWidget(QWidget):
                 }}
                 var deps = window.rhwpStudio?.plugins?.deps;
                 if (deps && deps.loadDocument) {{
-                    await deps.loadDocument(bytes, "{safe_title}.hwpx");
+                    await deps.loadDocument(bytes, "{doc_filename}");
                 }}
             }})();
             """
         else:
-            escaped_text = text.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
+            json_text = json.dumps(text)
             js = f"""
             (async function() {{
                 var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
                 if (!deps) return;
-                deps.createBlankDocument && deps.createBlankDocument();
+                if (deps.createBlankDocument) {{
+                    try {{
+                        await deps.createBlankDocument();
+                    }} catch(e) {{}}
+                }}
                 var wasm = deps.wasm;
                 var doc = wasm && wasm.doc;
                 if (wasm && wasm.updateStyleShapes) {{
@@ -289,11 +390,32 @@ class RhwpEditorWidget(QWidget):
                         }}
                     }} catch(e) {{}}
                 }}
-                if (doc && doc.insertText && `{escaped_text}`) {{
+                var rawText = {json_text};
+                if (doc && rawText) {{
                     try {{
-                        doc.insertText(0, 0, 0, `{escaped_text}`);
+                        var lines = rawText.split(/\\r?\\n/);
+                        var currentPara = 0;
+                        for (var i = 0; i < lines.length; i++) {{
+                            var line = lines[i];
+                            if (line.length > 0) {{
+                                doc.insertText(0, currentPara, 0, line);
+                            }}
+                            if (i < lines.length - 1) {{
+                                var resStr = doc.splitParagraph(0, currentPara, line.length, null);
+                                try {{
+                                    var res = JSON.parse(resStr);
+                                    if (res && res.ok && res.paraIdx !== undefined) {{
+                                        currentPara = res.paraIdx;
+                                    }} else {{
+                                        currentPara += 1;
+                                    }}
+                                }} catch(e) {{
+                                    currentPara += 1;
+                                }}
+                            }}
+                        }}
                     }} catch (e) {{
-                        console.error(e);
+                        console.error('Error inserting lines:', e);
                     }}
                 }}
                 if (doc && doc.exportHwpx) {{
@@ -426,3 +548,27 @@ class RhwpEditorWidget(QWidget):
         if self._fallback_editor is not None:
             return self._fallback_editor.toHtml()
         return self._html_content
+
+    def setFocus(self, reason=Qt.FocusReason.OtherFocusReason) -> None:
+        super().setFocus(reason)
+        if self.web_view:
+            self.web_view.setFocus(reason)
+            js = """
+            (function() {
+                try {
+                    var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                    if (deps && deps.getInputHandler) {
+                        var h = deps.getInputHandler();
+                        if (h && typeof h.focus === 'function') {
+                            h.focus();
+                            return;
+                        }
+                    }
+                    var canvas = document.querySelector('canvas') || document.querySelector('#scroll-content');
+                    if (canvas) canvas.focus();
+                } catch(e) {}
+            })();
+            """
+            self.web_view.page().runJavaScript(js)
+        elif self._fallback_editor:
+            self._fallback_editor.setFocus(reason)

@@ -81,7 +81,35 @@ def _acquire_single_instance_lock() -> bool:
 
 
 def _parse_protocol_url(argv: list[str]) -> dict | None:
-    """Parse taskcalendar:// URL from command-line arguments."""
+    """Parse taskcalendar:// URL or CLI arguments (--import-work, --attach-work)."""
+    if len(argv) < 2:
+        return None
+
+    # 1. Check for Explorer context menu CLI flags
+    for i in range(1, len(argv)):
+        arg = argv[i]
+        if arg == "--import-work" and i + 1 < len(argv):
+            return {
+                "action": "import_work",
+                "file_path": argv[i + 1].strip('"'),
+            }
+        elif arg == "--attach-work" and i + 1 < len(argv):
+            return {
+                "action": "attach_work",
+                "file_path": argv[i + 1].strip('"'),
+            }
+        elif arg == "--import-work-folder" and i + 1 < len(argv):
+            return {
+                "action": "import_work_folder",
+                "folder_path": argv[i + 1].strip('"'),
+            }
+        elif arg == "--attach-work-folder" and i + 1 < len(argv):
+            return {
+                "action": "attach_work_folder",
+                "folder_path": argv[i + 1].strip('"'),
+            }
+
+    # 2. Check for taskcalendar:// protocol URL
     for arg in argv[1:]:
         if arg.startswith("taskcalendar://"):
             try:
@@ -221,9 +249,14 @@ def run() -> None:
     # Start IPC server for receiving data from Chrome extension
     ipc_server = _start_local_server(window)
 
-    # Register protocol handler if not already registered
-    from taskcalendar.desktop_services import register_protocol_handler
+    # Register protocol handler and Windows Explorer context menus (if enabled by user)
+    from taskcalendar.desktop_services import (
+        register_explorer_context_menus,
+        register_protocol_handler,
+    )
     register_protocol_handler()
+    if repository.get_setting("work_enable_context_menu", "0") == "1":
+        register_explorer_context_menus()
 
     # Process URL data if this is the first instance launched with a protocol URL
     if url_data:

@@ -5776,10 +5776,18 @@ class SettingsDialog(QDialog):
         calendar_sidebar_title_only: bool = False,
         ui_font_family: str = DEFAULT_FAMILY,
         ui_font_scale: str = DEFAULT_SCALE,
+        work_enable_context_menu: bool = False,
+        work_copy_attachments_default: bool = True,
+        work_delete_attachments_default: bool = True,
+        work_default_cycle: str = "수시",
     ) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
         self._db_path = db_path
+        self._work_enable_context_menu = work_enable_context_menu
+        self._work_copy_attachments_default = work_copy_attachments_default
+        self._work_delete_attachments_default = work_delete_attachments_default
+        self._work_default_cycle = work_default_cycle
         if available_task_statuses is None:
             available_task_statuses = ["등록", "진행중", "완료", "보류", "취소"]
         if calendar_task_statuses is None:
@@ -5815,7 +5823,7 @@ class SettingsDialog(QDialog):
         title_row.addWidget(ver_badge)
         title_row.addStretch(1)
         title_box.addLayout(title_row)
-        subtitle = QLabel("기본, 캘린더, 스킨, 메모, 단축키, 데이터 설정을 여기에서 관리합니다.")
+        subtitle = QLabel("기본, 캘린더, 스킨, 메모, 단축키, 데이터, 업무 설정을 여기에서 관리합니다.")
         subtitle.setObjectName("subtitle")
         title_box.addWidget(subtitle)
         root.addLayout(title_box)
@@ -5842,6 +5850,7 @@ class SettingsDialog(QDialog):
             ("📝 메모", 3),
             ("⌨️ 단축키", 4),
             ("💾 데이터", 5),
+            ("📑 업무", 6),
         ]
         for label, idx in items:
             item = QListWidgetItem(label)
@@ -6529,6 +6538,87 @@ class SettingsDialog(QDialog):
 
         self.pages.addWidget(page_data)
 
+        # -------------------------------------------------------------
+        # 📑 업무 페이지
+        # -------------------------------------------------------------
+        page_work = QWidget()
+        pg_work_layout = QVBoxLayout(page_work)
+        pg_work_layout.setContentsMargins(0, 0, 0, 0)
+        pg_work_layout.setSpacing(10)
+
+        # 1. Windows 탐색기 연동 카드
+        ctx_card = QFrame()
+        ctx_card.setObjectName("card")
+        ctx_layout = QVBoxLayout(ctx_card)
+        ctx_layout.setContentsMargins(14, 12, 14, 12)
+        ctx_layout.setSpacing(8)
+        ctx_title = QLabel("Windows 탐색기 우클릭 연동")
+        ctx_title.setObjectName("sectionTitle")
+        ctx_layout.addWidget(ctx_title)
+
+        self.work_context_menu_check = QCheckBox("탐색기 마우스 우클릭 메뉴 연동 사용")
+        self.work_context_menu_check.setChecked(self._work_enable_context_menu)
+        ctx_layout.addWidget(self.work_context_menu_check)
+
+        ctx_desc = QLabel(
+            "문서 파일(*.hwp, *.hwpx, *.pdf, *.docx 등) 또는 폴더를 마우스 우클릭했을 때\n"
+            "'TaskCalendar 업무로 등록' 및 'TaskCalendar 업무 첨부파일로 등록' 메뉴를 제공합니다."
+        )
+        ctx_desc.setObjectName("subtitle")
+        ctx_desc.setWordWrap(True)
+        ctx_layout.addWidget(ctx_desc)
+
+        ctx_btn_row = QHBoxLayout()
+        btn_reg_menu = QPushButton("우클릭 메뉴 지금 등록")
+        btn_reg_menu.clicked.connect(self._register_work_menu_now)
+        ctx_btn_row.addWidget(btn_reg_menu)
+
+        btn_unreg_menu = QPushButton("우클릭 메뉴 제거")
+        btn_unreg_menu.clicked.connect(self._unregister_work_menu_now)
+        ctx_btn_row.addWidget(btn_unreg_menu)
+        ctx_btn_row.addStretch(1)
+        ctx_layout.addLayout(ctx_btn_row)
+
+        pg_work_layout.addWidget(ctx_card)
+
+        # 2. 업무 등록 및 첨부파일 기본 옵션 카드
+        opt_card = QFrame()
+        opt_card.setObjectName("card")
+        opt_layout = QVBoxLayout(opt_card)
+        opt_layout.setContentsMargins(14, 12, 14, 12)
+        opt_layout.setSpacing(8)
+        opt_title = QLabel("업무 관리 및 첨부파일 기본 설정")
+        opt_title.setObjectName("sectionTitle")
+        opt_layout.addWidget(opt_title)
+
+        self.work_copy_attachments_check = QCheckBox("폴더 및 파일 가져오기 시 원본 파일을 첨부파일로도 자동 보관")
+        self.work_copy_attachments_check.setChecked(self._work_copy_attachments_default)
+        opt_layout.addWidget(self.work_copy_attachments_check)
+
+        self.work_delete_attachments_check = QCheckBox("업무 삭제 시 프로그램에 보관된 해당 첨부파일 폴더도 함께 영구 삭제")
+        self.work_delete_attachments_check.setChecked(self._work_delete_attachments_default)
+        opt_layout.addWidget(self.work_delete_attachments_check)
+
+        cycle_row = QHBoxLayout()
+        cycle_lbl = QLabel("신규 업무 기본 주기:")
+        cycle_lbl.setObjectName("muted")
+        cycle_row.addWidget(cycle_lbl)
+
+        self.work_default_cycle_combo = QComboBox()
+        for c in ["수시", "일일", "주간", "월간", "분기", "반기", "연간"]:
+            self.work_default_cycle_combo.addItem(c, c)
+        c_idx = self.work_default_cycle_combo.findData(self._work_default_cycle)
+        if c_idx >= 0:
+            self.work_default_cycle_combo.setCurrentIndex(c_idx)
+        cycle_row.addWidget(self.work_default_cycle_combo)
+        cycle_row.addStretch(1)
+        opt_layout.addLayout(cycle_row)
+
+        pg_work_layout.addWidget(opt_card)
+        pg_work_layout.addStretch(1)
+
+        self.pages.addWidget(page_work)
+
         body_layout.addWidget(self.pages, 1)
         root.addLayout(body_layout, 1)
 
@@ -6556,6 +6646,8 @@ class SettingsDialog(QDialog):
             self.nav_list.setCurrentRow(4)
         elif initial_tab == "data":
             self.nav_list.setCurrentRow(5)
+        elif initial_tab in ("work", "work_manager"):
+            self.nav_list.setCurrentRow(6)
         else:
             self.nav_list.setCurrentRow(0)
 
@@ -6676,8 +6768,28 @@ class SettingsDialog(QDialog):
             "show_window_controls": self.window_controls_check.isChecked(),
             "ui_font_family": self.ui_font_family_combo.currentFont().family() or DEFAULT_FAMILY,
             "ui_font_scale": str(self.ui_font_scale_combo.currentData() or DEFAULT_SCALE),
+            "work_enable_context_menu": self.work_context_menu_check.isChecked(),
+            "work_copy_attachments_default": self.work_copy_attachments_check.isChecked(),
+            "work_delete_attachments_default": self.work_delete_attachments_check.isChecked(),
+            "work_default_cycle": str(self.work_default_cycle_combo.currentData() or "수시"),
         }
         self.accept()
+
+    def _register_work_menu_now(self) -> None:
+        from taskcalendar.desktop_services import register_explorer_context_menus
+        if register_explorer_context_menus():
+            self.work_context_menu_check.setChecked(True)
+            QMessageBox.information(self, "완료", "탐색기 우클릭 메뉴가 Windows 레지스트리에 등록되었습니다.")
+        else:
+            QMessageBox.warning(self, "실패", "우클릭 메뉴 등록에 실패했습니다.")
+
+    def _unregister_work_menu_now(self) -> None:
+        from taskcalendar.desktop_services import unregister_explorer_context_menus
+        if unregister_explorer_context_menus():
+            self.work_context_menu_check.setChecked(False)
+            QMessageBox.information(self, "완료", "탐색기 우클릭 메뉴가 Windows 레지스트리에서 제거되었습니다.")
+        else:
+            QMessageBox.warning(self, "실패", "우클릭 메뉴 제거에 실패했습니다.")
 
 
     def _show_third_party_notices(self) -> None:

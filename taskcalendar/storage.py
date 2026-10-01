@@ -364,6 +364,13 @@ class EncryptedRepository:
             except Exception as cat_err:
                 logger.warning("Could not add parent_id column to work_categories: %s", cat_err)
 
+        existing_work_att_cols = {row["name"] for row in self.connection.execute("PRAGMA table_info(work_attachments)").fetchall()}
+        if "folder_path" not in existing_work_att_cols:
+            try:
+                self.connection.execute("ALTER TABLE work_attachments ADD COLUMN folder_path TEXT NOT NULL DEFAULT ''")
+            except Exception as att_err:
+                logger.warning("Could not add folder_path column to work_attachments: %s", att_err)
+
         # Performance indices
         self.connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_type_dates ON entries(entry_type, start_date, end_date)")
         self.connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_type_day ON entries(entry_type, day)")
@@ -585,6 +592,9 @@ class EncryptedRepository:
                 rel_posix = str(file_path.relative_to(self.attachments_root).as_posix())
             except ValueError:
                 continue
+            # 업무(Work Manager) 전용 첨부파일 디렉토리는 work_attachments 테이블에서 관리하므로 제외
+            if rel_posix.startswith("work/"):
+                continue
             if rel_posix not in referenced:
                 try:
                     fsize = file_path.stat().st_size
@@ -594,8 +604,14 @@ class EncryptedRepository:
                 except OSError:
                     pass
 
-        # Clean empty directories
+        # Clean empty directories (work/ 디렉토리 보존)
         for dir_path in sorted(self.attachments_root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            try:
+                rel_dir = str(dir_path.relative_to(self.attachments_root).as_posix())
+                if rel_dir == "work" or rel_dir.startswith("work/"):
+                    continue
+            except ValueError:
+                pass
             if dir_path.is_dir() and not any(dir_path.iterdir()):
                 try:
                     dir_path.rmdir()
@@ -1350,6 +1366,7 @@ class EncryptedRepository:
         return work_id
 
     def delete_work_item(self, work_id: int) -> None:
+        self.delete_all_work_attachment_files(work_id)
         self.connection.execute("DELETE FROM work_items WHERE id = ?", (work_id,))
         self.connection.execute("DELETE FROM work_attachments WHERE work_id = ?", (work_id,))
         self.connection.execute("DELETE FROM work_rag_chunks WHERE work_id = ?", (work_id,))
@@ -1359,33 +1376,169 @@ class EncryptedRepository:
             pass
         self.save()
 
+    def get_work_attachments_dir(self, work_id: int, subfolder: str = "") -> Path:
+        """업무 문서별 전용 첨부파일 디렉토리 반환 (attachments/work/work_{work_id}/{subfolder})"""
+        d = self.attachments_root / "work" / f"work_{work_id}"
+        if subfolder:
+            clean_sub = Path(subfolder.strip().replace("\\", "/")).as_posix().strip("/")
+            if clean_sub and ".." not in clean_sub:
+                d = d / clean_sub
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def copy_work_attachment_file(self, work_id: int, source_path: Path | str, subfolder: str = "") -> tuple[str, str, str]:
+        """
+        외부 파일을 프로그램 내부 업무 첨부파일 보관 디렉토리에 복사
+        반환값: (저장된_절대경로문자열, 파일크기문자열, 저장된파일명)
+        """
+        src = Path(source_path)
+        if not src.exists():
+            raise FileNotFoundError(f"Source file not found: {source_path}")
+
+        target_dir = self.get_work_attachments_dir(work_id, subfolder)
+        file_name = src.name
+        dest = target_dir / file_name
+
+        # 이름 중복 시 (1), (2) 번호 부여
+        counter = 1
+        base_stem = src.stem
+        suffix = src.suffix
+        while dest.exists() and dest.resolve() != src.resolve():
+            dest = target_dir / f"{base_stem} ({counter}){suffix}"
+            counter += 1
+
+        if dest.resolve() != src.resolve():
+            import shutil
+            shutil.copy2(src, dest)
+
+        size_bytes = dest.stat().st_size
+        size_str = self._format_file_size(size_bytes)
+        return str(dest), size_str, dest.name
+
+    @staticmethod
+    def _format_file_size(size_bytes: int) -> str:
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
     def list_work_attachments(self, work_id: int) -> list[dict]:
         rows = self.connection.execute(
-            "SELECT id, work_id, file_name, file_path, file_size, file_type, extracted_text, created_at "
+            "SELECT id, work_id, file_name, file_path, file_size, file_type, folder_path, extracted_text, created_at "
             "FROM work_attachments WHERE work_id = ? ORDER BY id ASC",
             (work_id,),
         ).fetchall()
         return [dict(r) for r in rows]
 
     def add_work_attachment(
-        self, work_id: int, file_name: str, file_path: str, file_size: str, file_type: str = "", extracted_text: str = ""
+        self,
+        work_id: int,
+        file_name: str,
+        file_path: str,
+        file_size: str,
+        file_type: str = "",
+        folder_path: str = "",
+        extracted_text: str = "",
     ) -> int:
         now = datetime.now().isoformat()
         cursor = self.connection.execute(
             """
-            INSERT INTO work_attachments (work_id, file_name, file_path, file_size, file_type, extracted_text, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO work_attachments (work_id, file_name, file_path, file_size, file_type, folder_path, extracted_text, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (work_id, file_name, file_path, file_size, file_type, extracted_text, now),
+            (work_id, file_name, file_path, file_size, file_type, folder_path, extracted_text, now),
         )
         att_id = cursor.lastrowid
         self.save()
         return att_id
 
-    def delete_work_attachment(self, att_id: int) -> None:
+    def delete_work_attachment(self, att_id: int, delete_file: bool = True) -> None:
+        """첨부파일 DB 삭제 및 (선택 시) 디스크 상의 실제 보관 파일 영구 삭제"""
+        row = self.connection.execute(
+            "SELECT file_path FROM work_attachments WHERE id = ?", (att_id,)
+        ).fetchone()
+        if row and delete_file:
+            path_str = row["file_path"]
+            if path_str:
+                try:
+                    f = Path(path_str)
+                    if f.exists() and f.is_file():
+                        f.unlink()
+                except Exception as e:
+                    logger.warning(f"Could not delete physical attachment file: {path_str}: {e}")
+
         self.connection.execute("DELETE FROM work_attachments WHERE id = ?", (att_id,))
         self.connection.execute("DELETE FROM work_rag_chunks WHERE attachment_id = ?", (att_id,))
         self.save()
+
+    def delete_work_attachment_folder(self, work_id: int, folder_path: str) -> None:
+        """폴더 및 하위 모든 첨부파일 물리 파일 및 DB 삭제"""
+        clean_sub = Path(folder_path.strip().replace("\\", "/")).as_posix().strip("/")
+        folder_dir = self.get_work_attachments_dir(work_id, clean_sub)
+        if folder_dir.exists():
+            import shutil
+            shutil.rmtree(folder_dir, ignore_errors=True)
+
+        self.connection.execute(
+            "DELETE FROM work_attachments WHERE work_id = ? AND (folder_path = ? OR folder_path LIKE ? OR (file_type = 'folder' AND file_name = ?))",
+            (work_id, clean_sub, f"{clean_sub}/%", clean_sub),
+        )
+        self.save()
+
+    def rename_work_attachment_folder(self, work_id: int, old_folder_path: str, new_folder_path: str) -> None:
+        """첨부파일 폴더 이름 변경 및 하위 파일 경로 일괄 갱신"""
+        old_clean = Path(old_folder_path.strip().replace("\\", "/")).as_posix().strip("/")
+        new_clean = Path(new_folder_path.strip().replace("\\", "/")).as_posix().strip("/")
+
+        old_dir = self.get_work_attachments_dir(work_id, old_clean)
+        new_dir = self.get_work_attachments_dir(work_id, new_clean)
+        if old_dir.exists() and not new_dir.exists():
+            import shutil
+            shutil.move(str(old_dir), str(new_dir))
+
+        rows = self.connection.execute(
+            "SELECT id, file_path, folder_path, file_name, file_type FROM work_attachments WHERE work_id = ?",
+            (work_id,),
+        ).fetchall()
+
+        for r in rows:
+            f_path = r["folder_path"]
+            f_type = r["file_type"]
+            f_name = r["file_name"]
+            updated_folder = None
+            if f_path == old_clean:
+                updated_folder = new_clean
+            elif f_path.startswith(old_clean + "/"):
+                updated_folder = new_clean + f_path[len(old_clean):]
+
+            new_file_name = f_name
+            if f_type == "folder" and f_name == Path(old_clean).name:
+                new_file_name = Path(new_clean).name
+
+            if updated_folder is not None or new_file_name != f_name:
+                curr_folder = updated_folder if updated_folder is not None else f_path
+                new_phys_path = r["file_path"]
+                if new_phys_path and str(old_dir) in new_phys_path:
+                    new_phys_path = new_phys_path.replace(str(old_dir), str(new_dir))
+                self.connection.execute(
+                    "UPDATE work_attachments SET folder_path = ?, file_name = ?, file_path = ? WHERE id = ?",
+                    (curr_folder, new_file_name, new_phys_path, r["id"]),
+                )
+        self.save()
+
+    def delete_all_work_attachment_files(self, work_id: int) -> None:
+        """업무 삭제 시 해당 업무에 보관된 모든 첨부파일 디렉토리 및 파일 물리 삭제"""
+        work_dir = self.attachments_root / "work" / f"work_{work_id}"
+        if work_dir.exists():
+            import shutil
+            try:
+                shutil.rmtree(work_dir, ignore_errors=True)
+            except Exception as e:
+                logger.warning(f"Could not delete work attachment directory {work_dir}: {e}")
 
     def _update_work_rag_index(self, work_id: int, title: str, category: str, content_text: str) -> None:
         """업무 문서의 본문을 청킹하여 RAG 및 FTS 색인 테이블에 등록"""
@@ -1469,96 +1622,8 @@ class EncryptedRepository:
             return [dict(r) for r in rows]
 
     def _ensure_default_work_data_if_empty(self) -> None:
-        """초기 실행 시 기본 분류 및 샘플 인수인계 편람 데이터 생성"""
-        count = self.connection.execute("SELECT COUNT(*) AS cnt FROM work_categories").fetchone()["cnt"]
-        if count > 0:
-            return
-
-        cat1_id = self.add_work_category("1. 부서 총괄 및 서무", 1)
-        cat2_id = self.add_work_category("2. 예산 및 회계 관리", 2)
-        cat3_id = self.add_work_category("3. 고유 사업 및 정책", 3)
-
-        sample1_text = (
-            "공용차량 운용 및 관리 매뉴얼\n\n"
-            "1. 차량 관리 및 정기점검\n"
-            "- 전 부서 공용차량은 매월 25일까지 운행일지를 서무담당자에게 제출합니다.\n"
-            "- 분기별 정기점검은 지정 정비소에서 실시하며 정비내역서를 첨부합니다.\n\n"
-            "2. 주의사항 [감사대비]\n"
-            "- 공휴일 또는 주말 차량 운행 시 반드시 사전 승인 결재문서 번호를 주행일지에 기재해야 합니다.\n"
-            "- 하이패스 통행료 청구서는 매월 초 도로공사 포털에서 일괄 다운로드하여 첨부합니다."
-        )
-        sample1_html = (
-            "<h2>공용차량 운용 및 관리 매뉴얼</h2>"
-            "<p><b>1. 차량 관리 및 정기점검</b></p>"
-            "<p>전 부서 공용차량은 매월 25일까지 운행일지를 서무담당자에게 제출합니다.</p>"
-            "<div style='background-color:#FFFBEB; border-left:4px solid #F59E0B; padding:8px 12px; margin:8px 0;'>"
-            "<b>⚠️ [감사주의]</b> 공휴일 또는 주말 차량 운행 시 사전 결재문서 번호 필수 기재</div>"
-        )
-        w1_id = self.upsert_work_item(
-            work_id=None,
-            title="공용차량 운용 및 관리 매뉴얼",
-            category_name="1. 부서 총괄 및 서무",
-            cycle="매월",
-            assignee="홍길동",
-            deadline="매월 25일",
-            content_text=sample1_text,
-            content_html=sample1_html,
-            sort_order=1,
-        )
-        self.add_work_attachment(w1_id, "차량운행일지_표준서식.xlsx", "", "18.4 KB", ".xlsx")
-        self.add_work_attachment(w1_id, "공용차량_관리규정(훈령).hwpx", "", "45.1 KB", ".hwpx")
-        self.add_work_attachment(w1_id, "2026년도_정기점검_예시.pdf", "", "112.0 KB", ".pdf")
-
-        sample2_text = (
-            "부서 일상경비 및 세출예산 집행\n\n"
-            "1. 예산 집행 개요\n"
-            "- 부서 일상경비 및 세출예산 집행 절차와 품의·원인행위·지출결의 가이드라인입니다.\n"
-            "- 관련규정: 지방재정법, 행정안전부 세출예산 집행기준\n\n"
-            "2. 카드 정산 주기\n"
-            "- 법인카드는 사용 후 3일 이내에 영수증을 회계담당자에게 인계합니다."
-        )
-        sample2_html = (
-            "<h2>부서 일상경비 및 세출예산 집행</h2>"
-            "<p><b>1. 예산 집행 개요</b></p>"
-            "<p>부서 일상경비 및 세출예산 집행 절차 가이드라인입니다.</p>"
-            "<div style='background-color:#F0FDF4; border-left:4px solid #10B981; padding:8px 12px; margin:8px 0;'>"
-            "<b>📌 [관련규정]</b> 지방재정법, 행정안전부 세출예산 집행기준</div>"
-        )
-        w2_id = self.upsert_work_item(
-            work_id=None,
-            title="부서 일상경비 및 세출예산 집행",
-            category_name="2. 예산 및 회계 관리",
-            cycle="매주",
-            assignee="김철수",
-            deadline="매주 금요일",
-            content_text=sample2_text,
-            content_html=sample2_html,
-            sort_order=2,
-        )
-        self.add_work_attachment(w2_id, "지출결의서_체크리스트.hwp", "", "32.0 KB", ".hwp")
-
-        sample3_text = (
-            "정보화시스템 정기 유지보수 점검\n\n"
-            "1. 유지보수 용역 점검표 작성 절차\n"
-            "- 용역업체 월간 보고서 검수 및 기성금 청구 안내\n"
-            "- 분기별 시스템 백업 점검 및 취약점 진단 점검표 수령"
-        )
-        sample3_html = (
-            "<h2>유지보수 용역 점검표 작성 절차</h2>"
-            "<p>용역업체 월간 보고서 검수 및 기성금 청구 안내</p>"
-        )
-        self.upsert_work_item(
-            work_id=None,
-            title="정보화시스템 정기 유지보수 점검",
-            category_name="3. 고유 사업 및 정책",
-            cycle="분기",
-            assignee="이영희",
-            deadline="분기말",
-            content_text=sample3_text,
-            content_html=sample3_html,
-            sort_order=3,
-        )
-        self.save()
+        """초기 실행 시 빈 상태 유지 (샘플 데이터 자동 생성 안 함)"""
+        return
 
 
 def calendar_days(year: int, month: int) -> list[date]:
