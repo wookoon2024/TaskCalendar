@@ -148,14 +148,21 @@ class RhwpStudioServer:
         def handler_factory(*args, **kwargs):
             return _QuietStudioHandler(*args, directory=str(studio_dir.resolve()), **kwargs)
 
+        preferred_port = 28419
         try:
-            self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_factory)
-            self.port = self._server.server_address[1]
-            self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
-            self._thread.start()
-            logger.info("Local rhwp-studio server running on port %d", self.port)
-        except Exception as e:
-            logger.exception("Failed to start local rhwp-studio server: %e", e)
+            self._server = http.server.ThreadingHTTPServer(("127.0.0.1", preferred_port), handler_factory)
+            self.port = preferred_port
+        except Exception:
+            try:
+                self._server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler_factory)
+                self.port = self._server.server_address[1]
+            except Exception as e:
+                logger.exception("Failed to start local rhwp-studio server: %e", e)
+                return
+
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        logger.info("Local rhwp-studio server running on port %d", self.port)
 
     def get_url(self) -> str:
         if self.port > 0:
@@ -297,6 +304,8 @@ class RhwpEditorWidget(QWidget):
         self._check_timer.setInterval(30)
         self._check_timer.timeout.connect(self._check_studio_engine_ready)
         self._check_timer.start()
+        # 첫 번째 검사를 딜레이 없이 즉시 실행
+        self._check_studio_engine_ready()
 
     def _check_studio_engine_ready(self) -> None:
         self._check_count += 1

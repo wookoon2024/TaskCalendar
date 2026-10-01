@@ -162,6 +162,16 @@ class CompactCategoryTree(QTreeWidget):
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QTreeWidget.DragDropMode.DragDrop)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+
+    def _detach_item(self, item: QTreeWidgetItem) -> QTreeWidgetItem:
+        """아이템을 현재 부모 또는 최상위 트리에서 안전하게 분리하여 반환"""
+        parent = item.parent()
+        if parent:
+            parent.takeChild(parent.indexOfChild(item))
+        else:
+            self.takeTopLevelItem(self.indexOfTopLevelItem(item))
+        return item
 
     def drawBranches(self, painter, rect, index):
         """화살표 영역 제거 (폴더 아이콘 📁/📂 자체로 펼침/접힘 상태 표시)"""
@@ -202,20 +212,32 @@ class CompactCategoryTree(QTreeWidget):
         item_option.rect = self.visualRect(index)
         self.itemDelegate().paint(painter, item_option, index)
 
+    def startDrag(self, supportedActions):
+        """내부 트리 이동 시 식별용 마임 전달 및 순수 MoveAction 적용"""
+        items = self.selectedItems()
+        if not items:
+            return
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        mime_data.setData("application/x-taskcalendar-cat-internal", b"1")
+        drag.setMimeData(mime_data)
+        drag.exec(Qt.DropAction.MoveAction)
+
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
+        if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-taskcalendar-cat-internal"):
             event.acceptProposedAction()
         else:
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
+        if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-taskcalendar-cat-internal"):
             event.acceptProposedAction()
         else:
             super().dragMoveEvent(event)
 
     def dropEvent(self, event):
-        if event.mimeData().hasUrls():
+        # 1. 탐색기 등 외부 파일 드롭
+        if event.mimeData().hasUrls() and not event.mimeData().hasFormat("application/x-taskcalendar-cat-internal"):
             paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
             if paths:
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
@@ -237,41 +259,143 @@ class CompactCategoryTree(QTreeWidget):
                 event.acceptProposedAction()
                 return
 
-        super().dropEvent(event)
+        # 2. 내부 드래그 이동 (복사가 아닌 순수 이동 수동 처리)
+        if not event.mimeData().hasFormat("application/x-taskcalendar-cat-internal"):
+            super().dropEvent(event)
+            return
+
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        target_item = self.itemAt(pos)
+        moving_items = [it for it in self.selectedItems() if it is not target_item]
+        if not moving_items:
+            event.acceptProposedAction()
+            return
+
         self.blockSignals(True)
-        # 방어적 무결성 검증:
-        # 1. 문서(WorkSheetData)가 어떤 아이템을 자식으로 품고 있다면 -> 그 자식을 상위 폴더로 이동
-        def fix_children(parent_item):
-            for i in range(parent_item.childCount() - 1, -1, -1):
-                child = parent_item.child(i)
-                sheet = child.data(0, Qt.UserRole)
-                if isinstance(sheet, WorkSheetData):
-                    while child.childCount() > 0:
-                        sub = child.takeChild(0)
-                        parent_item.addChild(sub)
+        try:
+            drop_pos = self.dropIndicatorPosition()
+
+            for it in moving_items:
+                is_sheet = isinstance(it.data(0, Qt.UserRole), WorkSheetData)
+
+                if is_sheet:
+                    # ── 이동 대상이 [문서]인 경우 ────────────────────────
+                    if target_item:
+                        target_is_sheet = isinstance(target_item.data(0, Qt.UserRole), WorkSheetData)
+                        if not target_is_sheet:
+                            # 폴더 위에 드롭 -> 해당 폴더의 자식으로 맨 끝에 추가
+                            self._detach_item(it)
+                            target_item.addChild(it)
+                            target_item.setExpanded(True)
+                        else:
+                            # 다른 문서 위에/근처에 드롭 -> 해당 문서의 부모 폴더 내에서 순서 삽입
+                            t_parent = target_item.parent()
+                            if t_parent:
+                                idx = t_parent.indexOfChild(target_item)
+                                if drop_pos == QTreeWidget.DropIndicatorPosition.BelowItem:
+                                    idx += 1
+                                self._detach_item(it)
+                                t_parent.insertChild(min(idx, t_parent.childCount()), it)
+                                t_parent.setExpanded(True)
+                            else:
+                                # 부모 없는 문서 방어 -> 첫 번째 폴더로 이동
+                                self._detach_item(it)
+                                if self.topLevelItemCount() > 0:
+                                    self.topLevelItem(0).addChild(it)
+                    else:
+                        # 빈 공간에 드롭 -> 트리의 마지막 폴더에 추가
+                        last_folder = None
+                        for i in range(self.topLevelItemCount() - 1, -1, -1):
+                            top = self.topLevelItem(i)
+                            if not isinstance(top.data(0, Qt.UserRole), WorkSheetData):
+                                last_folder = top
+                                break
+                        target = last_folder or (self.topLevelItem(0) if self.topLevelItemCount() > 0 else None)
+                        if target:
+                            self._detach_item(it)
+                            target.addChild(it)
+                            target.setExpanded(True)
+
                 else:
-                    fix_children(child)
+                    # ── 이동 대상이 [폴더(분류)]인 경우 ─────────────────
+                    def is_ancestor(ancestor, item):
+                        p = item.parent()
+                        while p:
+                            if p == ancestor:
+                                return True
+                            p = p.parent()
+                        return False
 
-        # 2. 루트 레벨에 문서가 떠돌고 있다면 -> 인접한 첫 번째 폴더로 흡수
-        first_folder = None
-        for i in range(self.topLevelItemCount()):
-            top = self.topLevelItem(i)
-            if not isinstance(top.data(0, Qt.UserRole), WorkSheetData):
-                first_folder = top
-                break
+                    # 자기 자신이나 자기 자식으로의 이동은 순환 방지를 위해 무시
+                    if target_item and (target_item == it or is_ancestor(it, target_item)):
+                        continue
 
-        for i in range(self.topLevelItemCount() - 1, -1, -1):
-            top = self.topLevelItem(i)
-            sheet = top.data(0, Qt.UserRole)
-            if isinstance(sheet, WorkSheetData):
-                self.takeTopLevelItem(i)
-                target = first_folder or (self.topLevelItem(0) if self.topLevelItemCount() > 0 else None)
-                if target:
-                    target.addChild(top)
-            else:
-                fix_children(top)
+                    if target_item:
+                        target_is_sheet = isinstance(target_item.data(0, Qt.UserRole), WorkSheetData)
+                        effective_target = target_item.parent() if target_is_sheet else target_item
 
-        self.blockSignals(False)
+                        if effective_target and effective_target != it:
+                            if drop_pos == QTreeWidget.DropIndicatorPosition.OnItem and not target_is_sheet:
+                                # 폴더 위에 드롭 -> 해당 폴더의 하위 폴더로 이동
+                                self._detach_item(it)
+                                effective_target.addChild(it)
+                                effective_target.setExpanded(True)
+                            else:
+                                # 폴더 위/아래 순서 변경
+                                p = effective_target.parent()
+                                if p:
+                                    idx = p.indexOfChild(effective_target)
+                                    if drop_pos == QTreeWidget.DropIndicatorPosition.BelowItem:
+                                        idx += 1
+                                    self._detach_item(it)
+                                    p.insertChild(min(idx, p.childCount()), it)
+                                else:
+                                    idx = self.indexOfTopLevelItem(effective_target)
+                                    if drop_pos == QTreeWidget.DropIndicatorPosition.BelowItem:
+                                        idx += 1
+                                    self._detach_item(it)
+                                    self.insertTopLevelItem(min(idx, self.topLevelItemCount()), it)
+                    else:
+                        # 빈 공간에 드롭 -> 최상위 폴더 맨 뒤로 이동
+                        self._detach_item(it)
+                        self.addTopLevelItem(it)
+
+            # 방어적 무결성 검증:
+            # 1. 문서(WorkSheetData)가 어떤 아이템을 자식으로 품고 있다면 -> 상위로 분리
+            def fix_children(parent_item):
+                for i in range(parent_item.childCount() - 1, -1, -1):
+                    child = parent_item.child(i)
+                    sheet = child.data(0, Qt.UserRole)
+                    if isinstance(sheet, WorkSheetData):
+                        while child.childCount() > 0:
+                            sub = child.takeChild(0)
+                            parent_item.addChild(sub)
+                    else:
+                        fix_children(child)
+
+            # 2. 루트 레벨에 문서가 떠돌고 있다면 -> 인접한 첫 번째 폴더로 흡수
+            first_folder = None
+            for i in range(self.topLevelItemCount()):
+                top = self.topLevelItem(i)
+                if not isinstance(top.data(0, Qt.UserRole), WorkSheetData):
+                    first_folder = top
+                    break
+
+            for i in range(self.topLevelItemCount() - 1, -1, -1):
+                top = self.topLevelItem(i)
+                sheet = top.data(0, Qt.UserRole)
+                if isinstance(sheet, WorkSheetData):
+                    self.takeTopLevelItem(i)
+                    target = first_folder or (self.topLevelItem(0) if self.topLevelItemCount() > 0 else None)
+                    if target:
+                        target.addChild(top)
+                else:
+                    fix_children(top)
+
+            event.acceptProposedAction()
+        finally:
+            self.blockSignals(False)
+
         self.orderChanged.emit()
 
 
@@ -4193,7 +4317,13 @@ class WorkManagerDialog(QDialog):
             else:
                 self.category_tree.addTopLevelItem(item)
 
+        seen_tree_sheets = set()
         for sheet in self._all_sheets:
+            key = sheet.db_id if sheet.db_id else id(sheet)
+            if key in seen_tree_sheets:
+                continue
+            seen_tree_sheets.add(key)
+
             parent_item = None
             if sheet.category_id and sheet.category_id in cat_items_map:
                 parent_item = cat_items_map[sheet.category_id]
@@ -4485,8 +4615,11 @@ class WorkManagerDialog(QDialog):
         self._refresh_category_tree()
 
     def _on_tree_order_changed(self) -> None:
-        """트리 항목 드래그 앤 드롭 정렬 변경 시 DB 및 메모리 동기화 (계층형 폴더 및 문서)"""
+        """트리 항목 드래그 앤 드롭 정렬 변경 시 DB 및 메모리 동기화 (계층형 폴더 및 문서 이동/순서변경)"""
         new_all_sheets = []
+        seen_sheets = set()
+        seen_ids = set()
+        duplicates_to_remove = []
         doc_sort_order = 0
 
         def traverse_folder(folder_item, parent_id: int | None, cat_sort: int):
@@ -4506,6 +4639,15 @@ class WorkManagerDialog(QDialog):
                 child = folder_item.child(k)
                 sheet = child.data(0, Qt.UserRole)
                 if isinstance(sheet, WorkSheetData):
+                    key = id(sheet)
+                    db_key = sheet.db_id if sheet.db_id else sheet.sheet_id
+                    if key in seen_sheets or (db_key and db_key in seen_ids):
+                        duplicates_to_remove.append((folder_item, child))
+                        continue
+                    seen_sheets.add(key)
+                    if db_key:
+                        seen_ids.add(db_key)
+
                     sheet.category = cat_name
                     sheet.category_id = cat_id
                     new_all_sheets.append(sheet)
@@ -4534,9 +4676,22 @@ class WorkManagerDialog(QDialog):
             if not isinstance(sheet, WorkSheetData):
                 traverse_folder(top, None, i + 1)
 
+        # 중복 아이템이 감지되었다면 트리에서 정리
+        for p_item, c_item in duplicates_to_remove:
+            p_item.removeChild(c_item)
+
         self._all_sheets = new_all_sheets
         self._load_categories_from_db()
         self._refresh_category_combos()
+
+        # 현재 활성 시트의 카테고리가 이동되었다면 상단 카테고리 콤보박스 동기화
+        if 0 <= self._active_sheet_index < len(self._open_sheets):
+            active_sheet = self._open_sheets[self._active_sheet_index]
+            idx = self.meta_cat_combo.findText(active_sheet.category)
+            if idx >= 0:
+                self.meta_cat_combo.blockSignals(True)
+                self.meta_cat_combo.setCurrentIndex(idx)
+                self.meta_cat_combo.blockSignals(False)
 
     def _on_add_category(self) -> None:
         cat_name, ok = QInputDialog.getText(self, "새 업무 분류 추가", "분류 명칭을 입력하세요 (예: 4. 대민 행정 서비스):")

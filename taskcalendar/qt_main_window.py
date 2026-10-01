@@ -1237,7 +1237,7 @@ class MainWindow(QMainWindow):
         app_inst = QApplication.instance()
         if app_inst:
             app_inst.aboutToQuit.connect(self._on_app_about_to_quit)
-        QTimer.singleShot(1500, self._prewarm_work_manager)
+        QTimer.singleShot(50, self._prewarm_work_manager)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
