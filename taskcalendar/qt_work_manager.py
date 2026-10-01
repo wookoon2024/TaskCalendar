@@ -1083,12 +1083,26 @@ class FolderWorkImportDialog(QDialog):
         scroll_layout.setContentsMargins(10, 8, 10, 8)
         scroll_layout.setSpacing(6)
 
+        # extract_document_content()가 실제로 내용을 추출할 수 있는 확장자
+        SUPPORTED_EXTS = {
+            ".hwp", ".hwpx", ".pdf", ".docx", ".doc",
+            ".txt", ".md", ".csv", ".json", ".xlsx", ".xls",
+        }
+
         doc_exts = {".hwp", ".hwpx", ".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".pptx", ".ppt", ".csv", ".json"}
         sorted_exts = sorted(self.ext_counter.items(), key=lambda x: -x[1])
         for ext, count in sorted_exts:
-            cb = QCheckBox(f"{ext} ({count}개 파일)")
-            is_doc = ext in doc_exts
-            cb.setChecked(is_doc or len(self.ext_counter) <= 3)
+            supported = ext in SUPPORTED_EXTS
+            label = f"{ext} ({count}개 파일)" if supported else f"{ext} ({count}개 파일)  [지원 안 됨]"
+            cb = QCheckBox(label)
+            if supported:
+                is_doc = ext in doc_exts
+                cb.setChecked(is_doc or len(self.ext_counter) <= 3)
+                cb.setEnabled(True)
+            else:
+                cb.setChecked(False)
+                cb.setEnabled(False)
+                cb.setStyleSheet("color: gray;")
             self.ext_checkboxes[ext] = cb
             scroll_layout.addWidget(cb)
         scroll_layout.addStretch(1)
@@ -1145,9 +1159,13 @@ class FolderWorkImportDialog(QDialog):
             cb.setChecked(False)
 
     def _select_doc_exts(self) -> None:
-        doc_exts = {".hwp", ".hwpx", ".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".pptx", ".ppt", ".csv", ".json"}
+        SUPPORTED_EXTS = {
+            ".hwp", ".hwpx", ".pdf", ".docx", ".doc",
+            ".txt", ".md", ".csv", ".json", ".xlsx", ".xls",
+        }
         for ext, cb in self.ext_checkboxes.items():
-            cb.setChecked(ext in doc_exts)
+            if cb.isEnabled():
+                cb.setChecked(ext in SUPPORTED_EXTS)
 
     def _on_accept(self) -> None:
         selected = {ext for ext, cb in self.ext_checkboxes.items() if cb.isChecked()}
@@ -1411,32 +1429,58 @@ class WorkExportWizardDialog(QDialog):
         s2_layout.setContentsMargins(0, 0, 0, 0)
         s2_layout.setSpacing(14)
 
-        # 포맷 그룹
+        # 포맷 그룹 (테두리 없음)
         format_group_box = QFrame()
-        format_group_box.setStyleSheet(f"background-color: {panel}; border: 1px solid {line}; border-radius: 6px; padding: 12px;")
+        format_group_box.setStyleSheet(f"background-color: {panel}; border: none; border-radius: 6px; padding: 12px;")
         f_layout = QVBoxLayout(format_group_box)
         f_layout.setSpacing(8)
         lbl_f = QLabel("<b>내보내기 문서 형식 선택</b>")
-        lbl_f.setStyleSheet(f"color: {accent}; font-size: 12px;")
+        lbl_f.setStyleSheet(f"color: {accent}; font-size: 12px; border: none;")
         f_layout.addWidget(lbl_f)
 
-        self.rb_hwpx = QRadioButton("📄 한글 문서 (.hwpx / .hwp) - 한글에서 바로 편집 가능한 정형 문서")
+        # 라디오버튼 – 이모티콘 없음, 선택 시 배경 강조를 위해 QFrame 래퍼 사용
+        def _make_rb_card(rb: "QRadioButton") -> "QFrame":
+            card = QFrame()
+            card.setObjectName("rb_card")
+            card.setStyleSheet(
+                f"QFrame#rb_card {{ border: 2px solid transparent; border-radius: 6px; padding: 6px 10px; }}"
+            )
+            h = QHBoxLayout(card)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.addWidget(rb)
+            return card
+
+        self.rb_hwpx = QRadioButton("한글 문서 (.hwpx / .hwp)  –  한글에서 바로 편집 가능한 정형 문서")
         self.rb_hwpx.setChecked(True)
-        self.rb_pdf = QRadioButton("📑 PDF 문서 (.pdf) - 깔끔한 인쇄 및 배포용 A4 표준 문서")
+        self.rb_pdf = QRadioButton("PDF 문서 (.pdf)  –  깔끔한 인쇄 및 배포용 A4 표준 문서")
         self.format_btn_group = QButtonGroup(self)
         self.format_btn_group.addButton(self.rb_hwpx)
         self.format_btn_group.addButton(self.rb_pdf)
-        f_layout.addWidget(self.rb_hwpx)
-        f_layout.addWidget(self.rb_pdf)
+
+        self._rb_card_hwpx = _make_rb_card(self.rb_hwpx)
+        self._rb_card_pdf = _make_rb_card(self.rb_pdf)
+
+        def _update_rb_cards():
+            sel = f"QFrame#rb_card {{ border: 2px solid {accent}; border-radius: 6px; padding: 6px 10px; background-color: {panel_alt}; }}"
+            unsel = f"QFrame#rb_card {{ border: 2px solid transparent; border-radius: 6px; padding: 6px 10px; }}"
+            self._rb_card_hwpx.setStyleSheet(sel if self.rb_hwpx.isChecked() else unsel)
+            self._rb_card_pdf.setStyleSheet(sel if self.rb_pdf.isChecked() else unsel)
+
+        self.rb_hwpx.toggled.connect(lambda _: _update_rb_cards())
+        self.rb_pdf.toggled.connect(lambda _: _update_rb_cards())
+        _update_rb_cards()
+
+        f_layout.addWidget(self._rb_card_hwpx)
+        f_layout.addWidget(self._rb_card_pdf)
         s2_layout.addWidget(format_group_box)
 
-        # 저장 폴더 그룹
+        # 저장 폴더 그룹 (테두리 없음)
         dir_group_box = QFrame()
-        dir_group_box.setStyleSheet(f"background-color: {panel}; border: 1px solid {line}; border-radius: 6px; padding: 12px;")
+        dir_group_box.setStyleSheet(f"background-color: {panel}; border: none; border-radius: 6px; padding: 12px;")
         d_layout = QVBoxLayout(dir_group_box)
         d_layout.setSpacing(8)
         lbl_d = QLabel("<b>저장 대상 폴더 지정</b>")
-        lbl_d.setStyleSheet(f"color: {accent}; font-size: 12px;")
+        lbl_d.setStyleSheet(f"color: {accent}; font-size: 12px; border: none;")
         d_layout.addWidget(lbl_d)
 
         dir_h = QHBoxLayout()
@@ -1446,7 +1490,7 @@ class WorkExportWizardDialog(QDialog):
         dir_h.addWidget(self.dest_dir_input, 1)
 
         btn_browse = QPushButton("찾아보기...")
-        btn_browse.setFixedHeight(28)
+        btn_browse.setFixedSize(74, 30)
         btn_browse.clicked.connect(self._on_browse_dest_dir)
         dir_h.addWidget(btn_browse)
         d_layout.addLayout(dir_h)
@@ -1471,7 +1515,7 @@ class WorkExportWizardDialog(QDialog):
         btn_nav_layout.addStretch(1)
 
         self.btn_prev = QPushButton("◀ 이전")
-        self.btn_prev.setFixedSize(80, 30)
+        self.btn_prev.setFixedSize(74, 30)
         self.btn_prev.clicked.connect(self._go_prev_step)
         self.btn_prev.hide()
         btn_nav_layout.addWidget(self.btn_prev)
