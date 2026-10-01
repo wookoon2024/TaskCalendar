@@ -2290,18 +2290,17 @@ class WorkSheetData:
 class WorkSheetTabBar(QTabBar):
     """
     엑셀/한글 스타일 하단 시트 탭 바
-    - 탭 제목이 좁아져서 조기 말줄임(...) 되지 않도록 텍스트 길이에 맞춰 자연스럽게 탭 너비 확장
-    - 탭 닫기(X) 버튼이 우측 테두리에 너무 붙지 않도록 편안한 여백 유지
+    - 탭 제목이 잘리지 않고 끝에 '...'으로 자연스럽게 표시되도록 ElideRight 지원
+    - 닫기(X) 버튼과 텍스트가 겹치지 않도록 충분한 우측 여백 확보
     """
 
     def tabSizeHint(self, index: int) -> QSize:
-        hint = super().tabSizeHint(index)
         text = self.tabText(index)
         fm = self.fontMetrics()
         text_w = fm.horizontalAdvance(text)
-        # 좌측 여백(12px) + 텍스트 + 간격(12px) + 닫기버튼(18px) + 우측 여백(12px)
-        needed_w = 12 + text_w + 12 + 18 + 12
-        return QSize(max(needed_w, 115), 28)
+        # 좌측 여백(12px) + 텍스트 + 간격(8px) + 닫기버튼(18px) + 우측 여백(10px)
+        needed_w = 12 + text_w + 8 + 18 + 10
+        return QSize(max(needed_w, 120), 28)
 
     def tabInserted(self, index: int) -> None:
         super().tabInserted(index)
@@ -3003,7 +3002,7 @@ class WorkManagerDialog(QDialog):
         self.sheet_tab_bar.setTabsClosable(True)
         self.sheet_tab_bar.setMovable(True)
         self.sheet_tab_bar.setExpanding(False)
-        self.sheet_tab_bar.setElideMode(Qt.TextElideMode.ElideNone)
+        self.sheet_tab_bar.setElideMode(Qt.TextElideMode.ElideRight)
         self.sheet_tab_bar.setStyleSheet(f"""
             QTabBar {{
                 background: transparent;
@@ -3015,12 +3014,12 @@ class WorkManagerDialog(QDialog):
                 border: 1px solid {line};
                 border-bottom: none;
                 border-radius: 4px 4px 0px 0px;
-                padding: 0px 28px 0px 14px;
+                padding: 0px 32px 0px 12px;
                 margin-top: 0px;
                 margin-right: 3px;
                 font-size: 12px;
                 min-width: 100px;
-                max-width: 320px;
+                max-width: 260px;
                 height: 28px;
             }}
             QTabBar::tab:selected {{
@@ -3031,7 +3030,7 @@ class WorkManagerDialog(QDialog):
                 border-bottom: 1px solid {panel};
                 margin-top: 0px;
                 height: 28px;
-                padding: 0px 28px 0px 14px;
+                padding: 0px 32px 0px 12px;
             }}
             QTabBar::tab:hover:!selected {{
                 background: #FFFFFF;
@@ -3269,13 +3268,39 @@ class WorkManagerDialog(QDialog):
 
         self.sheet_tab_bar.blockSignals(False)
 
+    def _switch_sheet_to_editor(self, target_index: int) -> None:
+        """현재 편집 중인 시트의 최신 본문 데이터를 메모리에 동기화한 뒤 목표 시트로 전환"""
+        if target_index < 0 or target_index >= len(self._open_sheets):
+            return
+        if self._active_sheet_index == target_index:
+            return
+
+        old_index = self._active_sheet_index
+        if 0 <= old_index < len(self._open_sheets):
+            old_sheet = self._open_sheets[old_index]
+            self._save_current_sheet_data()
+
+            def _after_export(text: str, hwpx_bytes: bytes | None):
+                if text:
+                    old_sheet.content_text = text
+                if hwpx_bytes:
+                    old_sheet.hwpx_blob = hwpx_bytes
+                self._active_sheet_index = target_index
+                self._load_sheet_to_editor(target_index)
+
+            # 비동기로 본문 텍스트 및 HWPX 바이너리 보존 후 전환
+            self.editor.export_document_data(_after_export)
+        else:
+            self._active_sheet_index = target_index
+            self._load_sheet_to_editor(target_index)
+
     def _on_sheet_tab_changed(self, index: int) -> None:
         """하단 시트 탭 클릭 시 해당 업무 로드"""
         if index < 0 or index >= len(self._open_sheets):
             return
-        self._save_current_sheet_data()
-        self._active_sheet_index = index
-        self._load_sheet_to_editor(index)
+        if self._active_sheet_index == index:
+            return
+        self._switch_sheet_to_editor(index)
 
     def open_sheet(self, sheet: WorkSheetData) -> None:
         """문서를 하단 탭에 열고 중앙 에디터에 로드 (이미 열려있으면 해당 탭으로 전환)"""
@@ -3306,11 +3331,14 @@ class WorkManagerDialog(QDialog):
             self.sheet_tab_bar.blockSignals(False)
 
         tab_idx = self._open_sheets.index(sheet)
+        if self._active_sheet_index == tab_idx:
+            # 이미 현재 열려있는 탭이면 다시 로드하지 않음 (깜빡임 및 편집 내용 덮어쓰기 완전 방지)
+            return
+
         self.sheet_tab_bar.blockSignals(True)
         self.sheet_tab_bar.setCurrentIndex(tab_idx)
         self.sheet_tab_bar.blockSignals(False)
-        self._active_sheet_index = tab_idx
-        self._load_sheet_to_editor(tab_idx)
+        self._switch_sheet_to_editor(tab_idx)
 
     def _on_sheet_tab_close(self, index: int) -> None:
         """하단 시트 탭의 X 버튼 클릭 시 탭 닫기 (미저장 시 저장 여부 확인)"""
@@ -4385,7 +4413,8 @@ class WorkManagerDialog(QDialog):
             item.setText(0, f"📁 {data.get('name')}")
 
     def _on_attachment_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
-        """첨부파일 항목 클릭 시 폴더면 열기/닫기 토글"""
+        """첨부파일 항목 클릭 시 폴더면 열기/닫기 토글 및 선택 상태 유지"""
+        self.file_list.setCurrentItem(item)
         data = item.data(0, Qt.UserRole) or {}
         if data.get("type") == "folder":
             item.setExpanded(not item.isExpanded())
@@ -4408,16 +4437,17 @@ class WorkManagerDialog(QDialog):
             self._save_sheet_sync(curr)
 
         if parent_folder is None:
-            item = self.file_list.currentItem()
+            selected = self.file_list.selectedItems()
+            item = selected[0] if selected else self.file_list.currentItem()
             if item:
                 data = item.data(0, Qt.UserRole) or {}
                 if data.get("type") == "folder":
-                    parent_folder = data.get("folder_path", "")
+                    parent_folder = data.get("folder_path") or data.get("name") or ""
                 else:
                     parent = item.parent()
                     if parent:
                         p_data = parent.data(0, Qt.UserRole) or {}
-                        parent_folder = p_data.get("folder_path", "")
+                        parent_folder = p_data.get("folder_path") or p_data.get("name") or ""
                     else:
                         parent_folder = ""
             else:
@@ -4621,18 +4651,19 @@ class WorkManagerDialog(QDialog):
             return
 
         if target_folder is None:
-            item = self.file_list.currentItem()
+            selected = self.file_list.selectedItems()
+            item = selected[0] if selected else self.file_list.currentItem()
             if item:
                 data = item.data(0, Qt.UserRole) or {}
                 if data.get("type") == "folder":
-                    target_folder = data.get("folder_path", "")
+                    target_folder = data.get("folder_path") or data.get("name") or ""
                 else:
                     parent = item.parent()
                     if parent:
                         p_data = parent.data(0, Qt.UserRole) or {}
-                        target_folder = p_data.get("folder_path", "")
+                        target_folder = p_data.get("folder_path") or p_data.get("name") or ""
                     else:
-                        target_folder = ""
+                        target_folder = data.get("folder_path", "")
             else:
                 target_folder = ""
 
