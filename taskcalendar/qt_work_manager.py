@@ -2298,9 +2298,9 @@ class WorkSheetTabBar(QTabBar):
         text = self.tabText(index)
         fm = self.fontMetrics()
         text_w = fm.horizontalAdvance(text)
-        # 좌측 여백(12px) + 텍스트 + 간격(8px) + 닫기버튼(18px) + 우측 여백(10px)
-        needed_w = 12 + text_w + 8 + 18 + 10
-        return QSize(max(needed_w, 120), 28)
+        # 좌측 여백(10px) + 텍스트 + 간격(4px) + 닫기버튼(18px) + 우측 여백(6px)
+        needed_w = 10 + text_w + 4 + 18 + 6
+        return QSize(max(needed_w, 100), 28)
 
     def tabInserted(self, index: int) -> None:
         super().tabInserted(index)
@@ -3014,12 +3014,12 @@ class WorkManagerDialog(QDialog):
                 border: 1px solid {line};
                 border-bottom: none;
                 border-radius: 4px 4px 0px 0px;
-                padding: 0px 32px 0px 12px;
+                padding: 0px 4px 0px 10px;
                 margin-top: 0px;
                 margin-right: 3px;
                 font-size: 12px;
-                min-width: 100px;
-                max-width: 260px;
+                min-width: 90px;
+                max-width: 360px;
                 height: 28px;
             }}
             QTabBar::tab:selected {{
@@ -3030,7 +3030,7 @@ class WorkManagerDialog(QDialog):
                 border-bottom: 1px solid {panel};
                 margin-top: 0px;
                 height: 28px;
-                padding: 0px 32px 0px 12px;
+                padding: 0px 4px 0px 10px;
             }}
             QTabBar::tab:hover:!selected {{
                 background: #FFFFFF;
@@ -3253,6 +3253,34 @@ class WorkManagerDialog(QDialog):
         sheet.is_dirty = False
         self._update_tab_title(sheet)
 
+    def _reload_sheet_from_db(self, sheet: WorkSheetData) -> None:
+        """시트의 미저장 변경 내용을 버리고 DB의 원래 저장된 데이터로 롤백"""
+        if not self.repository or not sheet.db_id:
+            # DB에 한 번도 저장되지 않은 신규 문서라면 목록에서 완전 제거
+            if sheet in self._open_sheets:
+                self._open_sheets.remove(sheet)
+            if sheet in self._all_sheets:
+                self._all_sheets.remove(sheet)
+            return
+
+        try:
+            db_item = self.repository.get_work_item(sheet.db_id)
+            if db_item:
+                sheet.title = db_item.get("title", "") or "새 업무"
+                sheet.category = db_item.get("category_name", "") or "일반 업무"
+                sheet.category_id = db_item.get("category_id")
+                sheet.cycle = db_item.get("cycle", "")
+                sheet.assignee = db_item.get("assignee", "")
+                sheet.deadline = db_item.get("deadline", "")
+                sheet.content_text = db_item.get("content_text", "")
+                sheet.content_html = db_item.get("content_html", "")
+                sheet.hwpx_blob = db_item.get("hwpx_blob")
+                sheet.attachments = db_item.get("attachments", [])
+        except Exception as e:
+            logger.warning("Failed to reload sheet %s from db: %s", sheet.db_id, e)
+        sheet.is_dirty = False
+        self._update_tab_title(sheet)
+
     def _refresh_sheet_tabs(self) -> None:
         """하단 엑셀 스타일 시트 탭 바 갱신 (열려있는 문서 탭만 표시)"""
         self.sheet_tab_bar.blockSignals(True)
@@ -3366,6 +3394,8 @@ class WorkManagerDialog(QDialog):
                 return  # 닫기 취소
             elif clicked == btn_save:
                 self._save_sheet_sync(sheet)
+            elif clicked == btn_discard:
+                self._reload_sheet_from_db(sheet)
 
         self._open_sheets.pop(index)
         self.sheet_tab_bar.blockSignals(True)
@@ -3403,9 +3433,18 @@ class WorkManagerDialog(QDialog):
                     return
                 elif clicked == btn_save:
                     self._save_sheet_sync(sheet)
+                elif clicked == btn_discard:
+                    self._reload_sheet_from_db(sheet)
 
         self._save_window_state()
         event.accept()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not event.spontaneous() and self.repository:
+            self._load_categories_from_db()
+            self._refresh_category_combos()
+            self._refresh_category_tree()
 
     def hideEvent(self, event):
         super().hideEvent(event)
