@@ -307,12 +307,51 @@ class CompactAttachmentItemDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+def make_work_progress_dialog(parent: QWidget | None, title: str, label: str, max_val: int) -> QProgressDialog:
+    """작업 관리자 공통 프로그레스 다이얼로그 생성기"""
+    dlg = QProgressDialog(label, None, 0, max(1, max_val), parent)
+    dlg.setWindowTitle(title)
+    dlg.setWindowModality(Qt.WindowModality.WindowModal)
+    dlg.setMinimumDuration(0)
+    dlg.setValue(0)
+    dlg.setAutoClose(True)
+    dlg.setAutoReset(True)
+    dlg.setFixedSize(380, 100)
+    dlg.setStyleSheet("""
+        QProgressDialog {
+            background-color: #FFFFFF;
+            border: 1px solid #CBD5E1;
+            border-radius: 8px;
+        }
+        QLabel {
+            font-size: 12px;
+            color: #1E293B;
+        }
+        QProgressBar {
+            border: 1px solid #E2E8F0;
+            border-radius: 4px;
+            text-align: center;
+            background-color: #F1F5F9;
+            height: 18px;
+            font-size: 11px;
+            color: #1E293B;
+        }
+        QProgressBar::chunk {
+            background-color: #0284C7;
+            border-radius: 3px;
+        }
+    """)
+    dlg.show()
+    QApplication.processEvents()
+    return dlg
+
+
 class CompactAttachmentTree(QTreeWidget):
     """
     우측 첨부파일 계층형 트리 위젯:
-    - 좌측 여백 최소화(화살표 영역 제거로 폴더/파일이 좌측에 바짝 붙음)
     - 폴더(📁/📂) 및 파일 계층 구조 지원 (트리 열고닫기)
     - 탐색기 파일/폴더 드래그앤드롭 수신 (특정 폴더 위에 드롭 시 해당 폴더로 쏙)
+    - 내부 항목 드래그 이동 (폴더 위 드롭 시 자식으로 이동, 순서 변경)
     - Shift/Ctrl 다중 선택 및 Delete 키 단축키 지원
     """
 
@@ -324,14 +363,13 @@ class CompactAttachmentTree(QTreeWidget):
         super().__init__(parent)
         self.setHeaderHidden(True)
         self.setRootIsDecorated(False)
-        self.setIndentation(14)
+        self.setIndentation(16)
         self.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self.setSelectionBehavior(QTreeWidget.SelectionBehavior.SelectRows)
         self.setItemDelegate(CompactAttachmentItemDelegate(self))
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
-        # InternalMove 대신 DragDrop + 수동 처리: Qt 기본 로직이 폴더 삽입을 지원하지 않으므로
         self.setDragDropMode(QTreeWidget.DragDropMode.DragDrop)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
 
@@ -367,7 +405,9 @@ class CompactAttachmentTree(QTreeWidget):
                 painter.restore()
 
         item_option = QStyleOptionViewItem(option)
-        item_option.rect = option.rect
+        # 중요: visualRect(index)를 사용하여 계층별 들여쓰기 좌표를 정확히 반영하여 텍스트 렌더링!
+        vr = self.visualRect(index)
+        item_option.rect = vr
         self.itemDelegate().paint(painter, item_option, index)
 
     def keyPressEvent(self, event):
@@ -450,73 +490,60 @@ class CompactAttachmentTree(QTreeWidget):
             super().dropEvent(event)
             return
 
-        moving_items = [it for it in self.selectedItems()
-                        if it is not target_item]  # 자기 자신 위에 드롭 제외
+        moving_items = [it for it in self.selectedItems() if it is not target_item]
         if not moving_items:
             event.acceptProposedAction()
             return
 
-        drop_pos = self.dropIndicatorPosition()  # OnItem / AboveItem / BelowItem / OnViewport
-        DIP = QTreeWidget.DropIndicatorPosition
-
         self.blockSignals(True)
         try:
-            # ── 케이스 A: 폴더 아이템 위에 드롭 → 그 폴더의 자식으로 삽입
-            if target_item and drop_pos == DIP.OnItem:
+            # 타겟 정보 확인
+            target_is_folder = False
+            if target_item:
                 t_data = target_item.data(0, Qt.UserRole) or {}
-                if t_data.get("type") == "folder":
-                    # 파일만 폴더 안으로 이동 (폴더를 폴더 안에 넣는 것은 허용하지 않음)
-                    for it in moving_items:
-                        it_data = it.data(0, Qt.UserRole) or {}
-                        if it_data.get("type") != "folder":
-                            self._detach_item(it)
-                            target_item.addChild(it)
-                    target_item.setExpanded(True)
-                else:
-                    # 파일 위에 드롭 → 같은 부모의 그 파일 위치 앞에 삽입
-                    t_parent = target_item.parent()
-                    if t_parent:
-                        idx = t_parent.indexOfChild(target_item)
-                        for i, it in enumerate(moving_items):
-                            self._detach_item(it)
-                            t_parent.insertChild(idx + i, it)
-                        t_parent.setExpanded(True)
-                    else:
-                        idx = self.indexOfTopLevelItem(target_item)
-                        for i, it in enumerate(moving_items):
-                            self._detach_item(it)
-                            self.insertTopLevelItem(idx + i, it)
+                target_is_folder = (t_data.get("type") == "folder")
 
-            # ── 케이스 B: AboveItem / BelowItem → 같은 레벨에서 순서 변경
-            elif target_item and drop_pos in (DIP.AboveItem, DIP.BelowItem):
-                t_parent = target_item.parent()
-                if t_parent:
-                    idx = t_parent.indexOfChild(target_item)
-                    if drop_pos == DIP.BelowItem:
-                        idx += 1
-                    # 폴더 안으로 파일 삽입 허용, 폴더는 폴더 내부 이동 금지
-                    for i, it in enumerate(moving_items):
-                        it_data = it.data(0, Qt.UserRole) or {}
-                        if it_data.get("type") != "folder":
-                            self._detach_item(it)
-                            t_parent.insertChild(min(idx + i, t_parent.childCount()), it)
-                    t_parent.setExpanded(True)
-                else:
-                    # 최상위 레벨 순서 변경
-                    idx = self.indexOfTopLevelItem(target_item)
-                    if drop_pos == DIP.BelowItem:
-                        idx += 1
-                    for i, it in enumerate(moving_items):
+            # ── 케이스 A: 폴더 아이템에 드롭한 경우 -> 무조건 해당 폴더의 자식으로 삽입!
+            if target_item and target_is_folder:
+                for it in moving_items:
+                    it_data = it.data(0, Qt.UserRole) or {}
+                    # 파일만 폴더 안으로 이동 (폴더 간 중첩은 방지)
+                    if it_data.get("type") != "folder":
                         self._detach_item(it)
-                        self.insertTopLevelItem(min(idx + i, self.topLevelItemCount()), it)
+                        target_item.addChild(it)
+                target_item.setExpanded(True)
 
-            # ── 케이스 C: OnViewport (빈 공간에 드롭) → 최상위 끝에 추가
+            # ── 케이스 B: 폴더 안의 특정 파일 위에/근처에 드롭한 경우 -> 그 부모 폴더의 자식으로 삽입!
+            elif target_item and target_item.parent():
+                t_parent = target_item.parent()
+                idx = t_parent.indexOfChild(target_item)
+                drop_pos = self.dropIndicatorPosition()
+                if drop_pos == QTreeWidget.DropIndicatorPosition.BelowItem:
+                    idx += 1
+                for i, it in enumerate(moving_items):
+                    it_data = it.data(0, Qt.UserRole) or {}
+                    if it_data.get("type") != "folder":
+                        self._detach_item(it)
+                        t_parent.insertChild(min(idx + i, t_parent.childCount()), it)
+                t_parent.setExpanded(True)
+
+            # ── 케이스 C: 최상위 파일 위에 드롭한 경우 -> 최상위에서 순서 변경
+            elif target_item and not target_item.parent():
+                idx = self.indexOfTopLevelItem(target_item)
+                drop_pos = self.dropIndicatorPosition()
+                if drop_pos == QTreeWidget.DropIndicatorPosition.BelowItem:
+                    idx += 1
+                for i, it in enumerate(moving_items):
+                    self._detach_item(it)
+                    self.insertTopLevelItem(min(idx + i, self.topLevelItemCount()), it)
+
+            # ── 케이스 D: 빈 공간에 드롭 -> 최상위 루트로 분리
             else:
                 for it in moving_items:
                     self._detach_item(it)
                     self.addTopLevelItem(it)
 
-            # 폴더 모두 펼치기
+            # 모든 폴더 펼침 유지
             self.expandAll()
 
         finally:
@@ -2916,6 +2943,7 @@ class WorkManagerDialog(QDialog):
                 outline: none;
             }}
         """)
+        self.file_list.itemClicked.connect(self._on_attachment_item_clicked)
         self.file_list.itemDoubleClicked.connect(self._on_attachment_double_clicked)
         self.file_list.itemExpanded.connect(self._on_attachment_item_expanded)
         self.file_list.itemCollapsed.connect(self._on_attachment_item_collapsed)
@@ -4146,20 +4174,44 @@ class WorkManagerDialog(QDialog):
         if res != QMessageBox.Yes:
             return
 
-        if self.repository:
-            self.repository.delete_work_category(cat_id)
+        total_steps = len(to_del) + 1
+        progress = None
+        if len(to_del) > 0 or sub_count > 0:
+            progress = make_work_progress_dialog(
+                self,
+                "업무 분류 삭제",
+                f"분류 '{cat_name}' 삭제 준비 중...",
+                total_steps,
+            )
 
-        for s in to_del:
-            if self.repository and s.db_id:
-                self.repository.delete_work_item(s.db_id)
-            if s in self._all_sheets:
-                self._all_sheets.remove(s)
-            if s in self._open_sheets:
-                o_idx = self._open_sheets.index(s)
-                self._open_sheets.pop(o_idx)
-                self.sheet_tab_bar.blockSignals(True)
-                self.sheet_tab_bar.removeTab(o_idx)
-                self.sheet_tab_bar.blockSignals(False)
+        try:
+            if self.repository:
+                self.repository.delete_work_category(cat_id)
+            if progress:
+                progress.setValue(1)
+                progress.setLabelText(f"하위 문서 및 첨부파일 정리 중... (0/{len(to_del)})")
+                QApplication.processEvents()
+
+            for idx, s in enumerate(to_del):
+                if progress:
+                    progress.setValue(idx + 1)
+                    progress.setLabelText(f"하위 문서 삭제 중... ({idx+1}/{len(to_del)})\n{s.title}")
+                    QApplication.processEvents()
+
+                if self.repository and s.db_id:
+                    self.repository.delete_work_item(s.db_id)
+                if s in self._all_sheets:
+                    self._all_sheets.remove(s)
+                if s in self._open_sheets:
+                    o_idx = self._open_sheets.index(s)
+                    self._open_sheets.pop(o_idx)
+                    self.sheet_tab_bar.blockSignals(True)
+                    self.sheet_tab_bar.removeTab(o_idx)
+                    self.sheet_tab_bar.blockSignals(False)
+        finally:
+            if progress:
+                progress.setValue(total_steps)
+                progress.close()
         if self._open_sheets:
             new_idx = max(0, min(self._active_sheet_index, len(self._open_sheets) - 1))
             self.sheet_tab_bar.blockSignals(True)
@@ -4331,6 +4383,12 @@ class WorkManagerDialog(QDialog):
             fp = data.get("folder_path", "")
             self._expanded_attachment_folders.discard(fp)
             item.setText(0, f"📁 {data.get('name')}")
+
+    def _on_attachment_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+        """첨부파일 항목 클릭 시 폴더면 열기/닫기 토글"""
+        data = item.data(0, Qt.UserRole) or {}
+        if data.get("type") == "folder":
+            item.setExpanded(not item.isExpanded())
 
     def _on_attachment_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         data = item.data(0, Qt.UserRole) or {}
@@ -4508,16 +4566,17 @@ class WorkManagerDialog(QDialog):
         self.repository.save()
         curr.attachments = updated_attachments
         self._mark_active_sheet_dirty()
+        self._refresh_attachments_list(curr.attachments)
 
-    def _add_attachment_path(self, file_path: str | Path, subfolder: str = "") -> None:
+    def _add_attachment_path(self, file_path: str | Path, subfolder: str = "", refresh: bool = True) -> bool:
         """외부 파일을 프로그램 내 업무 전용 폴더에 복사하고 첨부파일 목록에 등록"""
         if self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
             QMessageBox.information(self, "알림", "첨부파일을 추가할 업무를 먼저 선택하거나 열어주세요.")
-            return
+            return False
 
         p = Path(file_path)
         if not p.exists():
-            return
+            return False
 
         curr = self._open_sheets[self._active_sheet_index]
         if not curr.db_id and self.repository:
@@ -4544,11 +4603,17 @@ class WorkManagerDialog(QDialog):
                     "type": "file",
                 }
                 curr.attachments.append(new_att)
+                if subfolder:
+                    self._expanded_attachment_folders.add(subfolder)
                 self._mark_active_sheet_dirty()
-                self._refresh_attachments_list(curr.attachments)
+                if refresh:
+                    self._refresh_attachments_list(curr.attachments)
+                return True
             except Exception as e:
                 logger.exception("Failed to copy and attach file: %s", e)
                 QMessageBox.warning(self, "오류", f"첨부파일 복사 중 오류가 발생했습니다: {e}")
+                return False
+        return False
 
     def _on_add_attachment(self, target_folder: str | None = None) -> None:
         if self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
@@ -4577,9 +4642,38 @@ class WorkManagerDialog(QDialog):
             "",
             "모든 파일 (*.*);;한글 문서 (*.hwp *.hwpx);;엑셀 서식 (*.xlsx *.xls);;PDF (*.pdf);;문서 (*.docx *.txt)",
         )
-        if paths:
-            for p in paths:
-                self._add_attachment_path(p, subfolder=target_folder or "")
+        if not paths:
+            return
+
+        curr = self._open_sheets[self._active_sheet_index]
+        count = len(paths)
+        sub = target_folder or ""
+
+        # 여러 파일 추가 시 진행바 표시하여 버벅임 방지
+        progress = None
+        if count > 1:
+            progress = make_work_progress_dialog(
+                self,
+                "첨부파일 추가",
+                f"첨부파일 복사 및 등록 중... (0/{count})",
+                count,
+            )
+
+        try:
+            for idx, p in enumerate(paths):
+                if progress:
+                    progress.setValue(idx)
+                    progress.setLabelText(f"첨부파일 복사 및 등록 중... ({idx+1}/{count})\n{Path(p).name}")
+                    QApplication.processEvents()
+                self._add_attachment_path(p, subfolder=sub, refresh=False)
+        finally:
+            if progress:
+                progress.setValue(count)
+                progress.close()
+
+        if sub:
+            self._expanded_attachment_folders.add(sub)
+        self._refresh_attachments_list(curr.attachments)
 
     def _on_attachments_dropped(self, paths: list[str], target_subfolder: str = "") -> None:
         """우측 첨부파일 패널로 파일/폴더 드래그 앤 드롭 시 프로그램 내부로 안전 복사 및 등록"""
@@ -4588,14 +4682,39 @@ class WorkManagerDialog(QDialog):
             return
 
         curr = self._open_sheets[self._active_sheet_index]
-        for path_str in paths:
-            p = Path(path_str)
-            if not p.exists():
-                continue
-            if p.is_dir():
-                self._import_folder_into_attachments(curr, p, parent_subfolder=target_subfolder)
-            else:
-                self._add_attachment_path(p, subfolder=target_subfolder)
+        valid_paths = [Path(p) for p in paths if Path(p).exists()]
+        if not valid_paths:
+            return
+
+        count = len(valid_paths)
+        progress = None
+        if count > 1:
+            progress = make_work_progress_dialog(
+                self,
+                "첨부파일 등록",
+                f"첨부파일 복사 및 등록 중... (0/{count})",
+                count,
+            )
+
+        try:
+            for idx, p in enumerate(valid_paths):
+                if progress:
+                    progress.setValue(idx)
+                    progress.setLabelText(f"첨부파일 복사 및 등록 중... ({idx+1}/{count})\n{p.name}")
+                    QApplication.processEvents()
+
+                if p.is_dir():
+                    self._import_folder_into_attachments(curr, p, parent_subfolder=target_subfolder)
+                else:
+                    self._add_attachment_path(p, subfolder=target_subfolder, refresh=False)
+        finally:
+            if progress:
+                progress.setValue(count)
+                progress.close()
+
+        if target_subfolder:
+            self._expanded_attachment_folders.add(target_subfolder)
+        self._refresh_attachments_list(curr.attachments)
 
     def _import_folder_into_attachments(self, sheet: WorkSheetData, folder_dir: Path, parent_subfolder: str = "") -> None:
         """폴더를 재귀적으로 탐색하여 첨부파일 계층 구조로 일괄 복사 및 등록"""
@@ -4755,32 +4874,52 @@ class WorkManagerDialog(QDialog):
         if res != QMessageBox.Yes:
             return
 
-        for item in items:
-            att = item.data(0, Qt.UserRole) or {}
-            if att.get("type") == "folder":
-                fp = att.get("folder_path", "")
-                if self.repository and curr.db_id and fp:
-                    try:
-                        self.repository.delete_work_attachment_folder(curr.db_id, fp)
-                    except Exception as e:
-                        logger.warning(f"Failed to delete attachment folder {fp}: {e}")
-                curr.attachments = [
-                    a for a in curr.attachments
-                    if not (
-                        (a.get("folder_path") == fp)
-                        or (a.get("folder_path") or "").startswith(f"{fp}/")
-                        or (a.get("file_type") == "folder" and a.get("name") == att.get("name"))
-                    )
-                ]
-            else:
-                att_id = att.get("id")
-                if self.repository and att_id:
-                    try:
-                        self.repository.delete_work_attachment(att_id, delete_file=True)
-                    except Exception as e:
-                        logger.warning(f"Failed to delete attachment {att}: {e}")
-                if att in curr.attachments:
-                    curr.attachments.remove(att)
+        progress = None
+        if count > 1 or (count == 1 and (items[0].data(0, Qt.UserRole) or {}).get("type") == "folder"):
+            progress = make_work_progress_dialog(
+                self,
+                "첨부파일 삭제",
+                f"첨부파일 삭제 중... (0/{count})",
+                count,
+            )
+
+        try:
+            for idx, item in enumerate(items):
+                att = item.data(0, Qt.UserRole) or {}
+                name = att.get("name", "항목")
+                if progress:
+                    progress.setValue(idx)
+                    progress.setLabelText(f"첨부파일 삭제 중... ({idx+1}/{count})\n{name}")
+                    QApplication.processEvents()
+
+                if att.get("type") == "folder":
+                    fp = att.get("folder_path", "")
+                    if self.repository and curr.db_id and fp:
+                        try:
+                            self.repository.delete_work_attachment_folder(curr.db_id, fp)
+                        except Exception as e:
+                            logger.warning(f"Failed to delete attachment folder {fp}: {e}")
+                    curr.attachments = [
+                        a for a in curr.attachments
+                        if not (
+                            (a.get("folder_path") == fp)
+                            or (a.get("folder_path") or "").startswith(f"{fp}/")
+                            or (a.get("file_type") == "folder" and a.get("name") == att.get("name"))
+                        )
+                    ]
+                else:
+                    att_id = att.get("id")
+                    if self.repository and att_id:
+                        try:
+                            self.repository.delete_work_attachment(att_id, delete_file=True)
+                        except Exception as e:
+                            logger.warning(f"Failed to delete attachment {att}: {e}")
+                    if att in curr.attachments:
+                        curr.attachments.remove(att)
+        finally:
+            if progress:
+                progress.setValue(count)
+                progress.close()
 
         self._mark_active_sheet_dirty()
         self._refresh_attachments_list(curr.attachments)
