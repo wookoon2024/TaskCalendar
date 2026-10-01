@@ -341,7 +341,6 @@ class CompactAttachmentTree(QTreeWidget):
     def drawRow(self, painter, option, index):
         is_sel = bool(self.selectionModel() and self.selectionModel().isSelected(index))
         is_hover = bool(option.state & QStyle.State_MouseOver)
-        is_parent = not index.parent().isValid()
 
         if is_sel or is_hover:
             painter.save()
@@ -350,17 +349,15 @@ class CompactAttachmentTree(QTreeWidget):
                 painter.setPen(Qt.PenStyle.NoPen)
                 bg_color = QColor("#E0F2FE") if is_sel else QColor("#F1F5F9")
                 painter.setBrush(bg_color)
-                if is_parent:
-                    row_rect = QRect(0, option.rect.y() + 1, option.rect.width(), option.rect.height() - 2)
-                else:
-                    vr = self.visualRect(index)
-                    row_rect = vr.adjusted(0, 1, -2, -1)
+                # option.rect 를 직접 사용해야 실제 행 위치와 정확히 일치
+                row_rect = QRect(0, option.rect.y() + 1, self.viewport().width(), option.rect.height() - 2)
                 painter.drawRoundedRect(row_rect, 4, 4)
             finally:
                 painter.restore()
 
         item_option = QStyleOptionViewItem(option)
-        item_option.rect = self.visualRect(index)
+        # visualRect 대신 option.rect 기반으로 들여쓰기 적용
+        item_option.rect = option.rect
         self.itemDelegate().paint(painter, item_option, index)
 
     def keyPressEvent(self, event):
@@ -441,22 +438,46 @@ class CompactAttachmentTree(QTreeWidget):
 
         # 2. 내부 파일/폴더 드래그 이동인 경우
         if event.mimeData().hasFormat("application/x-taskcalendar-att-internal"):
+            # 드롭 대상이 폴더 항목인지 먼저 확인
+            drop_on_folder = False
+            target_folder_item = None
+            if item:
+                item_data = item.data(0, Qt.UserRole) or {}
+                if item_data.get("type") == "folder":
+                    drop_on_folder = True
+                    target_folder_item = item
+
             super().dropEvent(event)
+
+            # Qt 내부 드래그로 아이템이 이동된 뒤 구조 정리
             self.blockSignals(True)
-            # 방어 코드: 일반 파일은 자식 항목을 가질 수 없으므로 루트로 분리
-            for i in range(self.topLevelItemCount() - 1, -1, -1):
-                top = self.topLevelItem(i)
-                data = top.data(0, Qt.UserRole) or {}
-                if data.get("type") != "folder" and top.childCount() > 0:
-                    while top.childCount() > 0:
-                        ch = top.takeChild(0)
-                        self.addTopLevelItem(ch)
-            self.blockSignals(False)
-            self.orderChanged.emit()
+            try:
+                # 파일 아이템이 폴더가 아닌 일반 파일 아이템의 자식이 되는 경우 방지
+                for i in range(self.topLevelItemCount() - 1, -1, -1):
+                    top = self.topLevelItem(i)
+                    data = top.data(0, Qt.UserRole) or {}
+                    if data.get("type") != "folder" and top.childCount() > 0:
+                        while top.childCount() > 0:
+                            ch = top.takeChild(0)
+                            self.addTopLevelItem(ch)
+                # 폴더를 모두 펼쳐서 이동 결과 바로 보이게
+                self.expandAll()
+            finally:
+                self.blockSignals(False)
+
+            # 화면을 즉시 강제 갱신 (이게 없으면 드롭 후 아이템이 안 보이거나 깨짐)
+            self.viewport().update()
+            self.update()
+
+            # QTimer로 다음 이벤트 루프에서 orderChanged 발행 (구조 안정화 후)
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self.orderChanged.emit)
+
             event.acceptProposedAction()
             return
 
         super().dropEvent(event)
+
 
 
 def extract_document_content(file_path: Path | str) -> tuple[str, bytes | None]:
