@@ -6885,6 +6885,11 @@ class MainWindow(QMainWindow):
                     dlg.close()
                 except Exception:
                     pass
+            if getattr(self, "_work_manager_dialog", None) is not None:
+                try:
+                    self._work_manager_dialog.close()
+                except Exception:
+                    pass
             self.repository.save()
         except Exception:
             pass

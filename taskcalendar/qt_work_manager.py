@@ -6,7 +6,7 @@ import subprocess
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QPoint, QRect, QSettings, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -250,6 +250,39 @@ class WorkSheetData:
         self.is_dirty: bool = False
 
 
+class WorkSheetTabBar(QTabBar):
+    """
+    엑셀/한글 스타일 하단 시트 탭 바
+    - 탭 제목이 좁아져서 조기 말줄임(...) 되지 않도록 텍스트 길이에 맞춰 자연스럽게 탭 너비 확장
+    - 탭 닫기(X) 버튼이 우측 테두리에 너무 붙지 않도록 편안한 여백(10px) 유지
+    """
+
+    def tabSizeHint(self, index: int) -> QSize:
+        hint = super().tabSizeHint(index)
+        text = self.tabText(index)
+        fm = self.fontMetrics()
+        text_w = fm.horizontalAdvance(text)
+        # 좌측 여백(14px) + 텍스트 너비 + 간격(10px) + 닫기버튼(14px) + 우측 여백(12px)
+        needed_w = 14 + text_w + 10 + 14 + 12
+        return QSize(max(needed_w, 110), max(hint.height(), 26))
+
+    def tabInserted(self, index: int) -> None:
+        super().tabInserted(index)
+        self.tabLayoutChange()
+
+    def tabLayoutChange(self) -> None:
+        super().tabLayoutChange()
+        for i in range(self.count()):
+            btn = self.tabButton(i, QTabBar.ButtonPosition.RightSide)
+            if btn:
+                tr = self.tabRect(i)
+                btn_w = btn.width()
+                btn_h = btn.height()
+                target_x = tr.right() - 10 - btn_w
+                target_y = tr.y() + (tr.height() - btn_h) // 2
+                btn.move(target_x, target_y)
+
+
 class WorkManagerDialog(QDialog):
     """
     3단 분할 레이아웃 업무 관리 및 인수인계 편람 창
@@ -288,6 +321,7 @@ class WorkManagerDialog(QDialog):
         self._init_ui()
         # 처음에 문서를 아무것도 띄우지 않음 (빈 상태 초기화)
         self._clear_editor_view()
+        self._restore_window_state()
 
     @property
     def _sheets(self) -> list[WorkSheetData]:
@@ -956,12 +990,12 @@ class WorkManagerDialog(QDialog):
         bottom_layout.setContentsMargins(4, 0, 4, 0)
         bottom_layout.setSpacing(6)
 
-        self.sheet_tab_bar = QTabBar()
+        self.sheet_tab_bar = WorkSheetTabBar()
         self.sheet_tab_bar.setDrawBase(False)
         self.sheet_tab_bar.setTabsClosable(True)
         self.sheet_tab_bar.setMovable(True)
         self.sheet_tab_bar.setExpanding(False)
-        self.sheet_tab_bar.setElideMode(Qt.TextElideMode.ElideRight)
+        self.sheet_tab_bar.setElideMode(Qt.TextElideMode.ElideNone)
         self.sheet_tab_bar.setStyleSheet(f"""
             QTabBar {{
                 background: transparent;
@@ -973,12 +1007,12 @@ class WorkManagerDialog(QDialog):
                 border: 1px solid {line};
                 border-bottom: none;
                 border-radius: 4px 4px 0px 0px;
-                padding: 4px 30px 4px 12px;
+                padding: 4px 34px 4px 12px;
                 margin-top: 3px;
                 margin-right: 2px;
                 font-size: 12px;
                 min-width: 100px;
-                max-width: 280px;
+                max-width: 320px;
                 height: 24px;
             }}
             QTabBar::tab:selected {{
@@ -990,7 +1024,7 @@ class WorkManagerDialog(QDialog):
                 border-bottom: 1px solid {panel};
                 margin-top: 0px;
                 height: 27px;
-                padding: 4px 30px 4px 12px;
+                padding: 4px 34px 4px 12px;
             }}
             QTabBar::tab:hover:!selected {{
                 background: #FFFFFF;
@@ -1001,7 +1035,6 @@ class WorkManagerDialog(QDialog):
                 image: url('{str(asset_path("memo_close.svg")).replace("\\", "/")}');
                 subcontrol-position: right;
                 subcontrol-origin: padding;
-                right: 8px;
                 width: 14px;
                 height: 14px;
                 padding: 2px;
@@ -1190,9 +1223,9 @@ class WorkManagerDialog(QDialog):
             self._expand_right_panel()
 
     def _get_tab_text(self, sheet: WorkSheetData) -> str:
-        title = sheet.title
-        if len(title) > 35:
-            title = title[:34] + "…"
+        title = sheet.title or "새 업무"
+        if len(title) > 30:
+            title = title[:29] + "…"
         if sheet.is_dirty:
             return f"● {title}"
         return title
@@ -1315,7 +1348,7 @@ class WorkManagerDialog(QDialog):
             self._clear_editor_view()
 
     def closeEvent(self, event):
-        """다이얼로그 닫힐 때 미저장 시트 확인"""
+        """다이얼로그 닫힐 때 미저장 시트 확인 및 창 상태 저장"""
         for sheet in list(self._open_sheets):
             if sheet.is_dirty:
                 self.open_sheet(sheet)
@@ -1335,7 +1368,66 @@ class WorkManagerDialog(QDialog):
                 elif clicked == btn_save:
                     self._save_sheet_sync(sheet)
 
+        self._save_window_state()
         event.accept()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._save_window_state()
+
+    def _restore_window_state(self) -> None:
+        """이전 종료 시점의 창 위치 및 크기 복원"""
+        try:
+            settings = QSettings("TaskCalendar", "WorkManager")
+            geo = settings.value("geometry")
+            if geo:
+                self.restoreGeometry(geo)
+                return
+        except Exception:
+            pass
+
+        if self.repository:
+            try:
+                import json
+                raw = self.repository.get_setting("work_manager_geometry", "")
+                if raw:
+                    data = json.loads(raw)
+                    w = data.get("w")
+                    h = data.get("h")
+                    x = data.get("x")
+                    y = data.get("y")
+                    if w and h:
+                        self.resize(w, h)
+                    if x is not None and y is not None:
+                        self.move(x, y)
+                    if data.get("maximized"):
+                        self.showMaximized()
+            except Exception:
+                pass
+
+    def _save_window_state(self) -> None:
+        """창 위치 및 크기 저장"""
+        try:
+            settings = QSettings("TaskCalendar", "WorkManager")
+            settings.setValue("geometry", self.saveGeometry())
+        except Exception:
+            pass
+
+        if self.repository:
+            try:
+                import json
+                geo = self.normalGeometry() if self.isMaximized() else self.geometry()
+                data = {
+                    "x": int(geo.x()),
+                    "y": int(geo.y()),
+                    "w": int(geo.width()),
+                    "h": int(geo.height()),
+                    "maximized": self.isMaximized(),
+                }
+                self.repository.set_setting("work_manager_geometry", json.dumps(data))
+                self.repository.save()
+            except Exception:
+                pass
 
     def _clear_editor_view(self) -> None:
         """열려있는 탭이 없을 때 에디터 및 우측 패널을 빈 상태로 초기화"""
@@ -1371,8 +1463,7 @@ class WorkManagerDialog(QDialog):
                     content_html=sheet.content_html,
                     hwpx_blob=sheet.hwpx_blob,
                 )
-            short_title = sheet.title if len(sheet.title) <= 15 else (sheet.title[:14] + "…")
-            self.sheet_tab_bar.setTabText(index, f"📄 {short_title}")
+            self._update_tab_title(sheet)
             self._refresh_category_tree()
 
     def _on_tab_context_menu(self, pos: QPoint) -> None:
@@ -1764,8 +1855,7 @@ class WorkManagerDialog(QDialog):
                         )
                     if sheet in self._open_sheets:
                         o_idx = self._open_sheets.index(sheet)
-                        short_title = sheet.title if len(sheet.title) <= 15 else (sheet.title[:14] + "…")
-                        self.sheet_tab_bar.setTabText(o_idx, f"📄 {short_title}")
+                        self._update_tab_title(sheet)
                         if o_idx == self._active_sheet_index:
                             self.work_title_input.setText(sheet.title)
                     self._refresh_category_tree()

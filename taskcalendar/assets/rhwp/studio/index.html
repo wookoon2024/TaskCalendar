@@ -13,6 +13,23 @@
   <title>rhwp-studio</title>
   <script type="module" crossorigin src="./assets/index-SVOdqzZ-.js"></script>
   <link rel="stylesheet" crossorigin href="./assets/index-DZuBJGwZ.css">
+  <style>
+    @font-face {
+      font-family: 'Pretendard';
+      src: local('Pretendard'), local('Pretendard-Regular'), url('/fonts/Pretendard-Regular.ttf') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Pretendard';
+      src: local('Pretendard Bold'), local('Pretendard-Bold'), url('/fonts/Pretendard-Bold.ttf') format('truetype');
+      font-weight: 700;
+      font-style: normal;
+    }
+    body, #studio-root, select, input, button {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+    }
+  </style>
 <link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
 <body>
   <div id="studio-root">
@@ -551,6 +568,7 @@
           <span class="sb-field">
             <label class="sb-field-label" for="font-name">글꼴</label>
             <select id="font-name" class="sb-combo sb-font" title="글꼴">
+              <option value="Pretendard" selected>Pretendard</option>
               <option value="함초롬바탕">함초롬바탕</option>
               <option value="함초롬돋움">함초롬돋움</option>
               <option value="맑은 고딕">맑은 고딕</option>
@@ -564,7 +582,7 @@
           <span class="sb-field">
             <label class="sb-field-label" for="font-size">크기</label>
             <span class="sb-size-group">
-              <input id="font-size" type="text" class="sb-size" title="글자 크기 (pt)" value="10.0" />
+              <input id="font-size" type="text" class="sb-size" title="글자 크기 (pt)" value="12.0" />
               <span class="sb-size-unit">pt</span>
               <span class="sb-size-arrows">
                 <button id="btn-size-up" class="sb-arrow" title="크기 크게">▲</button>

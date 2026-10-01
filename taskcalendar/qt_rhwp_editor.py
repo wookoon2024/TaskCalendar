@@ -7,6 +7,7 @@ import socket
 import threading
 from pathlib import Path
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -41,6 +42,12 @@ class _QuietStudioHandler(http.server.SimpleHTTPRequestHandler):
         # /rhwp/ 접두사 요청을 루트 기준으로도 매핑
         if clean_path.startswith("/rhwp/"):
             clean_path = clean_path[len("/rhwp"):]
+        if clean_path.startswith("/fonts/"):
+            fonts_dir = (Path(__file__).parent / "assets" / "fonts").resolve()
+            subpath = clean_path[len("/fonts/"):].split("?")[0].split("#")[0]
+            target = (fonts_dir / subpath).resolve()
+            if str(target).startswith(str(fonts_dir)) and target.exists():
+                return str(target)
         return super().translate_path(clean_path)
 
     def end_headers(self) -> None:
@@ -128,6 +135,7 @@ class RhwpEditorWidget(QWidget):
         else:
             from taskcalendar.rich_text_edit import RichTextEdit
             self._fallback_editor = RichTextEdit(self)
+            self._fallback_editor.setFont(QFont("Pretendard", 12))
             self._fallback_editor.textChanged.connect(self.contentChanged.emit)
             layout.addWidget(self._fallback_editor, 1)
             self.web_view = None
@@ -163,10 +171,47 @@ class RhwpEditorWidget(QWidget):
         """
         self.web_view.page().runJavaScript(js)
 
+    def _apply_default_font_and_size(self) -> None:
+        """한글 에디터 기본 글꼴을 Pretendard 12pt로 설정"""
+        if not self.web_view:
+            return
+        js = """
+        (function() {
+            try {
+                var deps = window.rhwpStudio?.plugins?.deps;
+                var wasm = deps?.wasm;
+                var bus = deps?.eventBus;
+                if (wasm && bus) {
+                    var fid = wasm.findOrCreateFontId?.('Pretendard');
+                    if (fid !== undefined && fid >= 0) {
+                        bus.emit('format-char', { fontId: fid, fontSize: 1200 });
+                    }
+                }
+                var fontSelect = document.getElementById('font-name');
+                if (fontSelect) {
+                    var opt = fontSelect.querySelector('option[value="Pretendard"]');
+                    if (!opt) {
+                        opt = document.createElement('option');
+                        opt.value = 'Pretendard';
+                        opt.textContent = 'Pretendard';
+                        fontSelect.insertBefore(opt, fontSelect.firstChild);
+                    }
+                    fontSelect.value = 'Pretendard';
+                }
+                var sizeInput = document.getElementById('font-size');
+                if (sizeInput) {
+                    sizeInput.value = '12.0';
+                }
+            } catch(e) {}
+        })();
+        """
+        self.web_view.page().runJavaScript(js)
+
     def _on_load_finished(self, ok: bool) -> None:
         self._is_loaded = ok
         if ok:
             self._inject_change_hook()
+            self._apply_default_font_and_size()
         if ok and self._pending_load is not None:
             title, text, hwpx_bytes = self._pending_load
             self._pending_load = None
@@ -178,6 +223,7 @@ class RhwpEditorWidget(QWidget):
     def load_document(self, title: str, text: str = "", hwpx_bytes: bytes | None = None) -> None:
         """HWPX 바이너리 또는 텍스트를 rhwp-studio에 로드"""
         if self._fallback_editor is not None:
+            self._fallback_editor.setFont(QFont("Pretendard", 12))
             self._fallback_editor.setPlainText(text)
             return
 
@@ -220,6 +266,33 @@ class RhwpEditorWidget(QWidget):
                         console.error(e);
                     }}
                 }}
+                setTimeout(function() {{
+                    try {{
+                        var wasm = deps?.wasm;
+                        var bus = deps?.eventBus;
+                        if (wasm && bus) {{
+                            var fid = wasm.findOrCreateFontId?.('Pretendard');
+                            if (fid !== undefined && fid >= 0) {{
+                                bus.emit('format-char', {{ fontId: fid, fontSize: 1200 }});
+                            }}
+                        }}
+                        var fontSelect = document.getElementById('font-name');
+                        if (fontSelect) {{
+                            var opt = fontSelect.querySelector('option[value="Pretendard"]');
+                            if (!opt) {{
+                                opt = document.createElement('option');
+                                opt.value = 'Pretendard';
+                                opt.textContent = 'Pretendard';
+                                fontSelect.insertBefore(opt, fontSelect.firstChild);
+                            }}
+                            fontSelect.value = 'Pretendard';
+                        }}
+                        var sizeInput = document.getElementById('font-size');
+                        if (sizeInput) {{
+                            sizeInput.value = '12.0';
+                        }}
+                    }} catch(err) {{}}
+                }}, 150);
             }})();
             """
         self.web_view.page().runJavaScript(js)
