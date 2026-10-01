@@ -2359,6 +2359,7 @@ class WorkManagerDialog(QDialog):
         self._expanded_category_ids: set[int] = set()
         self._has_saved_expanded_ids: bool = False
         self._expanded_attachment_folders: set[str] = set()
+        self._collapsed_attachment_folders: set[str] = set()
 
         self._load_data_from_db()
         self._init_ui()
@@ -4392,7 +4393,8 @@ class WorkManagerDialog(QDialog):
             parts = fp.split("/")
             name = parts[-1]
             parent_fp = "/".join(parts[:-1]) if len(parts) > 1 else ""
-            is_expanded = fp in self._expanded_attachment_folders
+            # 기본적으로 모든 폴더는 열린 상태(📂), 사용자가 명시적으로 접은 폴더만 닫힘(📁)
+            is_expanded = fp not in self._collapsed_attachment_folders
             icon = "📂" if is_expanded else "📁"
             f_item = QTreeWidgetItem([f"{icon} {name}"])
             f_item.setData(0, Qt.UserRole, {"type": "folder", "name": name, "folder_path": fp})
@@ -4429,9 +4431,11 @@ class WorkManagerDialog(QDialog):
             else:
                 self.file_list.addTopLevelItem(file_item)
 
-        # 3. 폴더 펼침 상태 적용
+        # 3. 폴더 기본 펼침 상태 적용 (명시적으로 접은 폴더만 닫힘)
         for fp, f_item in folder_items.items():
-            if fp in self._expanded_attachment_folders:
+            if fp in self._collapsed_attachment_folders:
+                f_item.setExpanded(False)
+            else:
                 f_item.setExpanded(True)
 
         self.file_list.blockSignals(False)
@@ -4441,6 +4445,7 @@ class WorkManagerDialog(QDialog):
         data = item.data(0, Qt.UserRole) or {}
         if data.get("type") == "folder":
             fp = data.get("folder_path", "")
+            self._collapsed_attachment_folders.discard(fp)
             self._expanded_attachment_folders.add(fp)
             item.setText(0, f"📂 {data.get('name')}")
 
@@ -4448,6 +4453,7 @@ class WorkManagerDialog(QDialog):
         data = item.data(0, Qt.UserRole) or {}
         if data.get("type") == "folder":
             fp = data.get("folder_path", "")
+            self._collapsed_attachment_folders.add(fp)
             self._expanded_attachment_folders.discard(fp)
             item.setText(0, f"📁 {data.get('name')}")
 
