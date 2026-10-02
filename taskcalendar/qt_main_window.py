@@ -618,11 +618,6 @@ class DraggableCalendarEntryChip(QFrame):
                 icon_lbl.setPixmap(pix.scaled(15, 15, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
                 icon_lbl.setStyleSheet("background: transparent; border: none; margin-right: 2px;")
                 chip_layout.addWidget(icon_lbl)
-        elif getattr(entry, "linked_work_id", None):
-            link_lbl = QLabel("💼")
-            link_lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            link_lbl.setStyleSheet("background: transparent; border: none; font-size: 10px; margin-right: 2px;")
-            chip_layout.addWidget(link_lbl)
         if time_text:
             time_label = QLabel(time_text)
             time_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -4974,11 +4969,15 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        has_work_link = bool(getattr(entry, "linked_work_id", None))
+        has_work_link = bool(getattr(entry, "linked_work_id", None)) or (bool(entry.title) and entry.title.startswith("[업무]"))
         if has_work_link:
-            work_label = "💼 해당 업무로 바로 가기" if getattr(entry, "linked_work_type", "work") == "work" else "📁 해당 업무 분류(폴더)로 바로 가기"
+            work_label = "💼 해당 업무로 바로 가기" if getattr(entry, "linked_work_type", "work") != "folder" else "📁 해당 업무 분류(폴더)로 바로 가기"
             work_act = menu.addAction(work_label)
-            work_act.triggered.connect(lambda _=False, e=entry: self.open_linked_work(e.linked_work_id, getattr(e, "linked_work_type", "work")))
+            work_act.triggered.connect(lambda _=False, e=entry: self.open_linked_work(
+                e.linked_work_id,
+                getattr(e, "linked_work_type", "work") or "work",
+                title=e.title or "",
+            ))
             menu.addSeparator()
 
         edit_act = menu.addAction("✏️ 일정 수정")
@@ -4988,7 +4987,7 @@ class MainWindow(QMainWindow):
 
         menu.exec(global_pos)
 
-    def open_linked_work(self, work_id: int | None, work_type: str = "work") -> None:
+    def open_linked_work(self, work_id: int | None, work_type: str = "work", title: str = "") -> None:
         """연결된 업무 또는 분류 폴더로 WorkManager를 열고 해당 항목 선택"""
         self._open_work_manager()
         dlg = getattr(self, "_work_manager_dialog", None)
@@ -4996,7 +4995,7 @@ class MainWindow(QMainWindow):
             dlg.show()
             dlg.raise_()
             dlg.activateWindow()
-            dlg.select_work_item_or_category(work_id, work_type)
+            dlg.select_work_item_or_category(work_id, work_type, title=title)
 
     def register_schedule_from_work(
         self,
@@ -5019,7 +5018,7 @@ class MainWindow(QMainWindow):
             start_date=target_day,
             end_date=target_day,
             all_day=True,
-            icon_type="💼",
+            icon_type="",
             linked_work_id=work_id,
             linked_work_type=work_type,
         )
@@ -5029,8 +5028,6 @@ class MainWindow(QMainWindow):
             if res:
                 res.linked_work_id = work_id
                 res.linked_work_type = work_type
-                if not res.icon_type:
-                    res.icon_type = "💼"
                 saved = self.repository.upsert_entry(res)
                 self.repository.save()
                 self._load_month_entries()

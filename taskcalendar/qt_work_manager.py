@@ -92,6 +92,7 @@ from taskcalendar.paths import asset_path
 from taskcalendar.qt_styles import _shade, resolve_palette
 from taskcalendar.qt_rhwp_editor import RhwpEditorWidget
 from taskcalendar.rich_text_edit import RichTextEdit
+from taskcalendar.models import CalendarEntry
 from taskcalendar.storage import EncryptedRepository
 
 logger = logging.getLogger(__name__)
@@ -3664,7 +3665,18 @@ class WorkManagerDialog(QDialog):
         right_main_widget = QWidget()
         right_layout = QVBoxLayout(right_main_widget)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(8)
+        right_layout.setSpacing(0)
+
+        self.right_v_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.right_v_splitter.setChildrenCollapsible(False)
+
+        # -------------------------------------------------------------
+        # 1) 상단: 첨부파일 섹션
+        # -------------------------------------------------------------
+        attach_section = QWidget()
+        attach_layout = QVBoxLayout(attach_section)
+        attach_layout.setContentsMargins(0, 0, 0, 4)
+        attach_layout.setSpacing(6)
 
         right_header = QHBoxLayout()
         self.right_title = QLabel("📎 첨부파일 (0)")
@@ -3683,7 +3695,7 @@ class WorkManagerDialog(QDialog):
         btn_add_file.setStyleSheet(self._sub_btn_style())
         btn_add_file.clicked.connect(self._on_add_attachment)
         right_header.addWidget(btn_add_file)
-        right_layout.addLayout(right_header)
+        attach_layout.addLayout(right_header)
 
         # 계층형 첨부파일 트리 위젯
         self.file_list = CompactAttachmentTree()
@@ -3726,25 +3738,115 @@ class WorkManagerDialog(QDialog):
         self.file_list.itemCollapsed.connect(self._on_attachment_item_collapsed)
         self.file_list.filesDropped.connect(self._on_attachments_dropped)
         self.file_list.orderChanged.connect(self._on_attachment_order_changed)
-        right_layout.addWidget(self.file_list)
+        attach_layout.addWidget(self.file_list, 1)
 
         # 하단 액션 버튼 (열기, 삭제)
         file_btn_row = QHBoxLayout()
         file_btn_row.setSpacing(6)
 
         btn_open_file = QPushButton("열기")
-        btn_open_file.setFixedHeight(26)
+        btn_open_file.setFixedHeight(24)
         btn_open_file.setStyleSheet(self._sub_btn_style())
         btn_open_file.clicked.connect(self._open_selected_attachment)
         file_btn_row.addWidget(btn_open_file)
 
         btn_delete_file = QPushButton("삭제")
-        btn_delete_file.setFixedHeight(26)
+        btn_delete_file.setFixedHeight(24)
         btn_delete_file.setStyleSheet(self._sub_btn_style())
         btn_delete_file.clicked.connect(self._delete_selected_attachment)
         file_btn_row.addWidget(btn_delete_file)
 
-        right_layout.addLayout(file_btn_row)
+        attach_layout.addLayout(file_btn_row)
+        self.right_v_splitter.addWidget(attach_section)
+
+        # -------------------------------------------------------------
+        # 2) 하단: 관련 일정 섹션
+        # -------------------------------------------------------------
+        schedule_section = QWidget()
+        schedule_layout = QVBoxLayout(schedule_section)
+        schedule_layout.setContentsMargins(0, 6, 0, 0)
+        schedule_layout.setSpacing(6)
+
+        sched_header = QHBoxLayout()
+        self.sched_title = QLabel("📅 관련 일정 (0)")
+        self.sched_title.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {text}; border: none;")
+        sched_header.addWidget(self.sched_title)
+        sched_header.addStretch(1)
+
+        btn_add_sched = QPushButton("+ 일정")
+        btn_add_sched.setFixedHeight(22)
+        btn_add_sched.setStyleSheet(self._sub_btn_style())
+        btn_add_sched.clicked.connect(self._on_add_work_schedule_clicked)
+        sched_header.addWidget(btn_add_sched)
+        schedule_layout.addLayout(sched_header)
+
+        # 1줄씩 목록식으로 표시하는 일정 목록 위젯
+        self.work_schedule_list = QListWidget()
+        self.work_schedule_list.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.work_schedule_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.work_schedule_list.customContextMenuRequested.connect(self._on_schedule_context_menu)
+        self.work_schedule_list.itemDoubleClicked.connect(self._on_schedule_item_double_clicked)
+        self.work_schedule_list.setStyleSheet(f"""
+            QListWidget {{
+                border: 1px solid {line};
+                border-radius: 4px;
+                background-color: {panel_alt};
+                color: {text};
+                font-size: 11px;
+                padding: 2px;
+                outline: none;
+            }}
+            QListWidget::item {{
+                height: 24px;
+                padding: 2px 4px;
+                margin: 1px 0px;
+                border: none;
+                border-radius: 3px;
+            }}
+            QListWidget::item:hover:!selected {{
+                background-color: #F1F5F9;
+                color: #0F172A;
+            }}
+            QListWidget::item:selected {{
+                background-color: #E0F2FE;
+                color: #0284C7;
+                font-weight: 600;
+                border: none;
+                outline: none;
+            }}
+        """)
+        schedule_layout.addWidget(self.work_schedule_list, 1)
+
+        # 일정 액션 버튼 (이동, 수정, 삭제)
+        sched_btn_row = QHBoxLayout()
+        sched_btn_row.setSpacing(6)
+
+        btn_goto_sched = QPushButton("이동")
+        btn_goto_sched.setFixedHeight(24)
+        btn_goto_sched.setStyleSheet(self._sub_btn_style())
+        btn_goto_sched.clicked.connect(self._on_goto_calendar_clicked)
+        sched_btn_row.addWidget(btn_goto_sched)
+
+        btn_edit_sched = QPushButton("수정")
+        btn_edit_sched.setFixedHeight(24)
+        btn_edit_sched.setStyleSheet(self._sub_btn_style())
+        btn_edit_sched.clicked.connect(self._on_edit_work_schedule_clicked)
+        sched_btn_row.addWidget(btn_edit_sched)
+
+        btn_delete_sched = QPushButton("삭제")
+        btn_delete_sched.setFixedHeight(24)
+        btn_delete_sched.setStyleSheet(self._sub_btn_style())
+        btn_delete_sched.clicked.connect(self._on_delete_work_schedule_clicked)
+        sched_btn_row.addWidget(btn_delete_sched)
+
+        schedule_layout.addLayout(sched_btn_row)
+        self.right_v_splitter.addWidget(schedule_section)
+
+        self.right_v_splitter.setStretchFactor(0, 1)
+        self.right_v_splitter.setStretchFactor(1, 1)
+        self.right_v_splitter.setSizes([320, 260])
+
+        right_layout.addWidget(self.right_v_splitter)
         right_h_layout.addWidget(right_main_widget, 1)
 
         right_container_layout.addWidget(self.right_panel)
@@ -4402,6 +4504,7 @@ class WorkManagerDialog(QDialog):
         self.meta_assignee_input.setText("")
         self.meta_deadline_input.setText("")
         self._refresh_attachments_list([])
+        self._refresh_work_schedules_list(None)
         self.category_tree.blockSignals(True)
         self.category_tree.clearSelection()
         self.category_tree.blockSignals(False)
@@ -4608,6 +4711,9 @@ class WorkManagerDialog(QDialog):
 
         # 우측 첨부파일 갱신
         self._refresh_attachments_list(sheet.attachments)
+
+        # 우측 관련 일정 목록 갱신
+        self._refresh_work_schedules_list(sheet)
 
         # 좌측 카테고리 트리 선택 동기화
         self._sync_tree_selection(index)
@@ -4977,44 +5083,58 @@ class WorkManagerDialog(QDialog):
             return
         if not sheet.db_id and self.repository:
             self._save_current_sheet_data()
+        sheet_title = (sheet.title or "새 업무").strip()
+        reg_title = sheet_title if sheet_title.startswith("[업무]") else f"[업무] {sheet_title}"
         saved = self.main_window.register_schedule_from_work(
-            title=sheet.title or "새 업무",
-            description=sheet.title or "새 업무",
+            title=reg_title,
+            description=sheet_title,
             work_id=sheet.db_id,
             work_type="work",
         )
         if saved:
             Toast(self, f"'{sheet.title}' 일정이 캘린더에 등록되었습니다.")
+            self._refresh_work_schedules_list(sheet)
 
     def _register_category_to_calendar(self, cat_name: str, cat_id: int | None) -> None:
         """업무 분류(폴더)를 캘린더 일정으로 등록"""
         if not self.main_window:
             QMessageBox.warning(self, "오류", "메인 캘린더 창을 찾을 수 없습니다.")
             return
+        cat_clean = cat_name.strip()
+        reg_title = cat_clean if cat_clean.startswith("[업무]") else f"[업무] {cat_clean}"
         saved = self.main_window.register_schedule_from_work(
-            title=cat_name,
-            description=cat_name,
+            title=reg_title,
+            description=cat_clean,
             work_id=cat_id,
             work_type="folder",
         )
         if saved:
             Toast(self, f"'{cat_name}' 분류 일정이 캘린더에 등록되었습니다.")
+            curr = self._get_current_sheet()
+            if curr:
+                self._refresh_work_schedules_list(curr)
 
-    def select_work_item_or_category(self, item_id: int | None, item_type: str = "work") -> None:
+    def select_work_item_or_category(self, item_id: int | None, item_type: str = "work", title: str = "") -> None:
         """캘린더에서 링크 클릭 시 해당 업무 또는 폴더를 열고 트리를 선택"""
-        if item_id is None:
-            return
         if item_type in ("work", "item"):
             target_sheet = None
-            for s in self._all_sheets:
-                if s.db_id == item_id:
-                    target_sheet = s
-                    break
+            if item_id:
+                for s in self._all_sheets:
+                    if s.db_id == item_id:
+                        target_sheet = s
+                        break
+            if not target_sheet and title:
+                clean_title = title.replace("[업무]", "").strip()
+                for s in self._all_sheets:
+                    if s.title.strip() == clean_title or clean_title in s.title:
+                        target_sheet = s
+                        break
             if target_sheet:
                 self.open_sheet(target_sheet)
                 self._select_sheet_in_tree(target_sheet)
         elif item_type in ("folder", "category"):
-            self._select_category_in_tree(item_id)
+            if item_id:
+                self._select_category_in_tree(item_id)
 
     def _select_sheet_in_tree(self, sheet: WorkSheetData) -> None:
         """트리에서 sheet 항목을 찾아 부모 펼치고 선택"""
@@ -5402,6 +5522,171 @@ class WorkManagerDialog(QDialog):
 
         self.file_list.blockSignals(False)
         self.right_title.setText(f"📎 첨부파일 ({file_count})")
+
+    def _refresh_work_schedules_list(self, sheet: WorkSheetData | None = None) -> None:
+        """현재 시트와 연결된 캘린더 일정 목록을 갱신하여 1줄씩 표시"""
+        if not hasattr(self, "work_schedule_list") or not self.work_schedule_list:
+            return
+        self.work_schedule_list.clear()
+        if sheet is None:
+            sheet = self._get_current_sheet()
+        if not sheet or not self.repository:
+            if hasattr(self, "sched_title"):
+                self.sched_title.setText("📅 관련 일정 (0)")
+            return
+
+        entries = self.repository.list_entries_for_work(work_id=sheet.db_id, work_title=sheet.title)
+        if hasattr(self, "sched_title"):
+            self.sched_title.setText(f"📅 관련 일정 ({len(entries)})")
+
+        if not entries:
+            empty_item = QListWidgetItem("(등록된 일정 없음)")
+            empty_item.setFlags(Qt.ItemFlag.NoItemFlags)
+            empty_item.setForeground(QColor(self.palette.get("muted", "#94A3B8")))
+            self.work_schedule_list.addItem(empty_item)
+            return
+
+        weekdays = ["월", "화", "수", "목", "금", "토", "일"]
+        for entry in entries:
+            # 1줄 형식: 날짜 / 제목
+            if entry.start_date and entry.end_date and entry.start_date != entry.end_date:
+                date_txt = f"{entry.start_date.strftime('%m.%d')}~{entry.end_date.strftime('%m.%d')}"
+            else:
+                d = entry.start_date or entry.day or date.today()
+                w = weekdays[d.weekday()]
+                date_txt = f"{d.strftime('%m.%d')}({w})"
+
+            time_txt = f" {entry.start_time}" if (not entry.all_day and entry.start_time) else ""
+            display_title = entry.title or sheet.title or "일정"
+            line_txt = f"📌 {date_txt}{time_txt}  {display_title}"
+
+            item = QListWidgetItem(line_txt)
+            item.setData(Qt.UserRole, entry.entry_id)
+            item.setData(Qt.UserRole + 1, entry)
+            item.setToolTip(f"제목: {entry.title}\n일시: {date_txt}{time_txt}\n설명: {entry.description or '(없음)'}\n(더블클릭 시 캘린더로 이동 / 우클릭 메뉴)")
+            self.work_schedule_list.addItem(item)
+
+    def _on_add_work_schedule_clicked(self) -> None:
+        """우측 패널 '+ 일정' 버튼 클릭 시 현재 업무의 캘린더 일정 등록 다이얼로그 호출"""
+        sheet = self._get_current_sheet()
+        if not sheet:
+            Toast(self, "선택된 업무가 없습니다.")
+            return
+        self._register_sheet_to_calendar(sheet)
+
+    def _on_goto_calendar_clicked(self) -> None:
+        """선택한 일정을 메인 캘린더에서 보기 위해 캘린더로 이동"""
+        item = self.work_schedule_list.currentItem()
+        if not item:
+            Toast(self, "이동할 일정을 선택하세요.")
+            return
+        entry = item.data(Qt.UserRole + 1)
+        if not isinstance(entry, CalendarEntry):
+            return
+        self._jump_to_calendar_entry(entry)
+
+    def _jump_to_calendar_entry(self, entry: CalendarEntry) -> None:
+        if not self.main_window:
+            return
+        target_day = entry.start_date or entry.day or date.today()
+        self.main_window.current_date = target_day
+        self.main_window.selected_day = target_day
+        self.main_window._load_month_entries()
+        self.main_window._render_calendar()
+        self.main_window._render_sidebar()
+        self.main_window.show()
+        self.main_window.raise_()
+        self.main_window.activateWindow()
+
+    def _on_schedule_item_double_clicked(self, item: QListWidgetItem) -> None:
+        entry = item.data(Qt.UserRole + 1)
+        if isinstance(entry, CalendarEntry):
+            self._jump_to_calendar_entry(entry)
+
+    def _on_edit_work_schedule_clicked(self) -> None:
+        item = self.work_schedule_list.currentItem()
+        if not item:
+            Toast(self, "수정할 일정을 선택하세요.")
+            return
+        entry = item.data(Qt.UserRole + 1)
+        if not isinstance(entry, CalendarEntry):
+            return
+        if not self.main_window:
+            return
+        from taskcalendar.qt_dialogs import EntryDialog
+        dlg = EntryDialog(self, entry.entry_type, entry.day or date.today(), entry)
+        if dlg.exec():
+            res = dlg.result
+            if res:
+                self.repository.upsert_entry(res)
+                self.repository.save()
+                self.main_window._load_month_entries()
+                self.main_window._render_calendar()
+                self.main_window._render_sidebar()
+                self._refresh_work_schedules_list()
+                Toast(self, "일정이 수정되었습니다.")
+
+    def _on_delete_work_schedule_clicked(self) -> None:
+        item = self.work_schedule_list.currentItem()
+        if not item:
+            Toast(self, "삭제할 일정을 선택하세요.")
+            return
+        entry = item.data(Qt.UserRole + 1)
+        if not isinstance(entry, CalendarEntry):
+            return
+        reply = QMessageBox.question(
+            self,
+            "일정 삭제",
+            f"'{entry.title}' 일정을 삭제하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.repository.delete_entry(entry.entry_id)
+            self.repository.save()
+            if self.main_window:
+                self.main_window._load_month_entries()
+                self.main_window._render_calendar()
+                self.main_window._render_sidebar()
+            self._refresh_work_schedules_list()
+            Toast(self, "일정이 삭제되었습니다.")
+
+    def _on_schedule_context_menu(self, pos: QPoint) -> None:
+        item = self.work_schedule_list.itemAt(pos)
+        if not item:
+            return
+        entry = item.data(Qt.UserRole + 1)
+        if not isinstance(entry, CalendarEntry):
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {self.palette.get('panel', '#FFFFFF')};
+                color: {self.palette.get('text', '#1F2328')};
+                border: 1px solid {self.palette.get('line', '#CBD5E0')};
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 14px;
+                border-radius: 4px;
+                font-size: 11px;
+            }}
+            QMenu::item:selected {{
+                background-color: #F1F5F9;
+                color: #0284C7;
+            }}
+        """)
+        act_jump = menu.addAction("📅 캘린더에서 보기")
+        act_jump.triggered.connect(lambda: self._jump_to_calendar_entry(entry))
+        act_edit = menu.addAction("✏️ 일정 수정")
+        act_edit.triggered.connect(self._on_edit_work_schedule_clicked)
+        menu.addSeparator()
+        act_del = menu.addAction("🗑️ 일정 삭제")
+        act_del.triggered.connect(self._on_delete_work_schedule_clicked)
+
+        menu.exec(self.work_schedule_list.mapToGlobal(pos))
 
     def _on_attachment_item_expanded(self, item: QTreeWidgetItem) -> None:
         data = item.data(0, Qt.UserRole) or {}
@@ -7114,33 +7399,61 @@ class WorkManagerDialog(QDialog):
                 }}
             """)
 
-        if hasattr(self, "attachment_tree") and self.attachment_tree:
-            self.attachment_tree.setStyleSheet(f"""
+        if hasattr(self, "file_list") and self.file_list:
+            self.file_list.setStyleSheet(f"""
                 QTreeWidget {{
                     border: 1px solid {line};
                     border-radius: 4px;
                     background-color: {panel_alt};
                     color: {text};
                     font-size: 11px;
-                    padding: 2px 2px;
+                    padding: 2px;
                     outline: none;
                 }}
                 QTreeWidget::item {{
                     height: 22px;
                     padding: 0px 2px;
-                    margin: 1px 1px;
+                    margin: 1px 0px;
                     border: none;
+                    border-radius: 3px;
                 }}
-                QTreeWidget::item:hover {{
+                QTreeWidget::item:hover:!selected {{
                     background-color: {accent_soft};
                     color: {accent};
-                    border-radius: 3px;
                 }}
                 QTreeWidget::item:selected {{
-                    background-color: {accent};
-                    color: #FFFFFF;
-                    font-weight: bold;
+                    background-color: #E0F2FE;
+                    color: #0284C7;
+                    font-weight: 600;
+                }}
+            """)
+
+        if hasattr(self, "work_schedule_list") and self.work_schedule_list:
+            self.work_schedule_list.setStyleSheet(f"""
+                QListWidget {{
+                    border: 1px solid {line};
+                    border-radius: 4px;
+                    background-color: {panel_alt};
+                    color: {text};
+                    font-size: 11px;
+                    padding: 2px;
+                    outline: none;
+                }}
+                QListWidget::item {{
+                    height: 24px;
+                    padding: 2px 4px;
+                    margin: 1px 0px;
+                    border: none;
                     border-radius: 3px;
+                }}
+                QListWidget::item:hover:!selected {{
+                    background-color: {accent_soft};
+                    color: {accent};
+                }}
+                QListWidget::item:selected {{
+                    background-color: #E0F2FE;
+                    color: #0284C7;
+                    font-weight: 600;
                 }}
             """)
 

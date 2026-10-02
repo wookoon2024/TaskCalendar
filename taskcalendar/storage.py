@@ -894,6 +894,38 @@ class EncryptedRepository:
         rows = self.connection.execute("SELECT * FROM entries ORDER BY created_at ASC, id ASC").fetchall()
         return [self._row_to_entry(row) for row in rows]
 
+    def list_entries_for_work(self, work_id: int | None = None, work_title: str = "") -> list[CalendarEntry]:
+        """특정 업무(ID 또는 제목)와 연결된 캘린더 일정 목록 반환"""
+        clauses: list[str] = []
+        params: list[object] = []
+        if work_id is not None and int(work_id) > 0:
+            clauses.append("(linked_work_id = ? AND linked_work_type = 'work')")
+            params.append(int(work_id))
+        if work_title:
+            cleaned = work_title.strip()
+            if cleaned:
+                # [업무] 접두어가 붙어있는 경우와 순수 제목 둘 다 매칭
+                title_with_tag = f"[업무] {cleaned}" if not cleaned.startswith("[업무]") else cleaned
+                clauses.append("(title = ? OR title = ? OR title LIKE ?)")
+                params.extend([cleaned, title_with_tag, f"%{cleaned}%"])
+        if not clauses:
+            return []
+        sql = f"""
+            SELECT * FROM entries
+            WHERE entry_type = 'schedule' AND ({' OR '.join(clauses)})
+            ORDER BY COALESCE(start_date, day) ASC, id ASC
+        """
+        rows = self.connection.execute(sql, tuple(params)).fetchall()
+        # 중복 entry_id 제거
+        seen_ids = set()
+        result: list[CalendarEntry] = []
+        for row in rows:
+            entry = self._row_to_entry(row)
+            if entry.entry_id not in seen_ids:
+                seen_ids.add(entry.entry_id)
+                result.append(entry)
+        return result
+
     def replace_all_entries(self, entries: list[CalendarEntry]) -> int:
         rows = self.connection.execute("SELECT attachments_json FROM entries").fetchall()
         old_attachments: list[str] = []

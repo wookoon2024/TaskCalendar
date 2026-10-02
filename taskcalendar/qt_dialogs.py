@@ -1562,7 +1562,7 @@ class EntryDialog(QDialog):
             sticker_wrap.setFixedHeight(30)
             sticker_wrap_layout = QHBoxLayout(sticker_wrap)
             sticker_wrap_layout.setContentsMargins(0, 0, 0, 0)
-            sticker_wrap_layout.setSpacing(6)
+            sticker_wrap_layout.setSpacing(4)
 
             self.sticker_btn = QPushButton()
             self.sticker_btn.setCursor(Qt.PointingHandCursor)
@@ -1573,16 +1573,32 @@ class EntryDialog(QDialog):
             self.sticker_clear_btn = QPushButton("✕")
             self.sticker_clear_btn.setToolTip("스티커 제거")
             self.sticker_clear_btn.setCursor(Qt.PointingHandCursor)
-            self.sticker_clear_btn.setFixedSize(24, 30)
-            self.sticker_clear_btn.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {self.palette['danger']}; background: {self.palette['panel_alt']}; border: 1px solid {self.palette['line']}; border-radius: 4px;")
+            self.sticker_clear_btn.setFixedSize(24, 24)
+            self.sticker_clear_btn.setStyleSheet(f"""
+                QPushButton {{
+                    font-weight: bold;
+                    font-size: 11px;
+                    color: {self.palette['danger']};
+                    background: {self.palette['panel_alt']};
+                    border: 1px solid {self.palette['line']};
+                    border-radius: 4px;
+                    min-width: 24px;
+                    max-width: 24px;
+                    min-height: 24px;
+                    max-height: 24px;
+                    padding: 0px;
+                }}
+                QPushButton:hover {{
+                    background: #FEE2E2;
+                    border-color: {self.palette['danger']};
+                }}
+            """)
             self.sticker_clear_btn.clicked.connect(self._clear_sticker)
-            sticker_wrap_layout.addWidget(self.sticker_clear_btn)
+            sticker_wrap_layout.addWidget(self.sticker_clear_btn, 0, Qt.AlignmentFlag.AlignVCenter)
             sticker_wrap_layout.addStretch(1)
 
             self._refresh_sticker_button()
             row0_layout.addWidget(sticker_wrap)
-
-            sticker_wrap.setFixedWidth(145)
 
             row0_layout.addSpacing(16)
 
