@@ -104,33 +104,6 @@ class DateCalculatorDialog(QDialog):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
 
-        # Header Box
-        header_card = QFrame()
-        header_card.setObjectName("card")
-        header_card.setStyleSheet(
-            f"QFrame#card {{ background: {self.palette.get('panel_alt', '#f8fafc')}; "
-            f"border: 1px solid {self.palette.get('line', '#dbe3ec')}; border-radius: 10px; padding: 6px 12px; }}"
-        )
-        h_layout = QHBoxLayout(header_card)
-        h_layout.setContentsMargins(8, 4, 8, 4)
-
-        icon_label = QLabel("📅")
-        icon_label.setStyleSheet("font-size: 20px;")
-        h_layout.addWidget(icon_label)
-
-        title_layout = QVBoxLayout()
-        title_layout.setSpacing(2)
-        title_lbl = QLabel("K캘린더 스마트 날짜 계산기")
-        title_lbl.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {self.palette.get('text', '#1f2328')};")
-        sub_lbl = QLabel("D-Day, 기념일, 영업일(법정공휴일 제외), 나이 및 근속기간을 손쉽게 계산하고 일정으로 등록하세요.")
-        sub_lbl.setStyleSheet(f"font-size: 11px; color: {self.palette.get('muted', '#667085')};")
-        title_layout.addWidget(title_lbl)
-        title_layout.addWidget(sub_lbl)
-        h_layout.addLayout(title_layout)
-        h_layout.addStretch()
-
-        root.addWidget(header_card)
-
         # Tab Widget
         self.tabs = QTabWidget()
         self.tabs.setObjectName("dateCalcTabs")
