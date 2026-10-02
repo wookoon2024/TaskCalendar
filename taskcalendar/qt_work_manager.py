@@ -2997,16 +2997,6 @@ class WorkManagerDialog(QDialog):
         btn_save_work.clicked.connect(self._on_save_button_clicked)
         top_layout.addWidget(btn_save_work)
 
-        # 업무 설정 버튼 (탐색기 연동 및 편람 기본값)
-        btn_work_settings = QPushButton("설정")
-        btn_work_settings.setFixedHeight(30)
-        btn_work_settings.setAutoDefault(False)
-        btn_work_settings.setDefault(False)
-        btn_work_settings.setToolTip("업무 관리 및 탐색기 연동 환경설정")
-        btn_work_settings.setStyleSheet(top_btn_style)
-        btn_work_settings.clicked.connect(self._open_work_settings)
-        top_layout.addWidget(btn_work_settings)
-
         main_layout.addWidget(top_bar)
 
         # =========================================================================

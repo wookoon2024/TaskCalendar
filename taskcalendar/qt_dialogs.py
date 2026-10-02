@@ -5823,7 +5823,7 @@ class SettingsDialog(QDialog):
         title_row.addWidget(ver_badge)
         title_row.addStretch(1)
         title_box.addLayout(title_row)
-        subtitle = QLabel("기본, 캘린더, 스킨, 메모, 단축키, 데이터, 업무 설정을 여기에서 관리합니다.")
+        subtitle = QLabel("기본, 캘린더, 메모, 업무, 스킨, 단축키, 데이터 설정을 여기에서 관리합니다.")
         subtitle.setObjectName("subtitle")
         title_box.addWidget(subtitle)
         root.addLayout(title_box)
@@ -5846,11 +5846,11 @@ class SettingsDialog(QDialog):
         items = [
             ("⚙️ 기본", 0),
             ("📅 캘린더", 1),
-            ("🎨 스킨", 2),
-            ("📝 메모", 3),
-            ("⌨️ 단축키", 4),
-            ("💾 데이터", 5),
-            ("📑 업무", 6),
+            ("📝 메모", 2),
+            ("📑 업무", 3),
+            ("🎨 스킨", 4),
+            ("⌨️ 단축키", 5),
+            ("💾 데이터", 6),
         ]
         for label, idx in items:
             item = QListWidgetItem(label)
@@ -5923,8 +5923,6 @@ class SettingsDialog(QDialog):
         info_layout.addRow(license_label, notices_button)
         pg_gen_layout.addWidget(info_card)
         pg_gen_layout.addStretch(1)
-
-        self.pages.addWidget(page_general)
 
         # ----------------------------------------------------
         # Page 1: 캘린더 (Calendar)
@@ -6063,9 +6061,6 @@ class SettingsDialog(QDialog):
         pg_cal_layout.addWidget(cal_sidebar_card)
         pg_cal_layout.addStretch(1)
 
-        self.pages.addWidget(page_calendar)
-
-
         page_skin = QWidget()
         pg_skin_layout = QVBoxLayout(page_skin)
         pg_skin_layout.setContentsMargins(0, 0, 0, 0)
@@ -6145,8 +6140,6 @@ class SettingsDialog(QDialog):
 
         pg_skin_layout.addWidget(font_card)
         pg_skin_layout.addStretch(1)
-
-        self.pages.addWidget(page_skin)
 
         page_memo = QWidget()
         pg_memo_layout = QVBoxLayout(page_memo)
@@ -6288,8 +6281,6 @@ class SettingsDialog(QDialog):
         pg_memo_layout.addWidget(memo_card2)
         pg_memo_layout.addStretch(1)
 
-        self.pages.addWidget(page_memo)
-
         page_shortcuts = QWidget()
         pg_sc_layout = QVBoxLayout(page_shortcuts)
         pg_sc_layout.setContentsMargins(0, 0, 0, 0)
@@ -6413,8 +6404,6 @@ class SettingsDialog(QDialog):
 
         pg_sc_layout.addStretch(1)
 
-        self.pages.addWidget(page_shortcuts)
-
         page_data = QWidget()
         pg_dt_layout = QVBoxLayout(page_data)
         pg_dt_layout.setContentsMargins(0, 0, 0, 0)
@@ -6536,8 +6525,6 @@ class SettingsDialog(QDialog):
         pg_dt_layout.addWidget(data_card)
         pg_dt_layout.addStretch(1)
 
-        self.pages.addWidget(page_data)
-
         # -------------------------------------------------------------
         # 📑 업무 페이지
         # -------------------------------------------------------------
@@ -6617,7 +6604,15 @@ class SettingsDialog(QDialog):
         pg_work_layout.addWidget(opt_card)
         pg_work_layout.addStretch(1)
 
+        # 페이지들을 요청된 순서대로 스택 위젯에 등록:
+        # 0: 기본, 1: 캘린더, 2: 메모, 3: 업무, 4: 스킨, 5: 단축키, 6: 데이터
+        self.pages.addWidget(page_general)
+        self.pages.addWidget(page_calendar)
+        self.pages.addWidget(page_memo)
         self.pages.addWidget(page_work)
+        self.pages.addWidget(page_skin)
+        self.pages.addWidget(page_shortcuts)
+        self.pages.addWidget(page_data)
 
         body_layout.addWidget(self.pages, 1)
         root.addLayout(body_layout, 1)
@@ -6638,15 +6633,15 @@ class SettingsDialog(QDialog):
         
         if initial_tab == "calendar":
             self.nav_list.setCurrentRow(1)
-        elif initial_tab == "skin":
-            self.nav_list.setCurrentRow(2)
         elif initial_tab == "memo":
-            self.nav_list.setCurrentRow(3)
-        elif initial_tab == "shortcuts":
-            self.nav_list.setCurrentRow(4)
-        elif initial_tab == "data":
-            self.nav_list.setCurrentRow(5)
+            self.nav_list.setCurrentRow(2)
         elif initial_tab in ("work", "work_manager"):
+            self.nav_list.setCurrentRow(3)
+        elif initial_tab == "skin":
+            self.nav_list.setCurrentRow(4)
+        elif initial_tab == "shortcuts":
+            self.nav_list.setCurrentRow(5)
+        elif initial_tab == "data":
             self.nav_list.setCurrentRow(6)
         else:
             self.nav_list.setCurrentRow(0)
