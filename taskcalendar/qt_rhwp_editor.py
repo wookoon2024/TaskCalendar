@@ -452,6 +452,7 @@ class RhwpEditorWidget(QWidget):
             self.stack_layout.setCurrentWidget(self.web_view)
             self._inject_change_hook()
             self._apply_default_font_and_size()
+            QTimer.singleShot(200, self.reset_zoom_to_100)
 
         if self._pending_load is not None:
             title, text, hwpx_bytes = self._pending_load
@@ -512,6 +513,10 @@ class RhwpEditorWidget(QWidget):
                     }}
                 }})();
                 """
+            self.web_view.page().runJavaScript(js)
+            QTimer.singleShot(250, self.reset_zoom_to_100)
+            QTimer.singleShot(600, self.reset_zoom_to_100)
+            QTimer.singleShot(500, self._inject_change_hook)
         else:
             json_text = json.dumps(text)
             js = f"""
@@ -579,6 +584,9 @@ class RhwpEditorWidget(QWidget):
             }})();
             """
         self.web_view.page().runJavaScript(js)
+        # 문서가 로드된 후 기본 100% 배율로 깔끔하게 띄움
+        QTimer.singleShot(250, self.reset_zoom_to_100)
+        QTimer.singleShot(600, self.reset_zoom_to_100)
         QTimer.singleShot(500, self._inject_change_hook)
 
     def export_document_data(self, callback) -> None:
@@ -638,13 +646,52 @@ class RhwpEditorWidget(QWidget):
 
         self.web_view.page().runJavaScript(js, _on_js_result)
 
+    def reset_zoom_to_100(self) -> None:
+        """웹에디터 화면 배율을 100% 정상 크기로 설정"""
+        if not self.web_view:
+            return
+        js = """
+        (function() {
+            try {
+                var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                var vm = deps && deps.getInputHandler && deps.getInputHandler()?.viewportManager;
+                if (vm && typeof vm.setZoom === 'function') {
+                    vm.setZoom(1.0);
+                    return;
+                }
+                var item = document.querySelector('[data-cmd="view:zoom-100"]');
+                if (item) {
+                    item.click();
+                    return;
+                }
+            } catch(e) {}
+        })();
+        """
+        self.web_view.page().runJavaScript(js)
+
     def fit_page(self) -> None:
         """웹에디터 화면을 쪽맞춤 비율로 전환"""
-        pass
+        if not self.web_view:
+            return
+        js = """
+        (function() {
+            var btn = document.getElementById('sb-zoom-fit');
+            if (btn) btn.click();
+        })();
+        """
+        self.web_view.page().runJavaScript(js)
 
     def fit_width(self) -> None:
         """웹에디터 화면을 폭맞춤 비율로 전환"""
-        pass
+        if not self.web_view:
+            return
+        js = """
+        (function() {
+            var btn = document.getElementById('sb-zoom-fit-width');
+            if (btn) btn.click();
+        })();
+        """
+        self.web_view.page().runJavaScript(js)
 
     def set_html(self, html: str) -> None:
         self._html_content = html

@@ -5032,9 +5032,6 @@ class MainWindow(QMainWindow):
                 res.linked_work_type = work_type
                 saved = self.repository.upsert_entry(res)
                 self.repository.save()
-                self._load_month_entries()
-                self._render_calendar()
-                self._render_sidebar()
                 self.refresh()
                 return saved
         return None
