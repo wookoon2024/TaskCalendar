@@ -6702,26 +6702,28 @@ class SettingsDialog(QDialog):
                 background-color: {self.palette.get("panel_alt", "#F8FAFC")};
                 border: 1px dashed {self.palette.get("line", "#CBD5E0")};
                 border-radius: 6px;
-                padding: 8px 10px;
             }}
         """)
         guide_layout = QVBoxLayout(guide_box)
-        guide_layout.setContentsMargins(8, 8, 8, 8)
-        guide_layout.setSpacing(4)
+        guide_layout.setContentsMargins(12, 10, 12, 10)
+        guide_layout.setSpacing(6)
         guide_title = QLabel("📌 간편 등록 방법:")
         guide_title.setStyleSheet(f"font-weight: 600; color: {self.palette.get('text', '#1F2328')}; font-size: 11px;")
         guide_layout.addWidget(guide_title)
 
-        step1 = QLabel("1️⃣ [크롬 브라우저 실행] 버튼을 클릭하여 크롬 확장 관리자 창(chrome://extensions)을 엽니다.")
+        step1 = QLabel("1️⃣ [크롬 브라우저 실행] 버튼 클릭 ➔ 크롬 확장 관리자 창(chrome://extensions) 열기")
         step1.setObjectName("muted")
+        step1.setWordWrap(True)
         guide_layout.addWidget(step1)
 
         step2 = QLabel("2️⃣ 크롬 창 우측 상단의 [개발자 모드] 스위치를 켭니다 (ON).")
         step2.setObjectName("muted")
+        step2.setWordWrap(True)
         guide_layout.addWidget(step2)
 
-        step3 = QLabel("3️⃣ [확장프로그램 폴더 열기] 버튼을 누른 후, 표시된 chrome_extension.zip 압축을 푼 폴더를 크롬 창으로 드래그 앤 드롭하면 설치 완료!")
+        step3 = QLabel("3️⃣ [확장프로그램 폴더 열기] 버튼 클릭 ➔ chrome_extension.zip 압축을 푼 폴더를 크롬 창으로 드래그하면 설치 완료!")
         step3.setObjectName("muted")
+        step3.setWordWrap(True)
         guide_layout.addWidget(step3)
 
         chrome_layout.addWidget(guide_box)
@@ -7373,6 +7375,8 @@ class SettingsDialog(QDialog):
 
     def _ensure_chrome_extension_zip(self) -> Path | None:
         """Finds or automatically creates chrome_extension.zip in the application runtime folder."""
+        import sys
+        import os
         import zipfile
         from taskcalendar.paths import runtime_root, package_root
         
@@ -7461,17 +7465,23 @@ class SettingsDialog(QDialog):
         )
 
     def _open_chrome_extension_folder(self) -> None:
+        import sys
         import os
         import subprocess
 
-        zip_path = self._ensure_chrome_extension_zip()
+        try:
+            zip_path = self._ensure_chrome_extension_zip()
+        except Exception as e:
+            logger.warning(f"Failed to ensure chrome extension zip: {e}")
+            zip_path = None
+
         if zip_path and zip_path.exists():
             try:
                 # 탐색기에서 chrome_extension.zip을 선택한 상태로 열기
-                subprocess.Popen(f'explorer /select,"{zip_path.resolve()}"')
+                subprocess.Popen(["explorer.exe", f"/select,{str(zip_path.resolve())}"])
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"explorer /select failed: {e}")
             try:
                 os.startfile(str(zip_path.parent))
                 return
@@ -7481,7 +7491,10 @@ class SettingsDialog(QDialog):
 
         ext_dir = self._get_chrome_extension_dir()
         try:
-            os.startfile(str(ext_dir))
+            if ext_dir.exists():
+                os.startfile(str(ext_dir))
+            else:
+                os.startfile(str(ext_dir.parent))
         except Exception as e:
             QMessageBox.warning(self, "오류", f"폴더를 여는 중 오류가 발생했습니다.\n{e}")
 
