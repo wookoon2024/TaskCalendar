@@ -3120,7 +3120,10 @@ class WorkManagerDialog(QDialog):
         p = getattr(main_window, "palette", None) or getattr(parent, "palette", None)
         if not isinstance(p, dict) or not p.get("bg"):
             from taskcalendar.themes import THEMES
-            p = THEMES.get("default", {})
+            theme_name = "light"
+            if self.repository:
+                theme_name = self.repository.get_setting("theme", "light")
+            p = THEMES.get(theme_name, THEMES.get("light", {}))
         self.palette = p
 
         self.setWindowTitle("업무 관리 및 인수인계 편람")
@@ -3277,7 +3280,7 @@ class WorkManagerDialog(QDialog):
         self.btn_import.setAutoDefault(False)
         self.btn_import.setDefault(False)
         self.btn_import.setToolTip("폴더 또는 파일을 업무로 불러오기")
-        self.btn_import.setStyleSheet(top_btn_style)
+        self.btn_import.setStyleSheet(self._top_btn_style())
         self.btn_import.clicked.connect(self._on_import_menu)
         top_layout.addWidget(self.btn_import)
 
@@ -3286,13 +3289,13 @@ class WorkManagerDialog(QDialog):
         self.btn_export.setAutoDefault(False)
         self.btn_export.setDefault(False)
         self.btn_export.setToolTip("업무 문서 및 첨부파일 내보내기 (HWPX / PDF)")
-        self.btn_export.setStyleSheet(top_btn_style)
+        self.btn_export.setStyleSheet(self._top_btn_style())
         self.btn_export.clicked.connect(self._on_export_wizard)
         top_layout.addWidget(self.btn_export)
 
         top_layout.addStretch(1)
 
-        # 검색 입력창 (가로길이 2배 = 480px, 초록색 테두리 대신 단정한 중립 회색 테두리)
+        # 검색 입력창 (가로길이 2배 = 480px, 단정한 테두리)
         self.search_input = QLineEdit()
         self.search_input.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.search_input.setPlaceholderText("업무, 본문, 첨부파일 검색...")
@@ -3309,7 +3312,7 @@ class WorkManagerDialog(QDialog):
             }}
             QLineEdit:focus {{
                 background-color: {panel};
-                border: 1.5px solid #64748B;
+                border: 1.5px solid {accent};
             }}
         """)
         self.search_input.textChanged.connect(self._on_search_text_changed)
@@ -3321,19 +3324,19 @@ class WorkManagerDialog(QDialog):
         self.btn_search.setFixedHeight(30)
         self.btn_search.setAutoDefault(False)
         self.btn_search.setDefault(False)
-        self.btn_search.setStyleSheet(top_btn_style)
+        self.btn_search.setStyleSheet(self._top_btn_style())
         self.btn_search.clicked.connect(lambda: self._on_search_text_changed(self.search_input.text()))
         top_layout.addWidget(self.btn_search)
 
         top_layout.addStretch(1)
 
-        # 새 업무 추가 버튼 (캘린더 버튼 양식 통일, 이모티콘 제거)
+        # 새 업무 추가 버튼
         self.btn_new_work = QPushButton("새 업무")
         self.btn_new_work.setFixedHeight(30)
         self.btn_new_work.setAutoDefault(False)
         self.btn_new_work.setDefault(False)
         self.btn_new_work.setToolTip("새 업무 생성")
-        self.btn_new_work.setStyleSheet(top_btn_style)
+        self.btn_new_work.setStyleSheet(self._top_btn_style())
         self.btn_new_work.clicked.connect(self._on_add_new_sheet)
         top_layout.addWidget(self.btn_new_work)
 
@@ -3343,18 +3346,18 @@ class WorkManagerDialog(QDialog):
         self.btn_template.setAutoDefault(False)
         self.btn_template.setDefault(False)
         self.btn_template.setToolTip("공무원 필수 업무 서식 및 템플릿 불러오기")
-        self.btn_template.setStyleSheet(top_btn_style)
+        self.btn_template.setStyleSheet(self._top_btn_style())
         self.btn_template.clicked.connect(self._show_template_menu)
         top_layout.addWidget(self.btn_template)
 
-        # 저장 버튼 (Ctrl+S) (캘린더 버튼 양식 통일, 이모티콘 제거)
+        # 저장 버튼 (Ctrl+S) - 테마 대표 강조색(primary) 적용
         self.btn_save_work = QPushButton("저장")
         self.btn_save_work.setFixedHeight(30)
         self.btn_save_work.setAutoDefault(False)
         self.btn_save_work.setDefault(False)
         self.btn_save_work.setToolTip("현재 업무 문서 및 변경사항 저장 (Ctrl+S)")
         self.btn_save_work.setShortcut(QKeySequence("Ctrl+S"))
-        self.btn_save_work.setStyleSheet(top_btn_style)
+        self.btn_save_work.setStyleSheet(self._primary_btn_style())
         self.btn_save_work.clicked.connect(self._on_save_button_clicked)
         top_layout.addWidget(self.btn_save_work)
 
@@ -3405,18 +3408,18 @@ class WorkManagerDialog(QDialog):
         left_header.addWidget(left_title)
         left_header.addStretch(1)
 
-        btn_add_cat = QPushButton("+ 분류")
-        btn_add_cat.setFixedHeight(20)
-        btn_add_cat.setStyleSheet(self._sub_btn_style())
-        btn_add_cat.clicked.connect(self._on_add_category)
-        left_header.addWidget(btn_add_cat)
+        self.btn_add_cat = QPushButton("+ 분류")
+        self.btn_add_cat.setFixedHeight(22)
+        self.btn_add_cat.setStyleSheet(self._sub_btn_style())
+        self.btn_add_cat.clicked.connect(self._on_add_category)
+        left_header.addWidget(self.btn_add_cat)
 
-        btn_reg_cal = QPushButton("📅 일정등록")
-        btn_reg_cal.setFixedHeight(20)
-        btn_reg_cal.setStyleSheet(self._sub_btn_style())
-        btn_reg_cal.setToolTip("선택한 업무 또는 폴더를 캘린더에 일정으로 등록합니다.")
-        btn_reg_cal.clicked.connect(self._register_selected_to_calendar)
-        left_header.addWidget(btn_reg_cal)
+        self.btn_reg_cal = QPushButton("📅 일정등록")
+        self.btn_reg_cal.setFixedHeight(22)
+        self.btn_reg_cal.setStyleSheet(self._sub_btn_style())
+        self.btn_reg_cal.setToolTip("선택한 업무 또는 폴더를 캘린더에 일정으로 등록합니다.")
+        self.btn_reg_cal.clicked.connect(self._register_selected_to_calendar)
+        left_header.addWidget(self.btn_reg_cal)
 
         left_layout.addLayout(left_header)
 
@@ -3642,18 +3645,12 @@ class WorkManagerDialog(QDialog):
         self.right_collapsed_bar.hide()
         right_container_layout.addWidget(self.right_collapsed_bar)
 
-        # 2) 우측 패널 (펼침 상태)
-        self.right_panel = QFrame()
-        self.right_panel.setStyleSheet(f"""
-            QFrame {{
-                background-color: {panel};
-                border: 1px solid {line};
-                border-radius: 8px;
-            }}
-        """)
+        # 2) 우측 패널 (펼침 상태) - 투명 컨테이너로 감싸 독립된 2개의 카드 박스가 시각적으로 분리되도록 구성
+        self.right_panel = QWidget()
+        self.right_panel.setStyleSheet("background: transparent; border: none;")
         right_h_layout = QHBoxLayout(self.right_panel)
-        right_h_layout.setContentsMargins(2, 6, 6, 6)
-        right_h_layout.setSpacing(2)
+        right_h_layout.setContentsMargins(2, 0, 0, 0)
+        right_h_layout.setSpacing(4)
 
         # 우측 패널 좌측 경계면 - 위아래 중간에 위치한 [▶] 버튼 거터
         right_gutter = QWidget()
@@ -3680,13 +3677,27 @@ class WorkManagerDialog(QDialog):
 
         self.right_v_splitter = QSplitter(Qt.Orientation.Vertical)
         self.right_v_splitter.setChildrenCollapsible(False)
+        self.right_v_splitter.setHandleWidth(8)
+        self.right_v_splitter.setStyleSheet("""
+            QSplitter::handle:vertical {
+                background-color: transparent;
+                height: 8px;
+            }
+        """)
 
         # -------------------------------------------------------------
-        # 1) 상단: 첨부파일 섹션
+        # 1) 상단: 첨부파일 독립 카드 박스
         # -------------------------------------------------------------
-        attach_section = QWidget()
-        attach_layout = QVBoxLayout(attach_section)
-        attach_layout.setContentsMargins(0, 0, 0, 4)
+        self.attach_card = QFrame()
+        self.attach_card.setStyleSheet(f"""
+            QFrame {{
+                background-color: {panel};
+                border: 1px solid {line};
+                border-radius: 8px;
+            }}
+        """)
+        attach_layout = QVBoxLayout(self.attach_card)
+        attach_layout.setContentsMargins(8, 8, 8, 8)
         attach_layout.setSpacing(6)
 
         right_header = QHBoxLayout()
@@ -3695,17 +3706,17 @@ class WorkManagerDialog(QDialog):
         right_header.addWidget(self.right_title)
         right_header.addStretch(1)
 
-        btn_add_folder = QPushButton("+ 폴더")
-        btn_add_folder.setFixedHeight(22)
-        btn_add_folder.setStyleSheet(self._sub_btn_style())
-        btn_add_folder.clicked.connect(self._on_add_attachment_folder)
-        right_header.addWidget(btn_add_folder)
+        self.btn_add_folder = QPushButton("+ 폴더")
+        self.btn_add_folder.setFixedHeight(22)
+        self.btn_add_folder.setStyleSheet(self._sub_btn_style())
+        self.btn_add_folder.clicked.connect(self._on_add_attachment_folder)
+        right_header.addWidget(self.btn_add_folder)
 
-        btn_add_file = QPushButton("+ 파일")
-        btn_add_file.setFixedHeight(22)
-        btn_add_file.setStyleSheet(self._sub_btn_style())
-        btn_add_file.clicked.connect(self._on_add_attachment)
-        right_header.addWidget(btn_add_file)
+        self.btn_add_file = QPushButton("+ 파일")
+        self.btn_add_file.setFixedHeight(22)
+        self.btn_add_file.setStyleSheet(self._sub_btn_style())
+        self.btn_add_file.clicked.connect(self._on_add_attachment)
+        right_header.addWidget(self.btn_add_file)
         attach_layout.addLayout(right_header)
 
         # 계층형 첨부파일 트리 위젯
@@ -3732,12 +3743,12 @@ class WorkManagerDialog(QDialog):
                 border-radius: 3px;
             }}
             QTreeWidget::item:hover:!selected {{
-                background-color: #F1F5F9;
-                color: #0F172A;
+                background-color: {accent_soft};
+                color: {accent};
             }}
             QTreeWidget::item:selected {{
-                background-color: #E0F2FE;
-                color: #0284C7;
+                background-color: {accent};
+                color: #FFFFFF;
                 font-weight: 600;
                 border: none;
                 outline: none;
@@ -3755,27 +3766,34 @@ class WorkManagerDialog(QDialog):
         file_btn_row = QHBoxLayout()
         file_btn_row.setSpacing(6)
 
-        btn_open_file = QPushButton("열기")
-        btn_open_file.setFixedHeight(24)
-        btn_open_file.setStyleSheet(self._sub_btn_style())
-        btn_open_file.clicked.connect(self._open_selected_attachment)
-        file_btn_row.addWidget(btn_open_file)
+        self.btn_open_file = QPushButton("열기")
+        self.btn_open_file.setFixedHeight(24)
+        self.btn_open_file.setStyleSheet(self._sub_btn_style())
+        self.btn_open_file.clicked.connect(self._open_selected_attachment)
+        file_btn_row.addWidget(self.btn_open_file)
 
-        btn_delete_file = QPushButton("삭제")
-        btn_delete_file.setFixedHeight(24)
-        btn_delete_file.setStyleSheet(self._sub_btn_style())
-        btn_delete_file.clicked.connect(self._delete_selected_attachment)
-        file_btn_row.addWidget(btn_delete_file)
+        self.btn_delete_file = QPushButton("삭제")
+        self.btn_delete_file.setFixedHeight(24)
+        self.btn_delete_file.setStyleSheet(self._danger_btn_style())
+        self.btn_delete_file.clicked.connect(self._delete_selected_attachment)
+        file_btn_row.addWidget(self.btn_delete_file)
 
         attach_layout.addLayout(file_btn_row)
-        self.right_v_splitter.addWidget(attach_section)
+        self.right_v_splitter.addWidget(self.attach_card)
 
         # -------------------------------------------------------------
-        # 2) 하단: 관련 일정 섹션
+        # 2) 하단: 관련 일정 독립 카드 박스
         # -------------------------------------------------------------
-        schedule_section = QWidget()
-        schedule_layout = QVBoxLayout(schedule_section)
-        schedule_layout.setContentsMargins(0, 6, 0, 0)
+        self.schedule_card = QFrame()
+        self.schedule_card.setStyleSheet(f"""
+            QFrame {{
+                background-color: {panel};
+                border: 1px solid {line};
+                border-radius: 8px;
+            }}
+        """)
+        schedule_layout = QVBoxLayout(self.schedule_card)
+        schedule_layout.setContentsMargins(8, 8, 8, 8)
         schedule_layout.setSpacing(6)
 
         sched_header = QHBoxLayout()
@@ -3784,11 +3802,11 @@ class WorkManagerDialog(QDialog):
         sched_header.addWidget(self.sched_title)
         sched_header.addStretch(1)
 
-        btn_add_sched = QPushButton("+ 일정")
-        btn_add_sched.setFixedHeight(22)
-        btn_add_sched.setStyleSheet(self._sub_btn_style())
-        btn_add_sched.clicked.connect(self._on_add_work_schedule_clicked)
-        sched_header.addWidget(btn_add_sched)
+        self.btn_add_sched = QPushButton("+ 일정")
+        self.btn_add_sched.setFixedHeight(22)
+        self.btn_add_sched.setStyleSheet(self._sub_btn_style())
+        self.btn_add_sched.clicked.connect(self._on_add_work_schedule_clicked)
+        sched_header.addWidget(self.btn_add_sched)
         schedule_layout.addLayout(sched_header)
 
         # 1줄씩 목록식으로 표시하는 일정 목록 위젯
@@ -3815,12 +3833,12 @@ class WorkManagerDialog(QDialog):
                 border-radius: 3px;
             }}
             QListWidget::item:hover:!selected {{
-                background-color: #F1F5F9;
-                color: #0F172A;
+                background-color: {accent_soft};
+                color: {accent};
             }}
             QListWidget::item:selected {{
-                background-color: #E0F2FE;
-                color: #0284C7;
+                background-color: {accent};
+                color: #FFFFFF;
                 font-weight: 600;
                 border: none;
                 outline: none;
@@ -3832,26 +3850,26 @@ class WorkManagerDialog(QDialog):
         sched_btn_row = QHBoxLayout()
         sched_btn_row.setSpacing(6)
 
-        btn_goto_sched = QPushButton("이동")
-        btn_goto_sched.setFixedHeight(24)
-        btn_goto_sched.setStyleSheet(self._sub_btn_style())
-        btn_goto_sched.clicked.connect(self._on_goto_calendar_clicked)
-        sched_btn_row.addWidget(btn_goto_sched)
+        self.btn_goto_sched = QPushButton("이동")
+        self.btn_goto_sched.setFixedHeight(24)
+        self.btn_goto_sched.setStyleSheet(self._sub_btn_style())
+        self.btn_goto_sched.clicked.connect(self._on_goto_calendar_clicked)
+        sched_btn_row.addWidget(self.btn_goto_sched)
 
-        btn_edit_sched = QPushButton("수정")
-        btn_edit_sched.setFixedHeight(24)
-        btn_edit_sched.setStyleSheet(self._sub_btn_style())
-        btn_edit_sched.clicked.connect(self._on_edit_work_schedule_clicked)
-        sched_btn_row.addWidget(btn_edit_sched)
+        self.btn_edit_sched = QPushButton("수정")
+        self.btn_edit_sched.setFixedHeight(24)
+        self.btn_edit_sched.setStyleSheet(self._sub_btn_style())
+        self.btn_edit_sched.clicked.connect(self._on_edit_work_schedule_clicked)
+        sched_btn_row.addWidget(self.btn_edit_sched)
 
-        btn_delete_sched = QPushButton("삭제")
-        btn_delete_sched.setFixedHeight(24)
-        btn_delete_sched.setStyleSheet(self._sub_btn_style())
-        btn_delete_sched.clicked.connect(self._on_delete_work_schedule_clicked)
-        sched_btn_row.addWidget(btn_delete_sched)
+        self.btn_delete_sched = QPushButton("삭제")
+        self.btn_delete_sched.setFixedHeight(24)
+        self.btn_delete_sched.setStyleSheet(self._danger_btn_style())
+        self.btn_delete_sched.clicked.connect(self._on_delete_work_schedule_clicked)
+        sched_btn_row.addWidget(self.btn_delete_sched)
 
         schedule_layout.addLayout(sched_btn_row)
-        self.right_v_splitter.addWidget(schedule_section)
+        self.right_v_splitter.addWidget(self.schedule_card)
 
         self.right_v_splitter.setStretchFactor(0, 1)
         self.right_v_splitter.setStretchFactor(1, 1)
@@ -7341,11 +7359,67 @@ class WorkManagerDialog(QDialog):
             }}
         """
 
-    def _sub_btn_style(self) -> str:
+    def _top_btn_style(self) -> str:
+        panel = self.palette.get("panel", "#FFFFFF")
         panel_alt = self.palette.get("panel_alt", "#F8FAFC")
         text = self.palette.get("text", "#1F2328")
         line = self.palette.get("line", "#CBD5E0")
         accent = self.palette.get("accent", "#2563EB")
+        accent_soft = self.palette.get("accent_soft", "#EFF6FF")
+
+        return f"""
+            QPushButton {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 4px 12px;
+                font-size: 12px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt};
+                border-color: {accent};
+                color: {accent};
+            }}
+            QPushButton:pressed {{
+                background-color: {accent_soft};
+            }}
+        """
+
+    def _primary_btn_style(self) -> str:
+        accent = self.palette.get("accent", "#2563EB")
+        btn_text = self.palette.get("button_text", "#FFFFFF")
+        hover_bg = _shade(accent, -0.1)
+        pressed_bg = _shade(accent, -0.2)
+
+        return f"""
+            QPushButton {{
+                background-color: {accent};
+                color: {btn_text};
+                border: 1px solid {accent};
+                border-radius: 6px;
+                padding: 4px 14px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {hover_bg};
+                border-color: {hover_bg};
+                color: {btn_text};
+            }}
+            QPushButton:pressed {{
+                background-color: {pressed_bg};
+            }}
+        """
+
+    def _sub_btn_style(self) -> str:
+        panel = self.palette.get("panel", "#FFFFFF")
+        panel_alt = self.palette.get("panel_alt", "#F8FAFC")
+        text = self.palette.get("text", "#1F2328")
+        line = self.palette.get("line", "#CBD5E0")
+        accent = self.palette.get("accent", "#2563EB")
+        accent_soft = self.palette.get("accent_soft", "#EFF6FF")
 
         return f"""
             QPushButton {{
@@ -7355,10 +7429,41 @@ class WorkManagerDialog(QDialog):
                 border-radius: 4px;
                 padding: 2px 8px;
                 font-size: 11px;
+                font-weight: 500;
             }}
             QPushButton:hover {{
+                background-color: {accent_soft};
                 border-color: {accent};
                 color: {accent};
+            }}
+            QPushButton:pressed {{
+                background-color: {panel};
+            }}
+        """
+
+    def _danger_btn_style(self) -> str:
+        panel_alt = self.palette.get("panel_alt", "#F8FAFC")
+        text = self.palette.get("text", "#1F2328")
+        line = self.palette.get("line", "#CBD5E0")
+        danger = self.palette.get("danger", "#EF4444")
+
+        return f"""
+            QPushButton {{
+                background-color: {panel_alt};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 11px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: #FEF2F2;
+                border-color: {danger};
+                color: {danger};
+            }}
+            QPushButton:pressed {{
+                background-color: #FEE2E2;
             }}
         """
 
@@ -7468,34 +7573,47 @@ class WorkManagerDialog(QDialog):
                 }}
             """)
 
-        top_btn_style = f"""
-            QPushButton {{
-                background-color: {panel};
-                color: {text};
-                border: 1px solid {line};
-                border-radius: 6px;
-                padding: 4px 12px;
-                font-size: 12px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: {panel_alt};
-                border-color: #94A3B8;
-                color: {text};
-            }}
-            QPushButton:pressed {{
-                background-color: #E2E8F0;
-            }}
-        """
         for btn in (
             getattr(self, "btn_import", None),
             getattr(self, "btn_export", None),
             getattr(self, "btn_search", None),
             getattr(self, "btn_new_work", None),
-            getattr(self, "btn_save_work", None),
+            getattr(self, "btn_template", None),
         ):
             if btn:
-                btn.setStyleSheet(top_btn_style)
+                btn.setStyleSheet(self._top_btn_style())
+
+        if hasattr(self, "btn_save_work") and self.btn_save_work:
+            self.btn_save_work.setStyleSheet(self._primary_btn_style())
+
+        for btn in (
+            getattr(self, "btn_add_cat", None),
+            getattr(self, "btn_reg_cal", None),
+            getattr(self, "btn_add_folder", None),
+            getattr(self, "btn_add_file", None),
+            getattr(self, "btn_open_file", None),
+            getattr(self, "btn_add_sched", None),
+            getattr(self, "btn_goto_sched", None),
+            getattr(self, "btn_edit_sched", None),
+        ):
+            if btn:
+                btn.setStyleSheet(self._sub_btn_style())
+
+        for btn in (
+            getattr(self, "btn_delete_file", None),
+            getattr(self, "btn_delete_sched", None),
+        ):
+            if btn:
+                btn.setStyleSheet(self._danger_btn_style())
+
+        for btn in (
+            getattr(self, "btn_collapse_left", None),
+            getattr(self, "btn_collapse_right", None),
+            getattr(self, "btn_expand_left", None),
+            getattr(self, "btn_expand_right", None),
+        ):
+            if btn:
+                btn.setStyleSheet(self._gutter_arrow_style())
 
         if hasattr(self, "search_input") and self.search_input:
             self.search_input.setStyleSheet(f"""
@@ -7509,7 +7627,7 @@ class WorkManagerDialog(QDialog):
                 }}
                 QLineEdit:focus {{
                     background-color: {panel};
-                    border: 1.5px solid #64748B;
+                    border: 1.5px solid {accent};
                 }}
             """)
 
@@ -7562,7 +7680,19 @@ class WorkManagerDialog(QDialog):
             """)
 
         if hasattr(self, "right_panel") and self.right_panel:
-            self.right_panel.setStyleSheet(f"""
+            self.right_panel.setStyleSheet("background: transparent; border: none;")
+
+        if hasattr(self, "attach_card") and self.attach_card:
+            self.attach_card.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {panel};
+                    border: 1px solid {line};
+                    border-radius: 8px;
+                }}
+            """)
+
+        if hasattr(self, "schedule_card") and self.schedule_card:
+            self.schedule_card.setStyleSheet(f"""
                 QFrame {{
                     background-color: {panel};
                     border: 1px solid {line};
@@ -7593,8 +7723,8 @@ class WorkManagerDialog(QDialog):
                     color: {accent};
                 }}
                 QTreeWidget::item:selected {{
-                    background-color: #E0F2FE;
-                    color: #0284C7;
+                    background-color: {accent};
+                    color: #FFFFFF;
                     font-weight: 600;
                 }}
             """)
@@ -7622,8 +7752,8 @@ class WorkManagerDialog(QDialog):
                     color: {accent};
                 }}
                 QListWidget::item:selected {{
-                    background-color: #E0F2FE;
-                    color: #0284C7;
+                    background-color: {accent};
+                    color: #FFFFFF;
                     font-weight: 600;
                 }}
             """)
