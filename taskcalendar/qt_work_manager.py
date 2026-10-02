@@ -199,7 +199,7 @@ class FloatingToastOverlay(QFrame):
 
 
 class CompactCategoryItemDelegate(QStyledItemDelegate):
-    """트리 항목(폴더 및 문서)의 텍스트 렌더링 델리게이트"""
+    """트리 항목(폴더 및 문서)의 텍스트 렌더링 델리게이트 (상단 '업무 분류' 헤더와 완벽히 동일한 Bold 12px Pretendard 적용)"""
 
     def sizeHint(self, option, index):
         size = super().sizeHint(option, index)
@@ -210,12 +210,11 @@ class CompactCategoryItemDelegate(QStyledItemDelegate):
         self.initStyleOption(opt, index)
         view = opt.widget
         is_sel = bool(view and view.selectionModel() and view.selectionModel().isSelected(index))
-        is_parent = not index.parent().isValid()
 
-        if is_parent:
-            opt.font.setBold(True)
-        else:
-            opt.font.setBold(False)
+        # 상단 '📁 업무 분류' 헤더와 완전히 동일한 Bold Pretendard 12px로 통일
+        opt.font.setFamily(ui_font_family())
+        opt.font.setPixelSize(12)
+        opt.font.setBold(True)
 
         if is_sel:
             opt.palette.setColor(QPalette.ColorRole.Text, QColor('#0284C7'))
@@ -223,7 +222,7 @@ class CompactCategoryItemDelegate(QStyledItemDelegate):
         elif opt.state & QStyle.State_MouseOver:
             opt.palette.setColor(QPalette.ColorRole.Text, QColor('#0F172A'))
         else:
-            opt.palette.setColor(QPalette.ColorRole.Text, QColor('#1E293B') if is_parent else QColor('#334155'))
+            opt.palette.setColor(QPalette.ColorRole.Text, QColor('#1F2328'))
 
         super().paint(painter, opt, index)
 
