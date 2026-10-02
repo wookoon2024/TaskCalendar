@@ -3350,13 +3350,12 @@ class WorkManagerDialog(QDialog):
         self.bottom_bar = QFrame()
         self.bottom_bar.setObjectName("tabBarContainer")
         self.bottom_bar.setFixedHeight(32)
-        self.bottom_bar.setStyleSheet(f"""
-            QFrame#tabBarContainer {{
+        self.bottom_bar.setStyleSheet("""
+            QFrame#tabBarContainer {
                 background-color: transparent;
                 border: none;
-                border-bottom: 1px solid {line};
-                padding: 0px;
-            }}
+                padding: 0px 4px;
+            }
         """)
         bottom_layout = QHBoxLayout(self.bottom_bar)
         bottom_layout.setContentsMargins(4, 0, 4, 0)
@@ -7848,13 +7847,12 @@ class WorkManagerDialog(QDialog):
             """)
 
         if hasattr(self, "bottom_bar") and self.bottom_bar:
-            self.bottom_bar.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {panel_alt};
-                    border: 1px solid {line};
-                    border-radius: 4px;
+            self.bottom_bar.setStyleSheet("""
+                QFrame {
+                    background-color: transparent;
+                    border: none;
                     padding: 0px 4px;
-                }}
+                }
             """)
 
         if hasattr(self, "sheet_tab_bar") and self.sheet_tab_bar:
@@ -7867,15 +7865,18 @@ class WorkManagerDialog(QDialog):
                     background: #E2E8F0;
                     color: #64748B;
                     border: 1px solid {line};
-                    border-bottom: none;
-                    border-radius: 4px 4px 0px 0px;
+                    border-bottom: 1px solid {line};
+                    border-top-left-radius: 4px;
+                    border-top-right-radius: 4px;
+                    border-bottom-left-radius: 0px;
+                    border-bottom-right-radius: 0px;
                     padding: 0px 4px 0px 10px;
-                    margin-top: 0px;
+                    margin-top: 4px;
                     margin-right: 3px;
                     font-size: 12px;
                     min-width: 90px;
                     max-width: 360px;
-                    height: 28px;
+                    height: 27px;
                 }}
                 QTabBar::tab:selected {{
                     background: {panel};
@@ -7883,24 +7884,34 @@ class WorkManagerDialog(QDialog):
                     font-weight: bold;
                     border: 1px solid {line};
                     border-bottom: 1px solid {panel};
-                    margin-top: 0px;
-                    height: 28px;
+                    border-top-left-radius: 4px;
+                    border-top-right-radius: 4px;
+                    border-bottom-left-radius: 0px;
+                    border-bottom-right-radius: 0px;
+                    margin-top: 2px;
+                    margin-bottom: -1px;
+                    height: 29px;
                     padding: 0px 4px 0px 10px;
                 }}
                 QTabBar::tab:hover:!selected {{
                     background: #FFFFFF;
                     color: {text};
                     border: 1px solid {line};
-                    border-bottom: none;
+                    border-bottom: 1px solid {line};
                 }}
                 QTabBar::close-button {{
                     image: url('{str(asset_path("tab_close_red.svg")).replace("\\", "/")}');
                     subcontrol-position: right;
                     subcontrol-origin: padding;
-                    width: 18px;
-                    height: 18px;
+                    width: 16px;
+                    height: 16px;
                     padding: 0px;
-                    margin-right: 8px;
+                    margin-right: 6px;
+                    background: transparent;
+                    border: none;
+                    outline: none;
+                }}
+                QTabBar::close-button:hover {{
                     background: transparent;
                     border: none;
                     outline: none;
