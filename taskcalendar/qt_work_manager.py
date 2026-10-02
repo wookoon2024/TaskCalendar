@@ -3337,6 +3337,16 @@ class WorkManagerDialog(QDialog):
         self.btn_new_work.clicked.connect(self._on_add_new_sheet)
         top_layout.addWidget(self.btn_new_work)
 
+        # 업무 템플릿 버튼
+        self.btn_template = QPushButton("업무 템플릿")
+        self.btn_template.setFixedHeight(30)
+        self.btn_template.setAutoDefault(False)
+        self.btn_template.setDefault(False)
+        self.btn_template.setToolTip("공무원 필수 업무 서식 및 템플릿 불러오기")
+        self.btn_template.setStyleSheet(top_btn_style)
+        self.btn_template.clicked.connect(self._show_template_menu)
+        top_layout.addWidget(self.btn_template)
+
         # 저장 버튼 (Ctrl+S) (캘린더 버튼 양식 통일, 이모티콘 제거)
         self.btn_save_work = QPushButton("저장")
         self.btn_save_work.setFixedHeight(30)
@@ -4808,6 +4818,94 @@ class WorkManagerDialog(QDialog):
                 self.show_floating_toast(f"'{current.title}' 저장 완료")
 
         self.editor.export_document_data(_after_export)
+
+    def _show_template_menu(self) -> None:
+        """공무원 필수 업무 서식 및 템플릿 메뉴 팝업"""
+        from PySide6.QtWidgets import QMenu
+        from taskcalendar.paths import runtime_root
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #CBD5E1;
+                border-radius: 6px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 20px 6px 12px;
+                font-size: 12px;
+                color: #1E293B;
+            }
+            QMenu::item:selected {
+                background-color: #EFF6FF;
+                color: #1D4ED8;
+                font-weight: 500;
+            }
+        """)
+
+        tpl_dir = runtime_root() / "업무 템플릿"
+        if not tpl_dir.exists():
+            tpl_dir.mkdir(parents=True, exist_ok=True)
+
+        categories = sorted([d for d in tpl_dir.iterdir() if d.is_dir()])
+        for cat in categories:
+            cat_name = cat.name.replace("_", " ")
+            sub_menu = menu.addMenu(f"📁 {cat_name}")
+            sub_menu.setStyleSheet(menu.styleSheet())
+            files = sorted([f for f in cat.iterdir() if f.is_file() and f.suffix == ".md"])
+            for f in files:
+                title = f.stem.replace("_", " ")
+                act = sub_menu.addAction(title)
+                act.triggered.connect(lambda _, fp=f: self._apply_template_file(fp))
+
+        menu.addSeparator()
+        act_open_folder = menu.addAction("📂 템플릿 폴더 열기...")
+        act_open_folder.triggered.connect(lambda: os.startfile(str(tpl_dir)))
+
+        menu.exec(self.btn_template.mapToGlobal(QPoint(0, self.btn_template.height() + 2)))
+
+    def _apply_template_file(self, file_path: Path) -> None:
+        """선택된 템플릿을 현재 에디터에 삽입 또는 새 문서로 적용"""
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            stem = file_path.stem.replace("_", " ")
+
+            # 열려있는 시트가 없는 경우 새 업무로 자동 생성
+            if self._active_sheet_index < 0 or not self._open_sheets:
+                target_cat_name = self._categories[0] if self._categories else "1. 일반 업무"
+                db_id = None
+                if self.repository:
+                    db_id = self.repository.upsert_work_item(
+                        work_id=None,
+                        title=stem,
+                        category_name=target_cat_name,
+                        cycle="수시",
+                        content_text=content,
+                        sort_order=len(self._all_sheets) + 1,
+                    )
+                new_sheet = WorkSheetData(
+                    db_id=db_id,
+                    sheet_id=f"sheet_{db_id or (len(self._all_sheets) + 1)}",
+                    title=stem,
+                    category=target_cat_name,
+                    cycle="수시",
+                    content_text=content,
+                )
+                self._all_sheets.append(new_sheet)
+                self._open_sheets.append(new_sheet)
+                self._active_sheet_index = len(self._open_sheets) - 1
+                self._render_tab_strip()
+                self._switch_to_sheet(new_sheet)
+                self._refresh_category_tree()
+                self.show_floating_toast(f"'{stem}' 서식으로 새 업무가 생성되었습니다.")
+                return
+
+            if hasattr(self, "editor") and hasattr(self.editor, "insert_text_at_cursor"):
+                self.editor.insert_text_at_cursor(content)
+                self.show_floating_toast(f"'{stem}' 서식이 적용되었습니다.")
+        except Exception as e:
+            logger.exception("Failed to apply template: %s", e)
 
     def _on_add_new_sheet(self) -> None:
         """선택된 폴더(또는 선택된 문서의 부모 폴더)에서 모달창으로 제목을 입력받아 새 업무 생성 및 탭 오픈"""

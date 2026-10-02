@@ -622,6 +622,41 @@ class RichTextEdit(QTextEdit):
                 memo_all_act = menu.addAction("플로팅 메모 전체 설정...")
                 memo_all_act.triggered.connect(lambda: parent_dlg._show_memo_context_menu(event.globalPosition().toPoint()))
 
+            # AI 도우미 메뉴 추가
+            menu.addSeparator()
+            act_chat = menu.addAction("대화하기 (AI 도우미)")
+            act_chat.triggered.connect(self._open_ai_chat)
+            act_analyze = menu.addAction("분석하기 (법령/규정)")
+            act_analyze.triggered.connect(self._open_ai_analyze)
+
             menu.exec(event.globalPosition().toPoint())
             return
-        super().contextMenuEvent(event)
+
+        menu = self.createStandardContextMenu()
+        menu.addSeparator()
+        act_chat = menu.addAction("대화하기 (AI 도우미)")
+        act_chat.triggered.connect(self._open_ai_chat)
+        act_analyze = menu.addAction("분석하기 (법령/규정)")
+        act_analyze.triggered.connect(self._open_ai_analyze)
+        menu.exec(event.globalPosition().toPoint())
+
+    def insert_text_at_cursor(self, text: str) -> None:
+        """현재 에디터 커서 위치에 텍스트 삽입"""
+        self.insertPlainText(text)
+
+    def _open_ai_chat(self) -> None:
+        try:
+            from taskcalendar.ai_assistant import AIChatDialog
+            dlg = AIChatDialog(parent_editor=self)
+            dlg.show()
+        except Exception:
+            pass
+
+    def _open_ai_analyze(self) -> None:
+        try:
+            from taskcalendar.ai_assistant import AIAnalyzeDialog
+            text = self.toPlainText()
+            dlg = AIAnalyzeDialog(parent_editor=self, doc_text=text)
+            dlg.show()
+        except Exception:
+            pass

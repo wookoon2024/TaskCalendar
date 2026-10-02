@@ -7,7 +7,7 @@ import logging
 import socket
 import threading
 from pathlib import Path
-from PySide6.QtCore import QObject, QTimer, QUrl, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QPoint, QTimer, QUrl, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QFrame,
@@ -325,7 +325,6 @@ class RhwpEditorWidget(QWidget):
             self.server = RhwpStudioServer.get_instance()
             self.web_view = QWebEngineView(self)
             self.web_view.loadFinished.connect(self._on_load_finished)
-            self.web_view.page().titleChanged.connect(self._on_web_title_changed)
             self.web_view.titleChanged.connect(self._on_web_title_changed)
 
             studio_url = self.server.get_url()
@@ -341,9 +340,106 @@ class RhwpEditorWidget(QWidget):
             self.stack_layout.setCurrentWidget(self._fallback_editor)
             self.web_view = None
 
+        self._ai_chat_dialog = None
+        self._ai_analyze_dialog = None
+
     def _on_web_title_changed(self, title: str) -> None:
         if title.startswith("rhwp_modified:"):
             self.contentChanged.emit()
+        elif title.startswith("rhwp_ai:chat:"):
+            self.open_ai_chat()
+        elif title.startswith("rhwp_ai:analyze:"):
+            self.open_ai_analyze()
+
+    def open_ai_chat(self) -> None:
+        """AI 대화하기 플로팅 팝업 열기 (중복 생성 방지)"""
+        try:
+            if self._ai_chat_dialog is not None:
+                try:
+                    if self._ai_chat_dialog.isVisible():
+                        self._ai_chat_dialog.activateWindow()
+                        self._ai_chat_dialog.raise_()
+                        return
+                except RuntimeError:
+                    self._ai_chat_dialog = None
+
+            from taskcalendar.ai_assistant import AIChatDialog
+            dlg = AIChatDialog(parent_editor=self, palette=self.palette)
+            self._ai_chat_dialog = dlg
+            dlg.show()
+            self._position_floating_dialog(dlg)
+        except Exception as e:
+            logger.exception("Failed to open AIChatDialog: %s", e)
+
+    def open_ai_analyze(self) -> None:
+        """AI 업무 법령/행정절차 분석하기 플로팅 팝업 열기 (중복 생성 방지)"""
+        if self._ai_analyze_dialog is not None:
+            try:
+                if self._ai_analyze_dialog.isVisible():
+                    self._ai_analyze_dialog.activateWindow()
+                    self._ai_analyze_dialog.raise_()
+                    return
+            except RuntimeError:
+                self._ai_analyze_dialog = None
+
+        self.export_document_data(self._on_doc_data_for_analyze)
+
+    def _on_doc_data_for_analyze(self, text: str, hwpx_bytes: bytes | None) -> None:
+        try:
+            from taskcalendar.ai_assistant import AIAnalyzeDialog
+            dlg = AIAnalyzeDialog(parent_editor=self, doc_text=text, palette=self.palette)
+            self._ai_analyze_dialog = dlg
+            dlg.show()
+            self._position_floating_dialog(dlg)
+        except Exception as e:
+            logger.exception("Failed to open AIAnalyzeDialog: %s", e)
+
+    def _position_floating_dialog(self, dlg: QDialog) -> None:
+        try:
+            geom = self.geometry()
+            global_pos = self.mapToGlobal(QPoint(0, 0))
+            x = global_pos.x() + max(20, geom.width() - dlg.width() - 30)
+            y = global_pos.y() + 40
+            dlg.move(x, y)
+        except Exception:
+            pass
+
+    def insert_text_at_cursor(self, text: str) -> None:
+        """현재 에디터 커서 위치에 텍스트 삽입"""
+        if self._fallback_editor is not None:
+            self._fallback_editor.insertPlainText(text)
+            return
+
+        if not self.web_view:
+            return
+
+        json_text = json.dumps(text)
+        js = f"""
+        (function() {{
+            try {{
+                var text = {json_text};
+                if (window.rhwpStudio && typeof window.rhwpStudio.insertTextAtCursor === 'function') {{
+                    var ok = window.rhwpStudio.insertTextAtCursor(text);
+                    if (ok) return true;
+                }}
+                var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                var ih = deps && deps.getInputHandler ? deps.getInputHandler() : null;
+                if (ih && ih.textarea) {{
+                    ih.active = true;
+                    if (ih.focusTextarea) ih.focusTextarea();
+                    var dt = new DataTransfer();
+                    dt.setData('text/plain', text);
+                    var ev = new ClipboardEvent('paste', {{ clipboardData: dt, bubbles: true, cancelable: true }});
+                    ih.textarea.dispatchEvent(ev);
+                    return true;
+                }}
+            }} catch(e) {{
+                console.error('Error in insertTextAtCursor:', e);
+            }}
+            return false;
+        }})();
+        """
+        self.web_view.page().runJavaScript(js)
 
     def _inject_change_hook(self) -> None:
         if not self.web_view:
@@ -387,6 +483,57 @@ class RhwpEditorWidget(QWidget):
                         notifyMod();
                     }
                 }, true);
+            }
+
+            // 3. 우클릭 컨텍스트 메뉴 확장 (기존 메뉴 100% 유지 + 맨 밑에 AI 대화하기/분석하기 추가)
+            if (!window._hasAiContextMenuHook) {
+                window._hasAiContextMenuHook = true;
+                var aiMenuObserver = new MutationObserver(function(mutations) {
+                    for (var m of mutations) {
+                        for (var node of m.addedNodes) {
+                            if (node.nodeType === 1 && node.classList && node.classList.contains('context-menu')) {
+                                if (node.querySelector('.ai-menu-item')) continue;
+
+                                // 구분선 추가
+                                var sep = document.createElement('div');
+                                sep.className = 'md-sep';
+                                node.appendChild(sep);
+
+                                // [추가 1] 대화하기
+                                var chatItem = document.createElement('div');
+                                chatItem.className = 'md-item ai-menu-item';
+                                chatItem.innerHTML = '<span class="md-label" style="font-weight:600; color:#2563EB;">대화하기</span><span class="md-shortcut" style="margin-left:auto; color:#6366F1; font-size:10px; font-weight:bold;">AI</span>';
+                                chatItem.addEventListener('click', function(ev) {
+                                    ev.stopPropagation();
+                                    ev.preventDefault();
+                                    if (node && node.parentNode) node.parentNode.removeChild(node);
+                                    document.title = 'rhwp_ai:chat:' + Date.now();
+                                });
+                                node.appendChild(chatItem);
+
+                                // [추가 2] 분석하기
+                                var analyzeItem = document.createElement('div');
+                                analyzeItem.className = 'md-item ai-menu-item';
+                                analyzeItem.innerHTML = '<span class="md-label" style="font-weight:600; color:#0F766E;">분석하기</span><span class="md-shortcut" style="margin-left:auto; color:#0D9488; font-size:10px; font-weight:bold;">법령</span>';
+                                analyzeItem.addEventListener('click', function(ev) {
+                                    ev.stopPropagation();
+                                    ev.preventDefault();
+                                    if (node && node.parentNode) node.parentNode.removeChild(node);
+                                    document.title = 'rhwp_ai:analyze:' + Date.now();
+                                });
+                                node.appendChild(analyzeItem);
+
+                                // 팝업이 화면 아래로 삐져나가는 경우 Y축 위치 보정
+                                var rect = node.getBoundingClientRect();
+                                if (rect.bottom > window.innerHeight) {
+                                    var newTop = Math.max(2, window.innerHeight - rect.height - 8);
+                                    node.style.top = newTop + 'px';
+                                }
+                            }
+                        }
+                    }
+                });
+                aiMenuObserver.observe(document.body, { childList: true });
             }
         })();
         """
