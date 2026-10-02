@@ -2869,7 +2869,7 @@ class WorkManagerDialog(QDialog):
         # 처음에 문서를 아무것도 띄우지 않음 (빈 상태 초기화)
         self._clear_editor_view()
         self._restore_window_state()
-        QTimer.singleShot(400, self._check_first_time_context_menu_prompt)
+        self._first_show_prompt_done = False
 
     @property
     def _sheets(self) -> list[WorkSheetData]:
@@ -2961,8 +2961,8 @@ class WorkManagerDialog(QDialog):
         # =========================================================================
         # 1. 맨 위: 통합 검색 및 상단 도구 바
         # =========================================================================
-        top_bar = QFrame()
-        top_bar.setStyleSheet(f"""
+        self.top_bar = QFrame()
+        self.top_bar.setStyleSheet(f"""
             QFrame {{
                 background-color: {panel};
                 border: 1px solid {line};
@@ -2970,7 +2970,7 @@ class WorkManagerDialog(QDialog):
                 padding: 4px 8px;
             }}
         """)
-        top_layout = QHBoxLayout(top_bar)
+        top_layout = QHBoxLayout(self.top_bar)
         top_layout.setContentsMargins(4, 2, 4, 2)
         top_layout.setSpacing(8)
 
@@ -2995,23 +2995,23 @@ class WorkManagerDialog(QDialog):
         """
 
         # 좌측: 불러오기 및 내보내기 도구 버튼
-        btn_import = QPushButton("불러오기")
-        btn_import.setFixedHeight(30)
-        btn_import.setAutoDefault(False)
-        btn_import.setDefault(False)
-        btn_import.setToolTip("폴더 또는 파일을 업무로 불러오기")
-        btn_import.setStyleSheet(top_btn_style)
-        btn_import.clicked.connect(self._on_import_menu)
-        top_layout.addWidget(btn_import)
+        self.btn_import = QPushButton("불러오기")
+        self.btn_import.setFixedHeight(30)
+        self.btn_import.setAutoDefault(False)
+        self.btn_import.setDefault(False)
+        self.btn_import.setToolTip("폴더 또는 파일을 업무로 불러오기")
+        self.btn_import.setStyleSheet(top_btn_style)
+        self.btn_import.clicked.connect(self._on_import_menu)
+        top_layout.addWidget(self.btn_import)
 
-        btn_export = QPushButton("내보내기")
-        btn_export.setFixedHeight(30)
-        btn_export.setAutoDefault(False)
-        btn_export.setDefault(False)
-        btn_export.setToolTip("업무 문서 및 첨부파일 내보내기 (HWPX / PDF)")
-        btn_export.setStyleSheet(top_btn_style)
-        btn_export.clicked.connect(self._on_export_wizard)
-        top_layout.addWidget(btn_export)
+        self.btn_export = QPushButton("내보내기")
+        self.btn_export.setFixedHeight(30)
+        self.btn_export.setAutoDefault(False)
+        self.btn_export.setDefault(False)
+        self.btn_export.setToolTip("업무 문서 및 첨부파일 내보내기 (HWPX / PDF)")
+        self.btn_export.setStyleSheet(top_btn_style)
+        self.btn_export.clicked.connect(self._on_export_wizard)
+        top_layout.addWidget(self.btn_export)
 
         top_layout.addStretch(1)
 
@@ -3040,38 +3040,38 @@ class WorkManagerDialog(QDialog):
         top_layout.addWidget(self.search_input)
 
         # 검색 버튼
-        btn_search = QPushButton("검색")
-        btn_search.setFixedHeight(30)
-        btn_search.setAutoDefault(False)
-        btn_search.setDefault(False)
-        btn_search.setStyleSheet(top_btn_style)
-        btn_search.clicked.connect(lambda: self._on_search_text_changed(self.search_input.text()))
-        top_layout.addWidget(btn_search)
+        self.btn_search = QPushButton("검색")
+        self.btn_search.setFixedHeight(30)
+        self.btn_search.setAutoDefault(False)
+        self.btn_search.setDefault(False)
+        self.btn_search.setStyleSheet(top_btn_style)
+        self.btn_search.clicked.connect(lambda: self._on_search_text_changed(self.search_input.text()))
+        top_layout.addWidget(self.btn_search)
 
         top_layout.addStretch(1)
 
         # 새 업무 추가 버튼 (캘린더 버튼 양식 통일, 이모티콘 제거)
-        btn_new_work = QPushButton("새 업무")
-        btn_new_work.setFixedHeight(30)
-        btn_new_work.setAutoDefault(False)
-        btn_new_work.setDefault(False)
-        btn_new_work.setToolTip("새 업무 생성")
-        btn_new_work.setStyleSheet(top_btn_style)
-        btn_new_work.clicked.connect(self._on_add_new_sheet)
-        top_layout.addWidget(btn_new_work)
+        self.btn_new_work = QPushButton("새 업무")
+        self.btn_new_work.setFixedHeight(30)
+        self.btn_new_work.setAutoDefault(False)
+        self.btn_new_work.setDefault(False)
+        self.btn_new_work.setToolTip("새 업무 생성")
+        self.btn_new_work.setStyleSheet(top_btn_style)
+        self.btn_new_work.clicked.connect(self._on_add_new_sheet)
+        top_layout.addWidget(self.btn_new_work)
 
         # 저장 버튼 (Ctrl+S) (캘린더 버튼 양식 통일, 이모티콘 제거)
-        btn_save_work = QPushButton("저장")
-        btn_save_work.setFixedHeight(30)
-        btn_save_work.setAutoDefault(False)
-        btn_save_work.setDefault(False)
-        btn_save_work.setToolTip("현재 업무 문서 및 변경사항 저장 (Ctrl+S)")
-        btn_save_work.setShortcut(QKeySequence("Ctrl+S"))
-        btn_save_work.setStyleSheet(top_btn_style)
-        btn_save_work.clicked.connect(self._on_save_button_clicked)
-        top_layout.addWidget(btn_save_work)
+        self.btn_save_work = QPushButton("저장")
+        self.btn_save_work.setFixedHeight(30)
+        self.btn_save_work.setAutoDefault(False)
+        self.btn_save_work.setDefault(False)
+        self.btn_save_work.setToolTip("현재 업무 문서 및 변경사항 저장 (Ctrl+S)")
+        self.btn_save_work.setShortcut(QKeySequence("Ctrl+S"))
+        self.btn_save_work.setStyleSheet(top_btn_style)
+        self.btn_save_work.clicked.connect(self._on_save_button_clicked)
+        top_layout.addWidget(self.btn_save_work)
 
-        main_layout.addWidget(top_bar)
+        main_layout.addWidget(self.top_bar)
 
         # =========================================================================
         # 2. 중간: 좌 / 중 / 우 3분할 스플리터
@@ -3477,9 +3477,9 @@ class WorkManagerDialog(QDialog):
         # =========================================================================
         # 3. 맨 아래: 엑셀/한글 스타일 시트(Tab) 바
         # =========================================================================
-        bottom_bar = QFrame()
-        bottom_bar.setFixedHeight(36)
-        bottom_bar.setStyleSheet(f"""
+        self.bottom_bar = QFrame()
+        self.bottom_bar.setFixedHeight(36)
+        self.bottom_bar.setStyleSheet(f"""
             QFrame {{
                 background-color: {panel_alt};
                 border: 1px solid {line};
@@ -3487,7 +3487,7 @@ class WorkManagerDialog(QDialog):
                 padding: 0px 4px;
             }}
         """)
-        bottom_layout = QHBoxLayout(bottom_bar)
+        bottom_layout = QHBoxLayout(self.bottom_bar)
         bottom_layout.setContentsMargins(4, 0, 4, 0)
         bottom_layout.setSpacing(6)
 
@@ -3558,7 +3558,7 @@ class WorkManagerDialog(QDialog):
         bottom_layout.addWidget(self.sheet_tab_bar, 0)
         bottom_layout.addStretch(1)
 
-        main_layout.addWidget(bottom_bar)
+        main_layout.addWidget(self.bottom_bar)
 
         self._refresh_category_combos()
         self._refresh_category_tree()
@@ -4283,6 +4283,9 @@ class WorkManagerDialog(QDialog):
             self.search_input.clearFocus()
         if self._active_sheet_index >= 0:
             QTimer.singleShot(250, self._focus_editor)
+        if not getattr(self, "_first_show_prompt_done", False):
+            self._first_show_prompt_done = True
+            QTimer.singleShot(350, self._check_first_time_context_menu_prompt)
 
     def _focus_editor(self) -> None:
         """문서 편집기로 포커스를 이동하여 즉시 타이핑할 수 있도록 함"""
@@ -6461,5 +6464,237 @@ class WorkManagerDialog(QDialog):
         f.setStyleSheet(f"color: {line};")
         return f
 
+    def _apply_theme_styles(self) -> None:
+        panel = self.palette.get("panel", "#FFFFFF")
+        panel_alt = self.palette.get("panel_alt", "#F8FAFC")
+        text = self.palette.get("text", "#1F2328")
+        line = self.palette.get("line", "#CBD5E0")
+        accent = self.palette.get("accent", "#2563EB")
+        accent_soft = self.palette.get("accent_soft", "#EFF6FF")
+
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {self.palette.get("bg", "#F1F5F9")};
+                color: {text};
+            }}
+            QSplitter::handle {{
+                background-color: {line};
+                width: 1px;
+            }}
+            QSplitter::handle:hover {{
+                background-color: {accent};
+                width: 3px;
+            }}
+        """)
+
+        if hasattr(self, "top_bar") and self.top_bar:
+            self.top_bar.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {panel};
+                    border: 1px solid {line};
+                    border-radius: 8px;
+                    padding: 4px 8px;
+                }}
+            """)
+
+        top_btn_style = f"""
+            QPushButton {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 4px 12px;
+                font-size: 12px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt};
+                border-color: #94A3B8;
+                color: {text};
+            }}
+            QPushButton:pressed {{
+                background-color: #E2E8F0;
+            }}
+        """
+        for btn in (
+            getattr(self, "btn_import", None),
+            getattr(self, "btn_export", None),
+            getattr(self, "btn_search", None),
+            getattr(self, "btn_new_work", None),
+            getattr(self, "btn_save_work", None),
+        ):
+            if btn:
+                btn.setStyleSheet(top_btn_style)
+
+        if hasattr(self, "search_input") and self.search_input:
+            self.search_input.setStyleSheet(f"""
+                QLineEdit {{
+                    background-color: {panel_alt};
+                    border: 1px solid {line};
+                    border-radius: 6px;
+                    padding: 4px 12px;
+                    font-size: 12px;
+                    color: {text};
+                }}
+                QLineEdit:focus {{
+                    background-color: {panel};
+                    border: 1.5px solid #64748B;
+                }}
+            """)
+
+        if hasattr(self, "left_panel") and self.left_panel:
+            self.left_panel.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {panel};
+                    border: 1px solid {line};
+                    border-radius: 8px;
+                }}
+            """)
+
+        if hasattr(self, "category_tree") and self.category_tree:
+            self.category_tree.setStyleSheet(f"""
+                QTreeWidget {{
+                    border: 1px solid {line};
+                    border-radius: 4px;
+                    background-color: {panel_alt};
+                    color: {text};
+                    font-size: 11px;
+                    padding: 2px 2px;
+                    outline: none;
+                }}
+                QTreeWidget::item {{
+                    height: 22px;
+                    padding: 0px 2px;
+                    margin: 1px 1px;
+                    border: none;
+                }}
+                QTreeWidget::item:hover {{
+                    background-color: {accent_soft};
+                    color: {accent};
+                    border-radius: 3px;
+                }}
+                QTreeWidget::item:selected {{
+                    background-color: {accent};
+                    color: #FFFFFF;
+                    font-weight: bold;
+                    border-radius: 3px;
+                }}
+            """)
+
+        if hasattr(self, "center_panel") and self.center_panel:
+            self.center_panel.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {panel};
+                    border: 1px solid {line};
+                    border-radius: 8px;
+                }}
+            """)
+
+        if hasattr(self, "right_panel") and self.right_panel:
+            self.right_panel.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {panel};
+                    border: 1px solid {line};
+                    border-radius: 8px;
+                }}
+            """)
+
+        if hasattr(self, "attachment_tree") and self.attachment_tree:
+            self.attachment_tree.setStyleSheet(f"""
+                QTreeWidget {{
+                    border: 1px solid {line};
+                    border-radius: 4px;
+                    background-color: {panel_alt};
+                    color: {text};
+                    font-size: 11px;
+                    padding: 2px 2px;
+                    outline: none;
+                }}
+                QTreeWidget::item {{
+                    height: 22px;
+                    padding: 0px 2px;
+                    margin: 1px 1px;
+                    border: none;
+                }}
+                QTreeWidget::item:hover {{
+                    background-color: {accent_soft};
+                    color: {accent};
+                    border-radius: 3px;
+                }}
+                QTreeWidget::item:selected {{
+                    background-color: {accent};
+                    color: #FFFFFF;
+                    font-weight: bold;
+                    border-radius: 3px;
+                }}
+            """)
+
+        if hasattr(self, "bottom_bar") and self.bottom_bar:
+            self.bottom_bar.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {panel_alt};
+                    border: 1px solid {line};
+                    border-radius: 4px;
+                    padding: 0px 4px;
+                }}
+            """)
+
+        if hasattr(self, "sheet_tab_bar") and self.sheet_tab_bar:
+            self.sheet_tab_bar.setStyleSheet(f"""
+                QTabBar {{
+                    background: transparent;
+                    border: none;
+                }}
+                QTabBar::tab {{
+                    background: #E2E8F0;
+                    color: #64748B;
+                    border: 1px solid {line};
+                    border-bottom: none;
+                    border-radius: 4px 4px 0px 0px;
+                    padding: 0px 4px 0px 10px;
+                    margin-top: 0px;
+                    margin-right: 3px;
+                    font-size: 12px;
+                    min-width: 90px;
+                    max-width: 360px;
+                    height: 28px;
+                }}
+                QTabBar::tab:selected {{
+                    background: {panel};
+                    color: {accent};
+                    font-weight: bold;
+                    border: 1px solid {line};
+                    border-bottom: 1px solid {panel};
+                    margin-top: 0px;
+                    height: 28px;
+                    padding: 0px 4px 0px 10px;
+                }}
+                QTabBar::tab:hover:!selected {{
+                    background: #FFFFFF;
+                    color: {text};
+                    border: 1px solid {line};
+                    border-bottom: none;
+                }}
+                QTabBar::close-button {{
+                    image: url('{str(asset_path("tab_close_red.svg")).replace("\\", "/")}');
+                    subcontrol-position: right;
+                    subcontrol-origin: padding;
+                    width: 18px;
+                    height: 18px;
+                    padding: 0px;
+                    margin-right: 8px;
+                    background: transparent;
+                    border: none;
+                    outline: none;
+                }}
+            """)
+
+        if hasattr(self, "editor") and hasattr(self.editor, "apply_palette"):
+            self.editor.apply_palette(self.palette)
+
     def apply_palette(self, palette: dict[str, str]) -> None:
         self.palette = palette
+        self._apply_theme_styles()
+        self._refresh_category_tree()
+        self._refresh_sheet_tabs()
+        self.update()

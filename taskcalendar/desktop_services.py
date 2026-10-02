@@ -16,6 +16,7 @@ if not hasattr(wintypes, "HCURSOR"):
     wintypes.HCURSOR = wintypes.HANDLE
 
 from taskcalendar.models import AlertType, CalendarEntry, EntryType
+from taskcalendar.paths import asset_path
 from taskcalendar.storage import EncryptedRepository
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,8 @@ LRESULT = ctypes.c_ssize_t
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 RUN_VALUE_NAME = "TaskCalendar"
 HOTKEY_ID = 0xB001
+HOTKEY_MEMO_ID = 0xB002
+HOTKEY_WORK_ID = 0xB003
 WM_HOTKEY = 0x0312
 PM_REMOVE = 0x0001
 MOD_ALT = 0x0001
@@ -114,6 +117,10 @@ def default_shortcut() -> str:
 
 def default_memo_shortcut() -> str:
     return "F4"
+
+
+def default_work_shortcut() -> str:
+    return "F6"
 
 
 def normalize_shortcut(shortcut: str) -> str:
@@ -268,7 +275,6 @@ def set_native_window_icon(hwnd: int) -> None:
     if sys.platform != "win32" or not hwnd:
         return
     try:
-        from taskcalendar.paths import asset_path
         ico_path = asset_path("app_icon.ico")
         if not ico_path.exists():
             return
@@ -400,8 +406,9 @@ def register_explorer_context_menus() -> bool:
             cmd_import_folder = f'"{exe_path}" "--import-work-folder" "%1"'
             cmd_attach_folder = f'"{exe_path}" "--attach-work-folder" "%1"'
 
-        from taskcalendar.paths import asset_path
         ico_path = asset_path("app_icon.ico")
+        if not ico_path.exists():
+            ico_path = asset_path("app_icon.png")
         icon_str = f'"{exe_path}",0' if exe_path else f'"{ico_path}"'
 
         # 0. 구버전 분리 키 정리

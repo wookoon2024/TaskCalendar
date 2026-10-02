@@ -54,12 +54,15 @@ from PySide6.QtWidgets import (
 
 from taskcalendar.desktop_services import (
     HOTKEY_ID,
+    HOTKEY_MEMO_ID,
+    HOTKEY_WORK_ID,
     MSG,
     PM_REMOVE,
     WM_HOTKEY,
     _parse_hotkey,
     default_shortcut,
     default_memo_shortcut,
+    default_work_shortcut,
     is_startup_enabled,
     normalize_shortcut,
     set_startup_enabled,
@@ -155,7 +158,8 @@ class _HotkeySignal(QObject):
 
 
 class QtGlobalHotkeyManager:
-    def __init__(self, shortcut: str, callback) -> None:
+    def __init__(self, shortcut: str, callback, hotkey_id: int = HOTKEY_ID) -> None:
+        self.hotkey_id = hotkey_id
         self.shortcut = normalize_shortcut(shortcut)
         self._signal = _HotkeySignal()
         self._signal.triggered.connect(callback)
@@ -210,14 +214,14 @@ class QtGlobalHotkeyManager:
                         break
                     if action == "register":
                         if registered:
-                            user32.UnregisterHotKey(None, HOTKEY_ID)
+                            user32.UnregisterHotKey(None, self.hotkey_id)
                             registered = False
                         if binding is None:
                             if response is not None:
                                 response.put(False)
                             continue
                         modifiers, vk = binding
-                        ok = bool(user32.RegisterHotKey(None, HOTKEY_ID, modifiers, vk))
+                        ok = bool(user32.RegisterHotKey(None, self.hotkey_id, modifiers, vk))
                         registered = ok
                         if response is not None:
                             response.put(ok)
@@ -226,12 +230,12 @@ class QtGlobalHotkeyManager:
 
             msg = MSG()
             while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_REMOVE):
-                if msg.message == WM_HOTKEY and int(msg.wParam) == HOTKEY_ID:
+                if msg.message == WM_HOTKEY and int(msg.wParam) == self.hotkey_id:
                     self._signal.triggered.emit()
             time.sleep(0.03)
 
         if registered:
-            user32.UnregisterHotKey(None, HOTKEY_ID)
+            user32.UnregisterHotKey(None, self.hotkey_id)
 
 
 def app_stylesheet(p: dict[str, str]) -> str:
@@ -1136,9 +1140,9 @@ class MainWindow(QMainWindow):
     def __init__(self, repository: EncryptedRepository) -> None:
         super().__init__()
         self.repository = repository
-        self.theme_name = self.repository.get_setting("theme", "light")
+        self.theme_name = self.repository.get_setting("theme", "warm")
         if self.theme_name not in THEMES:
-            self.theme_name = "light"
+            self.theme_name = "warm"
         self.palette = THEMES[self.theme_name]
 
         today = date.today()
@@ -1159,7 +1163,7 @@ class MainWindow(QMainWindow):
         self.show_task_count_on_calendar = self.repository.get_setting("show_task_count_on_calendar", "1") == "1"
         self.calendar_task_statuses = self._get_calendar_task_statuses()
         self.show_lunar_calendar = self.repository.get_setting("show_lunar_calendar", "1") == "1"
-        self.lunar_display_frequency = self.repository.get_setting("lunar_display_frequency", "all")
+        self.lunar_display_frequency = self.repository.get_setting("lunar_display_frequency", "weekly")
         self.show_solar_terms = self.repository.get_setting("show_solar_terms", "1") == "1"
         self._action_icons: dict[str, QIcon] = self._load_action_icons()
         self._holidays_fixed, self._holidays_yearly = self._load_holidays()
@@ -1205,6 +1209,7 @@ class MainWindow(QMainWindow):
         self.tray_icon: QSystemTrayIcon | None = None
         self.hotkey_manager: QtGlobalHotkeyManager | None = None
         self.memo_hotkey_manager: QtGlobalHotkeyManager | None = None
+        self.work_hotkey_manager: QtGlobalHotkeyManager | None = None
         self._sticker_nudge_shortcuts: list[QShortcut] = []
         self._calendar_nav_shortcuts: list[QShortcut] = []
         self._last_window_was_maximized = False
@@ -2303,7 +2308,7 @@ class MainWindow(QMainWindow):
 
         applied_cal: str | None = None
         try:
-            self.hotkey_manager = QtGlobalHotkeyManager(cal_fallback, self._toggle_window_visibility)
+            self.hotkey_manager = QtGlobalHotkeyManager(cal_fallback, self._toggle_window_visibility, hotkey_id=HOTKEY_ID)
             for candidate in cal_candidates:
                 if self.hotkey_manager.update_shortcut(candidate):
                     applied_cal = candidate
@@ -2336,7 +2341,7 @@ class MainWindow(QMainWindow):
 
         applied_memo: str | None = None
         try:
-            self.memo_hotkey_manager = QtGlobalHotkeyManager(memo_fallback, self._toggle_memos_visibility)
+            self.memo_hotkey_manager = QtGlobalHotkeyManager(memo_fallback, self._toggle_memos_visibility, hotkey_id=HOTKEY_MEMO_ID)
             for candidate in memo_candidates:
                 if self.memo_hotkey_manager.update_shortcut(candidate):
                     applied_memo = candidate
@@ -2350,9 +2355,51 @@ class MainWindow(QMainWindow):
             logger.exception("failed to initialize memo global hotkey")
             self.memo_hotkey_manager = None
 
+        # Determine work candidates (must not duplicate cal or memo)
+        work_fallback = "Ctrl+Alt+W"
+        default_work = default_work_shortcut()
+        stored_work = self.repository.get_setting("work_toggle_shortcut", "").strip()
+        stored_work_norm = normalize_shortcut(stored_work) if stored_work else ""
+
+        if stored_work_norm:
+            raw_work_candidates = [stored_work_norm, default_work, work_fallback]
+        else:
+            raw_work_candidates = [default_work, work_fallback]
+
+        used_hotkeys = {norm_applied_cal, normalize_shortcut(applied_memo or "")}
+        work_candidates = [
+            c for c in raw_work_candidates
+            if normalize_shortcut(c) not in used_hotkeys
+        ]
+        if not work_candidates:
+            work_candidates = [work_fallback]
+
+        applied_work: str | None = None
+        try:
+            self.work_hotkey_manager = QtGlobalHotkeyManager(work_fallback, self._toggle_work_manager, hotkey_id=HOTKEY_WORK_ID)
+            for candidate in work_candidates:
+                if self.work_hotkey_manager.update_shortcut(candidate):
+                    applied_work = candidate
+                    break
+            if applied_work is None:
+                applied_work = normalize_shortcut(work_fallback)
+
+            if stored_work != applied_work:
+                self.repository.set_setting("work_toggle_shortcut", applied_work)
+        except Exception:
+            logger.exception("failed to initialize work global hotkey")
+            self.work_hotkey_manager = None
+
         if not migrated_v2:
             self.repository.set_setting("hotkey_migrated_v2", "1")
         self.repository.save()
+
+    def _toggle_work_manager(self) -> None:
+        dlg = getattr(self, "_work_manager_dialog", None)
+        if dlg is not None and dlg.isVisible() and not dlg.isMinimized():
+            dlg.hide()
+        else:
+            self._open_work_manager()
 
     def _toggle_window_visibility(self) -> None:
         if self.isVisible() and not self.isMinimized():
@@ -3987,7 +4034,7 @@ class MainWindow(QMainWindow):
 
     def refresh(self, force_theme: bool = False) -> None:
         if self.theme_name not in THEMES:
-            self.theme_name = "light"
+            self.theme_name = "warm"
         self.palette = THEMES[self.theme_name]
         if self.sidebar_mode == "search" and self.search_query:
             self.search_results = self.repository.search_entries(self.search_query)
@@ -3998,6 +4045,8 @@ class MainWindow(QMainWindow):
             self._apply_tooltip_palette()
             if getattr(self, "_task_manager_dialog", None) is not None and self._task_manager_dialog.isVisible():
                 self._task_manager_dialog.apply_palette(self.palette)
+            if getattr(self, "_work_manager_dialog", None) is not None:
+                self._work_manager_dialog.apply_palette(self.palette)
             self.sticker_toolbar.setStyleSheet(
                 """
                 QFrame#stickerToolbar {
@@ -5397,7 +5446,7 @@ class MainWindow(QMainWindow):
                 self.repository.set_setting(k, str(v))
 
         # 1. Theme
-        stored_theme = self.repository.get_setting("theme", "light")
+        stored_theme = self.repository.get_setting("theme", "warm")
         if stored_theme in THEMES:
             self.theme_name = stored_theme
             self.palette = THEMES[self.theme_name]
@@ -5405,6 +5454,8 @@ class MainWindow(QMainWindow):
             self._apply_tooltip_palette()
             if getattr(self, "_task_manager_dialog", None) is not None:
                 self._task_manager_dialog.apply_palette(self.palette)
+            if getattr(self, "_work_manager_dialog", None) is not None:
+                self._work_manager_dialog.apply_palette(self.palette)
 
         # 1b. 글꼴 (패밀리/크기 배율)
         self._apply_ui_font()
@@ -5414,7 +5465,7 @@ class MainWindow(QMainWindow):
         self.show_task_count_on_calendar = self.repository.get_setting("show_task_count_on_calendar", "1") == "1"
         self.calendar_task_statuses = self._get_calendar_task_statuses()
         self.show_lunar_calendar = self.repository.get_setting("show_lunar_calendar", "1") == "1"
-        self.lunar_display_frequency = self.repository.get_setting("lunar_display_frequency", "all")
+        self.lunar_display_frequency = self.repository.get_setting("lunar_display_frequency", "weekly")
         self.show_solar_terms = self.repository.get_setting("show_solar_terms", "1") == "1"
         self.memo_title_only = self.repository.get_setting("memo_title_only", "1") == "1"
         self._sticker_animation_enabled = self.repository.get_setting("sticker_animation_enabled", "1") == "1"
@@ -5448,6 +5499,9 @@ class MainWindow(QMainWindow):
             if self.memo_hotkey_manager is not None:
                 self.memo_hotkey_manager.stop()
                 self.memo_hotkey_manager = None
+            if self.work_hotkey_manager is not None:
+                self.work_hotkey_manager.stop()
+                self.work_hotkey_manager = None
             self._setup_global_hotkey()
         except Exception:
             pass
@@ -5963,11 +6017,12 @@ class MainWindow(QMainWindow):
             int(self.repository.get_setting("auto_backup_keep_count", "5")),
             self.repository.db_path,
             current_memo_shortcut=self.repository.get_setting("memo_toggle_shortcut", default_memo_shortcut()),
+            current_work_shortcut=self.repository.get_setting("work_toggle_shortcut", default_work_shortcut()),
             initial_tab=initial_tab,
             show_lunar_calendar=self.show_lunar_calendar,
             show_solar_terms=self.show_solar_terms,
             lunar_display_frequency=self.lunar_display_frequency,
-            memo_default_color=self.repository.get_setting("memo_default_color", "yellow"),
+            memo_default_color=self.repository.get_setting("memo_default_color", "random"),
             memo_show_attachment_bar=self.repository.get_setting("memo_show_attachment_bar", "1") != "0",
             memo_default_floating=self.repository.get_setting("memo_default_floating", "0") == "1",
             memo_default_opacity=int(self.repository.get_setting("memo_default_opacity", "100")),
@@ -6013,10 +6068,15 @@ class MainWindow(QMainWindow):
             if self.memo_hotkey_manager is not None and not self.memo_hotkey_manager.update_shortcut(new_memo_shortcut):
                 QMessageBox.warning(self, "단축키 오류", "해당 메모 단축키를 다른 프로그램에서 사용 중이오니, 다른 단축키로 변경해 주세요.")
                 return
+            new_work_shortcut = str(dialog.result.get("work_shortcut", default_work_shortcut()))
+            if self.work_hotkey_manager is not None and not self.work_hotkey_manager.update_shortcut(new_work_shortcut):
+                QMessageBox.warning(self, "단축키 오류", "해당 업무 단축키를 다른 프로그램에서 사용 중이오니, 다른 단축키로 변경해 주세요.")
+                return
             self.theme_name = str(dialog.result["theme"])
             self.repository.set_setting("theme", self.theme_name)
             self.repository.set_setting("toggle_shortcut", new_shortcut)
             self.repository.set_setting("memo_toggle_shortcut", new_memo_shortcut)
+            self.repository.set_setting("work_toggle_shortcut", new_work_shortcut)
             requested_auto_start = bool(dialog.result["auto_start"])
             applied = set_startup_enabled(requested_auto_start)
             current_auto_start = is_startup_enabled()
@@ -6032,7 +6092,7 @@ class MainWindow(QMainWindow):
                 self.repository.set_setting("calendar_task_statuses", json.dumps(self.calendar_task_statuses, ensure_ascii=False))
             self.show_lunar_calendar = bool(dialog.result.get("show_lunar_calendar", True))
             self.repository.set_setting("show_lunar_calendar", "1" if self.show_lunar_calendar else "0")
-            self.lunar_display_frequency = str(dialog.result.get("lunar_display_frequency", "all"))
+            self.lunar_display_frequency = str(dialog.result.get("lunar_display_frequency", "weekly"))
             self.repository.set_setting("lunar_display_frequency", self.lunar_display_frequency)
             self.show_solar_terms = bool(dialog.result.get("show_solar_terms", True))
             self.repository.set_setting("show_solar_terms", "1" if self.show_solar_terms else "0")
@@ -6044,7 +6104,7 @@ class MainWindow(QMainWindow):
                     self._render_sidebar()
             
             # Memo Settings
-            self.repository.set_setting("memo_default_color", str(dialog.result.get("memo_default_color", "yellow")))
+            self.repository.set_setting("memo_default_color", str(dialog.result.get("memo_default_color", "random")))
             self.repository.set_setting("memo_show_attachment_bar", "1" if dialog.result.get("memo_show_attachment_bar", True) else "0")
             self.repository.set_setting("memo_default_floating", "1" if dialog.result.get("memo_default_floating", False) else "0")
             self.repository.set_setting("memo_default_opacity", str(dialog.result.get("memo_default_opacity", 100)))
@@ -6112,6 +6172,8 @@ class MainWindow(QMainWindow):
                 )
             self._holidays_fixed, self._holidays_yearly = self._load_holidays()
             self.refresh()
+            if getattr(self, "_work_manager_dialog", None) is not None:
+                self._work_manager_dialog.apply_palette(self.palette)
 
     def _show_service_menu(self) -> None:
         """부가 기능 버튼 클릭 시 드롭다운 팝업 메뉴 표시"""
@@ -7001,6 +7063,9 @@ class MainWindow(QMainWindow):
         if self.memo_hotkey_manager is not None:
             self.memo_hotkey_manager.stop()
             self.memo_hotkey_manager = None
+        if self.work_hotkey_manager is not None:
+            self.work_hotkey_manager.stop()
+            self.work_hotkey_manager = None
         if self.tray_icon is not None:
             self.tray_icon.hide()
         super().closeEvent(event)
