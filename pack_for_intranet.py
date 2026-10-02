@@ -192,6 +192,21 @@ def create_package() -> Path:
                     included_count += 1
                     total_bytes += file_path.stat().st_size
 
+        # 6. 업무 템플릿 files
+        tpl_root = ROOT / "업무 템플릿"
+        if tpl_root.exists():
+            for dirpath, dirnames, filenames in os.walk(tpl_root):
+                dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIRS and not d.startswith(".")]
+                for fname in filenames:
+                    file_path = Path(dirpath) / fname
+                    suf = file_path.suffix.lower()
+                    if not suf or suf in BLOCKED_EXTENSIONS:
+                        continue
+                    rel_path = file_path.relative_to(ROOT)
+                    zf.write(file_path, str(rel_path).replace("\\", "/"))
+                    included_count += 1
+                    total_bytes += file_path.stat().st_size
+
     zip_size = out_path.stat().st_size
     print(f"\nPackage created successfully: {out_path.name}")
     print(f"- Total files: {included_count}")
@@ -221,5 +236,129 @@ def create_package() -> Path:
     return out_path
 
 
+README_DELTA_TXT = """=============================================================
+TaskCalendar (캘린더 & 업무 관리) v1.9.31 오전 이후 변경분 패치
+=============================================================
+
+1. 개요:
+   오전(v1.9.26) 이후 오후(v1.9.31)에 변경·추가된 핵심 파일만 포함된
+   초경량(DLP 보안 필터 100% 통과) 업무망 패치 압축 파일입니다.
+
+2. 반영 방법:
+   업무망 PC의 기존 TaskCalendar 소스 폴더에 본 압축 파일의 내용물을
+   그대로 '덮어쓰기(Overwrite)' 하시면 즉시 최신 버전으로 갱신됩니다.
+
+3. 주요 반영 사항:
+   - [AI 업무 도우미 & 법령 분석기] 신규 탑재 (우클릭 메뉴 연동)
+   - [공무원 필수 업무 템플릿 21종] 신규 구축 (업무 템플릿/ 폴더)
+   - [에디터 본문 커서 위치 즉시 삽입] 엔진 연동 및 개조식 줄바꿈 지원
+   - [스킨 테마 디자인 연동] AI 팝업 및 토스트 UI 일체화
+   - [캘린더-업무 일정 더블클릭 연동] 및 트레이 백그라운드 안정화
+
+4. 실행 방법:
+   - Python 즉시 실행: python main.py
+   - exe 빌드: python build_exe.py
+=============================================================
+"""
+
+
+def create_delta_package() -> Path:
+    from taskcalendar import APP_VERSION
+    version_str = APP_VERSION if APP_VERSION.startswith("v") else f"v{APP_VERSION}"
+    date_str = datetime.now().strftime("%Y%m%d")
+    out_name = f"TaskCalendar_변경분_오전이후_{version_str}_{date_str}.zip"
+    out_path = ROOT / out_name
+
+    included_count = 0
+    total_bytes = 0
+
+    print(f"Creating delta package: {out_name}...")
+
+    # Files changed or added since morning
+    delta_relative_files = [
+        "build_exe.py",
+        "pack_for_intranet.py",
+        "restore.py",
+        "taskcalendar/__init__.py",
+        "taskcalendar/ai_assistant.py",
+        "taskcalendar/app.py",
+        "taskcalendar/assets/rhwp/studio/assets/index-SVOdqzZ-.js",
+        "taskcalendar/assets/rhwp/studio/theme-init.js",
+        "taskcalendar/desktop_services.py",
+        "taskcalendar/models.py",
+        "taskcalendar/qt_dialogs.py",
+        "taskcalendar/qt_entry_dialog_bridge.py",
+        "taskcalendar/qt_main_window.py",
+        "taskcalendar/qt_rhwp_editor.py",
+        "taskcalendar/qt_task_manager.py",
+        "taskcalendar/qt_work_manager.py",
+        "taskcalendar/rich_text_edit.py",
+        "taskcalendar/storage.py",
+    ]
+
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        # 1. README_변경분_반영안내.txt
+        zf.writestr("README_변경분_반영안내.txt", README_DELTA_TXT.encode("utf-8"))
+        included_count += 1
+
+        # 2. Changed source files
+        for rel in delta_relative_files:
+            fp = ROOT / rel
+            if fp.exists():
+                suf = fp.suffix.lower()
+                if suf in BLOCKED_EXTENSIONS:
+                    continue
+                zf.write(fp, rel.replace("\\", "/"))
+                included_count += 1
+                total_bytes += fp.stat().st_size
+            else:
+                print(f"[WARN] File not found: {rel}")
+
+        # 3. 업무 템플릿 files (.txt)
+        tpl_root = ROOT / "업무 템플릿"
+        if tpl_root.exists():
+            for dirpath, dirnames, filenames in os.walk(tpl_root):
+                dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIRS and not d.startswith(".")]
+                for fname in filenames:
+                    file_path = Path(dirpath) / fname
+                    suf = file_path.suffix.lower()
+                    if not suf or suf in BLOCKED_EXTENSIONS:
+                        continue
+                    rel_path = file_path.relative_to(ROOT)
+                    zf.write(file_path, str(rel_path).replace("\\", "/"))
+                    included_count += 1
+                    total_bytes += file_path.stat().st_size
+
+    zip_size = out_path.stat().st_size
+    print(f"\nDelta package created successfully: {out_path.name}")
+    print(f"- Total files: {included_count}")
+    print(f"- Uncompressed size: {total_bytes:,} bytes ({total_bytes / (1024*1024):.2f} MB)")
+    print(f"- Compressed ZIP size: {zip_size:,} bytes ({zip_size / 1024:.1f} KB)")
+
+    # Strict DLP Validation
+    print("\nVerifying delta archive against intranet transmission DLP criteria...")
+    violation_found = False
+    with zipfile.ZipFile(out_path, "r") as zf:
+        for info in zf.infolist():
+            p = Path(info.filename)
+            suf = p.suffix.lower()
+            if not suf:
+                print(f"[FAIL] No extension found: {info.filename}")
+                violation_found = True
+            if suf in BLOCKED_EXTENSIONS:
+                print(f"[FAIL] Blocked extension found: {info.filename} ({suf})")
+                violation_found = True
+
+    if violation_found:
+        print("\n[ERROR] Delta archive failed DLP validation!")
+        sys.exit(1)
+    else:
+        print("[SUCCESS] All files in delta package strictly conform to intranet security rules!")
+
+    return out_path
+
+
 if __name__ == "__main__":
+    create_delta_package()
     create_package()
+

@@ -4853,7 +4853,13 @@ class WorkManagerDialog(QDialog):
             cat_name = cat.name.replace("_", " ")
             sub_menu = menu.addMenu(f"📁 {cat_name}")
             sub_menu.setStyleSheet(menu.styleSheet())
-            files = sorted([f for f in cat.iterdir() if f.is_file() and f.suffix == ".md"])
+            seen_stems = set()
+            files = []
+            for f in sorted(cat.iterdir()):
+                if f.is_file() and f.suffix.lower() in (".md", ".txt"):
+                    if f.stem not in seen_stems:
+                        seen_stems.add(f.stem)
+                        files.append(f)
             for f in files:
                 title = f.stem.replace("_", " ")
                 act = sub_menu.addAction(title)
