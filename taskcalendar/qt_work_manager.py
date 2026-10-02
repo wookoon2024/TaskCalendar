@@ -5106,7 +5106,7 @@ class WorkManagerDialog(QDialog):
             work_type="work",
         )
         if saved:
-            Toast(self, f"'{sheet.title}' 일정이 캘린더에 등록되었습니다.")
+            self.show_floating_toast(f"'{sheet.title}' 일정이 캘린더에 등록되었습니다.")
             self._refresh_work_schedules_list(sheet)
 
     def _register_category_to_calendar(self, cat_name: str, cat_id: int | None) -> None:
@@ -5123,7 +5123,7 @@ class WorkManagerDialog(QDialog):
             work_type="folder",
         )
         if saved:
-            Toast(self, f"'{cat_name}' 분류 일정이 캘린더에 등록되었습니다.")
+            self.show_floating_toast(f"'{cat_name}' 분류 일정이 캘린더에 등록되었습니다.")
             curr = self._get_current_sheet()
             if curr:
                 self._refresh_work_schedules_list(curr)
@@ -5611,7 +5611,7 @@ class WorkManagerDialog(QDialog):
         """우측 패널 '+ 일정' 버튼 클릭 시 현재 업무의 캘린더 일정 등록 다이얼로그 호출"""
         sheet = self._get_current_sheet()
         if not sheet:
-            Toast(self, "선택된 업무가 없습니다.")
+            self.show_floating_toast("선택된 업무가 없습니다.")
             return
         self._register_sheet_to_calendar(sheet)
 
@@ -5619,7 +5619,7 @@ class WorkManagerDialog(QDialog):
         """선택한 일정을 메인 캘린더에서 보기 위해 캘린더로 이동"""
         item = self.work_schedule_list.currentItem()
         if not item:
-            Toast(self, "이동할 일정을 선택하세요.")
+            self.show_floating_toast("이동할 일정을 선택하세요.")
             return
         entry = item.data(Qt.UserRole + 1)
         target_day = item.data(Qt.UserRole + 2)
@@ -5648,7 +5648,7 @@ class WorkManagerDialog(QDialog):
     def _on_edit_work_schedule_clicked(self) -> None:
         item = self.work_schedule_list.currentItem()
         if not item:
-            Toast(self, "수정할 일정을 선택하세요.")
+            self.show_floating_toast("수정할 일정을 선택하세요.")
             return
         entry = item.data(Qt.UserRole + 1)
         if not isinstance(entry, CalendarEntry):
@@ -5668,12 +5668,12 @@ class WorkManagerDialog(QDialog):
                 if self.main_window:
                     self.main_window.refresh()
                 self._refresh_work_schedules_list()
-                Toast(self, "일정이 수정되었습니다.")
+                self.show_floating_toast("일정이 수정되었습니다.")
 
     def _on_delete_work_schedule_clicked(self) -> None:
         item = self.work_schedule_list.currentItem()
         if not item:
-            Toast(self, "삭제할 일정을 선택하세요.")
+            self.show_floating_toast("삭제할 일정을 선택하세요.")
             return
         entry = item.data(Qt.UserRole + 1)
         if not isinstance(entry, CalendarEntry):
@@ -5693,7 +5693,7 @@ class WorkManagerDialog(QDialog):
             if self.main_window:
                 self.main_window.refresh()
             self._refresh_work_schedules_list()
-            Toast(self, "일정이 삭제되었습니다.")
+            self.show_floating_toast("일정이 삭제되었습니다.")
 
     def _on_schedule_context_menu(self, pos: QPoint) -> None:
         item = self.work_schedule_list.itemAt(pos)
