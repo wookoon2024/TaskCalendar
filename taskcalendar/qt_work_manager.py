@@ -998,70 +998,84 @@ def check_document_drm(file_path: Path | str, raw_bytes: bytes | None = None) ->
     return False, ""
 
 
-def try_extract_via_hwp_com(file_path: Path | str) -> tuple[str, bytes | None]:
+def try_extract_via_hwp_com(file_path: Path | str, timeout_sec: float = 3.5) -> tuple[str, bytes | None]:
     """
     PC에 설치된 한글 프로그램(Hwp.exe)의 OLE Automation(COM)을 통해
-    DRM 파일의 텍스트 또는 HWPX 변환 바이트 추출 시도.
+    DRM 파일의 텍스트 또는 HWPX 변환 바이트 추출 시도 (최대 timeout_sec 초 대기).
     한글 프로그램은 DRM 화이트리스트에 등록되어 있으므로 정상 복호화 가능.
+    보안 차단이나 응답 대기 시 프리징을 방지하기 위해 별도 스레드에서 타임아웃 실행.
     """
-    try:
-        import win32com.client
-        import pythoncom
-        pythoncom.CoInitialize()
+    import threading
+    result = ["", None]
+
+    def _worker():
         try:
-            hwp = win32com.client.Dispatch("HWPFrame.HwpObject")
-        except Exception:
-            return "", None
-
-        try:
-            hwp.RegisterModule("FilePathCheckDLL", "FilePathCheckerModule")
-        except Exception:
-            pass
-
-        try:
-            if hasattr(hwp, "XHwpWindows") and hwp.XHwpWindows.Count > 0:
-                hwp.XHwpWindows.Item(0).Visible = False
-
-            opened = hwp.Open(str(Path(file_path).resolve()), "HWP", "forceopen:true")
-            if not opened:
-                hwp.Quit()
-                return "", None
-
-            text = hwp.GetTextFile("TEXT", "")
-
-            hwpx_bytes = None
+            import win32com.client
+            import pythoncom
+            pythoncom.CoInitialize()
             try:
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix=".hwpx", delete=False) as tmp:
-                    tmp_hwpx = tmp.name
-                hwp.SaveAs(tmp_hwpx, "HWPX")
-                tmp_p = Path(tmp_hwpx)
-                if tmp_p.exists() and tmp_p.stat().st_size > 0:
-                    is_re_drm, _ = check_document_drm(tmp_p)
-                    if not is_re_drm:
-                        hwpx_bytes = tmp_p.read_bytes()
                 try:
-                    tmp_p.unlink(missing_ok=True)
+                    hwp = win32com.client.Dispatch("HWPFrame.HwpObject")
+                except Exception:
+                    return
+
+                try:
+                    # 메시지 박스 무인 모드 (대화상자 팝업 억제)
+                    if hasattr(hwp, "SetMessageBoxMode"):
+                        hwp.SetMessageBoxMode(0x00010000)
+                    # 보안 승인 모듈 등록 시도
+                    hwp.RegisterModule("FilePathCheckDLL", "FilePathCheckerModule")
                 except Exception:
                     pass
-            except Exception:
-                pass
 
-            hwp.Clear(1)
-            hwp.Quit()
-            return (text or "").strip(), hwpx_bytes
+                try:
+                    if hasattr(hwp, "XHwpWindows") and hwp.XHwpWindows.Count > 0:
+                        hwp.XHwpWindows.Item(0).Visible = False
+
+                    opened = hwp.Open(str(Path(file_path).resolve()), "HWP", "forceopen:true")
+                    if not opened:
+                        hwp.Quit()
+                        return
+
+                    text = hwp.GetTextFile("TEXT", "")
+
+                    hwpx_bytes = None
+                    try:
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(suffix=".hwpx", delete=False) as tmp:
+                            tmp_hwpx = tmp.name
+                        hwp.SaveAs(tmp_hwpx, "HWPX")
+                        tmp_p = Path(tmp_hwpx)
+                        if tmp_p.exists() and tmp_p.stat().st_size > 0:
+                            is_re_drm, _ = check_document_drm(tmp_p)
+                            if not is_re_drm:
+                                hwpx_bytes = tmp_p.read_bytes()
+                        try:
+                            tmp_p.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+
+                    hwp.Clear(1)
+                    hwp.Quit()
+                    result[0] = (text or "").strip()
+                    result[1] = hwpx_bytes
+                except Exception as e:
+                    logger.warning(f"Error during Hwp COM extraction: {e}")
+                    try:
+                        hwp.Quit()
+                    except Exception:
+                        pass
+            finally:
+                pythoncom.CoUninitialize()
         except Exception as e:
-            logger.warning(f"Error during Hwp COM extraction: {e}")
-            try:
-                hwp.Quit()
-            except Exception:
-                pass
-            return "", None
-        finally:
-            pythoncom.CoUninitialize()
-    except Exception as e:
-        logger.warning(f"win32com dispatch failed: {e}")
-        return "", None
+            logger.warning(f"win32com dispatch failed: {e}")
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout=timeout_sec)
+    return result[0], result[1]
 
 
 class WorkDrmWarningDialog(QDialog):
