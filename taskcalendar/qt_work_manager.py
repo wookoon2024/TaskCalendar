@@ -7218,6 +7218,9 @@ class WorkManagerDialog(QDialog):
         self._open_sheets[self._active_sheet_index].deadline = val
         self._mark_active_sheet_dirty()
 
+    def _on_editor_text_changed(self) -> None:
+        self._mark_active_sheet_dirty()
+
     def _toggle_search_bar(self) -> None:
         """상단 검색창 열기/닫기 토글"""
         is_vis = self.top_bar.isVisible()
