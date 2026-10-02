@@ -3330,16 +3330,6 @@ class WorkManagerDialog(QDialog):
 
         top_layout.addStretch(1)
 
-        # 새 업무 추가 버튼
-        self.btn_new_work = QPushButton("새 업무")
-        self.btn_new_work.setFixedHeight(30)
-        self.btn_new_work.setAutoDefault(False)
-        self.btn_new_work.setDefault(False)
-        self.btn_new_work.setToolTip("새 업무 생성")
-        self.btn_new_work.setStyleSheet(self._top_btn_style())
-        self.btn_new_work.clicked.connect(self._on_add_new_sheet)
-        top_layout.addWidget(self.btn_new_work)
-
         # 업무 템플릿 버튼
         self.btn_template = QPushButton("업무 템플릿")
         self.btn_template.setFixedHeight(30)
@@ -3364,7 +3354,89 @@ class WorkManagerDialog(QDialog):
         main_layout.addWidget(self.top_bar)
 
         # =========================================================================
-        # 2. 중간: 좌 / 중 / 우 3분할 스플리터
+        # 2. 탭 바: 검색창 바로 아래로 배치
+        # =========================================================================
+        self.bottom_bar = QFrame()
+        self.bottom_bar.setFixedHeight(34)
+        self.bottom_bar.setStyleSheet(f"""
+            QFrame {{
+                background-color: transparent;
+                border: none;
+                padding: 0px 2px;
+            }}
+        """)
+        bottom_layout = QHBoxLayout(self.bottom_bar)
+        bottom_layout.setContentsMargins(4, 0, 4, 0)
+        bottom_layout.setSpacing(6)
+
+        self.sheet_tab_bar = WorkSheetTabBar()
+        self.sheet_tab_bar.setDrawBase(False)
+        self.sheet_tab_bar.setTabsClosable(True)
+        self.sheet_tab_bar.setMovable(True)
+        self.sheet_tab_bar.setExpanding(False)
+        self.sheet_tab_bar.setElideMode(Qt.TextElideMode.ElideRight)
+        self.sheet_tab_bar.setStyleSheet(f"""
+            QTabBar {{
+                background: transparent;
+                border: none;
+            }}
+            QTabBar::tab {{
+                background: #E2E8F0;
+                color: #64748B;
+                border: 1px solid {line};
+                border-radius: 6px 6px 0px 0px;
+                padding: 0px 4px 0px 10px;
+                margin-top: 2px;
+                margin-right: 3px;
+                font-size: 12px;
+                min-width: 90px;
+                max-width: 360px;
+                height: 28px;
+            }}
+            QTabBar::tab:selected {{
+                background: {panel};
+                color: {accent};
+                font-weight: bold;
+                border: 1px solid {line};
+                margin-top: 0px;
+                height: 30px;
+                padding: 0px 4px 0px 10px;
+            }}
+            QTabBar::tab:hover:!selected {{
+                background: #FFFFFF;
+                color: {text};
+                border: 1px solid {line};
+            }}
+            QTabBar::close-button {{
+                image: url('{str(asset_path("tab_close_red.svg")).replace("\\", "/")}');
+                subcontrol-position: right;
+                subcontrol-origin: padding;
+                width: 18px;
+                height: 18px;
+                padding: 0px;
+                margin-right: 8px;
+                background: transparent;
+                border: none;
+                outline: none;
+            }}
+            QTabBar::close-button:hover {{
+                background: transparent;
+                border: none;
+                outline: none;
+            }}
+        """)
+        self.sheet_tab_bar.currentChanged.connect(self._on_sheet_tab_changed)
+        self.sheet_tab_bar.tabCloseRequested.connect(self._on_sheet_tab_close)
+        self.sheet_tab_bar.tabBarDoubleClicked.connect(self._on_sheet_tab_double_clicked)
+        self.sheet_tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.sheet_tab_bar.customContextMenuRequested.connect(self._on_tab_context_menu)
+        bottom_layout.addWidget(self.sheet_tab_bar, 0)
+        bottom_layout.addStretch(1)
+
+        main_layout.addWidget(self.bottom_bar)
+
+        # =========================================================================
+        # 3. 중간: 좌 / 중 / 우 3분할 스플리터
         # =========================================================================
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
@@ -3408,8 +3480,17 @@ class WorkManagerDialog(QDialog):
         left_header.addWidget(left_title)
         left_header.addStretch(1)
 
+        # 분류 버튼 왼쪽으로 새 업무 버튼 배치
+        self.btn_new_work = QPushButton("+ 업무")
+        self.btn_new_work.setFixedHeight(22)
+        self.btn_new_work.setToolTip("새 업무(문서) 생성")
+        self.btn_new_work.setStyleSheet(self._sub_btn_style())
+        self.btn_new_work.clicked.connect(self._on_add_new_sheet)
+        left_header.addWidget(self.btn_new_work)
+
         self.btn_add_cat = QPushButton("+ 분류")
         self.btn_add_cat.setFixedHeight(22)
+        self.btn_add_cat.setToolTip("새 업무 분류(폴더) 추가")
         self.btn_add_cat.setStyleSheet(self._sub_btn_style())
         self.btn_add_cat.clicked.connect(self._on_add_category)
         left_header.addWidget(self.btn_add_cat)
@@ -3889,91 +3970,7 @@ class WorkManagerDialog(QDialog):
         self.splitter.setSizes([220, 760, 220])
         main_layout.addWidget(self.splitter, 1)
 
-        # =========================================================================
-        # 3. 맨 아래: 엑셀/한글 스타일 시트(Tab) 바
-        # =========================================================================
-        self.bottom_bar = QFrame()
-        self.bottom_bar.setFixedHeight(36)
-        self.bottom_bar.setStyleSheet(f"""
-            QFrame {{
-                background-color: {panel_alt};
-                border: 1px solid {line};
-                border-radius: 4px;
-                padding: 0px 4px;
-            }}
-        """)
-        bottom_layout = QHBoxLayout(self.bottom_bar)
-        bottom_layout.setContentsMargins(4, 0, 4, 0)
-        bottom_layout.setSpacing(6)
 
-        self.sheet_tab_bar = WorkSheetTabBar()
-        self.sheet_tab_bar.setDrawBase(False)
-        self.sheet_tab_bar.setTabsClosable(True)
-        self.sheet_tab_bar.setMovable(True)
-        self.sheet_tab_bar.setExpanding(False)
-        self.sheet_tab_bar.setElideMode(Qt.TextElideMode.ElideRight)
-        self.sheet_tab_bar.setStyleSheet(f"""
-            QTabBar {{
-                background: transparent;
-                border: none;
-            }}
-            QTabBar::tab {{
-                background: #E2E8F0;
-                color: #64748B;
-                border: 1px solid {line};
-                border-bottom: none;
-                border-radius: 4px 4px 0px 0px;
-                padding: 0px 4px 0px 10px;
-                margin-top: 0px;
-                margin-right: 3px;
-                font-size: 12px;
-                min-width: 90px;
-                max-width: 360px;
-                height: 28px;
-            }}
-            QTabBar::tab:selected {{
-                background: {panel};
-                color: {accent};
-                font-weight: bold;
-                border: 1px solid {line};
-                border-bottom: 1px solid {panel};
-                margin-top: 0px;
-                height: 28px;
-                padding: 0px 4px 0px 10px;
-            }}
-            QTabBar::tab:hover:!selected {{
-                background: #FFFFFF;
-                color: {text};
-                border: 1px solid {line};
-                border-bottom: none;
-            }}
-            QTabBar::close-button {{
-                image: url('{str(asset_path("tab_close_red.svg")).replace("\\", "/")}');
-                subcontrol-position: right;
-                subcontrol-origin: padding;
-                width: 18px;
-                height: 18px;
-                padding: 0px;
-                margin-right: 8px;
-                background: transparent;
-                border: none;
-                outline: none;
-            }}
-            QTabBar::close-button:hover {{
-                background: transparent;
-                border: none;
-                outline: none;
-            }}
-        """)
-        self.sheet_tab_bar.currentChanged.connect(self._on_sheet_tab_changed)
-        self.sheet_tab_bar.tabCloseRequested.connect(self._on_sheet_tab_close)
-        self.sheet_tab_bar.tabBarDoubleClicked.connect(self._on_sheet_tab_double_clicked)
-        self.sheet_tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.sheet_tab_bar.customContextMenuRequested.connect(self._on_tab_context_menu)
-        bottom_layout.addWidget(self.sheet_tab_bar, 0)
-        bottom_layout.addStretch(1)
-
-        main_layout.addWidget(self.bottom_bar)
 
         self._refresh_category_combos()
         self._refresh_category_tree()
@@ -4606,12 +4603,14 @@ class WorkManagerDialog(QDialog):
             self._refresh_category_tree()
 
     def _on_tab_context_menu(self, pos: QPoint) -> None:
-        """하단 시트 탭 우클릭 컨텍스트 메뉴"""
+        """시트 탭 우클릭 컨텍스트 메뉴"""
         tab_idx = self.sheet_tab_bar.tabAt(pos)
         if tab_idx < 0 or tab_idx >= len(self._open_sheets):
             return
         target = self._open_sheets[tab_idx]
         menu = QMenu(self)
+        act_reg_cal = menu.addAction("📅 캘린더에 일정 등록")
+        menu.addSeparator()
         act_close = menu.addAction("✕ 탭 닫기")
         act_rename = menu.addAction("✏️ 이름 바꾸기")
         act_duplicate = menu.addAction("📋 시트 복제")
@@ -4619,7 +4618,9 @@ class WorkManagerDialog(QDialog):
         act_delete = menu.addAction("🗑️ 업무 삭제 (DB 영구 삭제)")
 
         action = menu.exec(self.sheet_tab_bar.mapToGlobal(pos))
-        if action == act_close:
+        if action == act_reg_cal:
+            self._register_sheet_to_calendar(target)
+        elif action == act_close:
             self._on_sheet_tab_close(tab_idx)
         elif action == act_rename:
             self._on_sheet_tab_double_clicked(tab_idx)
@@ -5243,7 +5244,7 @@ class WorkManagerDialog(QDialog):
                 )
                 self.repository.save()
         sheet_title = (sheet.title or "새 업무").strip()
-        reg_title = sheet_title if sheet_title.startswith("[업무]") else f"[업무] {sheet_title}"
+        reg_title = sheet_title if (sheet_title.startswith("[문서]") or sheet_title.startswith("[업무]")) else f"[문서] {sheet_title}"
         saved = self.main_window.register_schedule_from_work(
             title=reg_title,
             description=reg_title,
@@ -5260,7 +5261,7 @@ class WorkManagerDialog(QDialog):
             QMessageBox.warning(self, "오류", "메인 캘린더 창을 찾을 수 없습니다.")
             return
         cat_clean = cat_name.strip()
-        reg_title = cat_clean if cat_clean.startswith("[업무]") else f"[업무] {cat_clean}"
+        reg_title = cat_clean if (cat_clean.startswith("[문서]") or cat_clean.startswith("[업무]")) else f"[문서] {cat_clean}"
         saved = self.main_window.register_schedule_from_work(
             title=reg_title,
             description=reg_title,
@@ -5283,7 +5284,7 @@ class WorkManagerDialog(QDialog):
                         target_sheet = s
                         break
             if not target_sheet and title:
-                clean_title = title.replace("[업무]", "").strip()
+                clean_title = title.replace("[문서]", "").replace("[업무]", "").strip()
                 for s in self._all_sheets:
                     if s.title.strip() == clean_title or clean_title in s.title:
                         target_sheet = s

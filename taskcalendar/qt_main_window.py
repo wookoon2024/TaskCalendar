@@ -4971,9 +4971,18 @@ class MainWindow(QMainWindow):
             }
         """)
 
-        has_work_link = bool(getattr(entry, "linked_work_id", None)) or (bool(entry.title) and entry.title.startswith("[업무]"))
+        has_work_link = bool(getattr(entry, "linked_work_id", None)) or (
+            bool(entry.title) and (entry.title.startswith("[문서]") or entry.title.startswith("[업무]"))
+        )
         if has_work_link:
-            work_label = "💼 해당 업무로 바로 가기" if getattr(entry, "linked_work_type", "work") != "folder" else "📁 해당 업무 분류(폴더)로 바로 가기"
+            is_folder = getattr(entry, "linked_work_type", "work") == "folder"
+            is_doc = bool(entry.title) and entry.title.startswith("[문서]")
+            if is_folder:
+                work_label = "📁 해당 업무 분류(폴더)로 바로 가기"
+            elif is_doc:
+                work_label = "📄 해당 문서로 바로 가기"
+            else:
+                work_label = "💼 해당 업무로 바로 가기"
             work_act = menu.addAction(work_label)
             work_act.triggered.connect(lambda _=False, e=entry: self.open_linked_work(
                 e.linked_work_id,
