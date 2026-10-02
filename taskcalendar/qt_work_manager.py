@@ -200,6 +200,10 @@ class FloatingToastOverlay(QFrame):
 class CompactCategoryItemDelegate(QStyledItemDelegate):
     """트리 항목(폴더 및 문서)의 텍스트 렌더링 델리게이트"""
 
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        return QSize(size.width(), max(size.height(), 26))
+
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
@@ -217,7 +221,8 @@ class CompactCategoryItemDelegate(QStyledItemDelegate):
         else:
             painter.setPen(QColor('#1E293B') if is_parent else QColor('#334155'))
 
-        font = opt.font
+        font = QFont(opt.font)
+        font.setPixelSize(13)
         if is_parent or is_sel:
             font.setBold(True)
         painter.setFont(font)
@@ -3436,14 +3441,14 @@ class WorkManagerDialog(QDialog):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("업무, 본문, 첨부 검색... (Ctrl+F)")
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.setFixedHeight(26)
+        self.search_input.setFixedHeight(28)
         self.search_input.setStyleSheet(f"""
             QLineEdit {{
                 background-color: {panel_alt};
                 border: 1px solid {line};
                 border-radius: 4px;
-                padding: 2px 6px;
-                font-size: 11px;
+                padding: 2px 8px;
+                font-size: 12px;
                 color: {text};
             }}
             QLineEdit:focus {{
@@ -3456,8 +3461,8 @@ class WorkManagerDialog(QDialog):
         search_layout.addWidget(self.search_input, 1)
 
         self.btn_search = QPushButton("검색")
-        self.btn_search.setFixedHeight(26)
-        self.btn_search.setFixedWidth(46)
+        self.btn_search.setFixedHeight(28)
+        self.btn_search.setFixedWidth(48)
         self.btn_search.setAutoDefault(False)
         self.btn_search.setDefault(False)
         self.btn_search.setStyleSheet(self._sub_btn_style())
@@ -3480,13 +3485,13 @@ class WorkManagerDialog(QDialog):
                 border-radius: 4px;
                 background-color: {panel_alt};
                 color: {text};
-                font-size: 11px;
+                font-size: 13px;
                 padding: 2px 2px;
                 outline: none;
             }}
             QTreeWidget::item {{
-                height: 22px;
-                padding: 0px 2px;
+                height: 26px;
+                padding: 0px 4px;
                 margin: 1px 1px;
                 border: none;
                 background: transparent;
@@ -5037,6 +5042,7 @@ class WorkManagerDialog(QDialog):
             item.setData(0, Qt.UserRole + 2, raw_name)
             font = item.font(0)
             font.setBold(True)
+            font.setPixelSize(13)
             item.setFont(0, font)
             item.setForeground(0, QColor("#1E293B"))
             cat_items_map[cat_id] = item
@@ -7173,33 +7179,28 @@ class WorkManagerDialog(QDialog):
         self._open_search_bar()
 
     def _on_search_text_changed(self, query: str) -> None:
-        """통합 검색 및 RAG FTS5 매칭 필터링"""
+        """좌측 업무 분류 트리 실시간 검색 필터링 (열린 탭과 에디터는 변경하지 않음)"""
         query = query.strip().lower()
         if not query:
-            for i in range(self.sheet_tab_bar.count()):
-                self.sheet_tab_bar.setTabVisible(i, True)
-            self._refresh_category_tree()
+            def show_all(item: QTreeWidgetItem) -> None:
+                item.setHidden(False)
+                for k in range(item.childCount()):
+                    show_all(item.child(k))
+
+            for i in range(self.category_tree.topLevelItemCount()):
+                show_all(self.category_tree.topLevelItem(i))
             return
 
         rag_matched_ids = set()
-        if self.repository:
-            results = self.repository.search_work_rag(query)
-            for r in results:
-                rag_matched_ids.add(r["id"])
+        if self.repository and hasattr(self.repository, "search_work_rag"):
+            try:
+                results = self.repository.search_work_rag(query)
+                for r in results:
+                    rag_matched_ids.add(r["id"])
+            except Exception:
+                pass
 
-        for idx, sheet in enumerate(self._open_sheets):
-            matched = (
-                (sheet.db_id and sheet.db_id in rag_matched_ids)
-                or query in sheet.title.lower()
-                or query in sheet.category.lower()
-                or query in sheet.assignee.lower()
-                or query in sheet.content_text.lower()
-                or query in sheet.content_html.lower()
-                or any(query in att.get("name", "").lower() for att in sheet.attachments)
-            )
-            self.sheet_tab_bar.setTabVisible(idx, matched)
-
-        # 좌측 카테고리 트리 필터링 적용 (다단계 폴더 재귀)
+        # 좌측 카테고리 트리 필터링만 수행
         def matches(sheet: WorkSheetData) -> bool:
             return bool(
                 (sheet.db_id and sheet.db_id in rag_matched_ids)
@@ -7616,8 +7617,8 @@ class WorkManagerDialog(QDialog):
                     background-color: {panel_alt};
                     border: 1px solid {line};
                     border-radius: 4px;
-                    padding: 2px 6px;
-                    font-size: 11px;
+                    padding: 2px 8px;
+                    font-size: 12px;
                     color: {text};
                 }}
                 QLineEdit:focus {{
@@ -7642,13 +7643,13 @@ class WorkManagerDialog(QDialog):
                     border-radius: 4px;
                     background-color: {panel_alt};
                     color: {text};
-                    font-size: 11px;
+                    font-size: 13px;
                     padding: 2px 2px;
                     outline: none;
                 }}
                 QTreeWidget::item {{
-                    height: 22px;
-                    padding: 0px 2px;
+                    height: 26px;
+                    padding: 0px 4px;
                     margin: 1px 1px;
                     border: none;
                 }}
