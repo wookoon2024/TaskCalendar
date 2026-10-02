@@ -17,6 +17,12 @@
       if (!settings.theme.skin) settings.theme.skin = 'classic';
       localStorage.setItem('rhwp-settings', JSON.stringify(settings));
     }
+    // 폭맞춤(fitWidth)을 기본 배율 모드로 설정하여 쪽맞춤(fitPage) 계산 왜곡으로 인한 10% 축소 현상 방지
+    if (!settings.view) settings.view = {};
+    if (settings.view.zoomFitMode === 'fitPage' || !settings.view.zoomFitMode) {
+      settings.view.zoomFitMode = 'fitWidth';
+      localStorage.setItem('rhwp-settings', JSON.stringify(settings));
+    }
     const storedMode = settings && settings.theme && settings.theme.mode;
     if (isThemeMode(storedMode)) mode = storedMode;
     var storedSkin = settings && settings.theme && settings.theme.skin;
