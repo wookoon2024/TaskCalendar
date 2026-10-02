@@ -9,10 +9,18 @@ except Exception:
 import json
 import logging
 import os
+import ssl
 from pathlib import Path
 from typing import Any, Callable
 
 import requests
+from requests.adapters import HTTPAdapter
+
+try:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except Exception:
+    pass
 
 from PySide6.QtCore import QPoint, Qt, QThread, Signal
 from PySide6.QtGui import QFont, QGuiApplication, QIcon
@@ -46,6 +54,19 @@ DEFAULT_AI_KEY = "user_2PKt7EHf5NygyxWLz62XfKn1ZT6aKx2P6Q2kEpRP2uiUUjTh66Eepmnjc
 DEFAULT_AI_MODEL = "gpt-5.6-sol"
 
 
+class TruststoreAdapter(HTTPAdapter):
+    """Adapter that injects Windows OS certificate store into urllib3 poolmanager."""
+
+    def __init__(self, ssl_context: Any = None, *args: Any, **kwargs: Any) -> None:
+        self.ssl_context = ssl_context
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> Any:
+        if self.ssl_context:
+            kwargs["ssl_context"] = self.ssl_context
+        return super().init_poolmanager(*args, **kwargs)
+
+
 class AIConfigManager:
     """AI API 설정 관리자 (로컬 영구 저장)"""
 
@@ -58,9 +79,9 @@ class AIConfigManager:
         return p
 
     @classmethod
-    def load(cls) -> dict[str, Any]:
-        if cls._config_cache is not None:
-            return cls._config_cache
+    def load(cls, force_reload: bool = False) -> dict[str, Any]:
+        if not force_reload and cls._config_cache is not None:
+            return dict(cls._config_cache)
 
         cfg_file = cls.get_config_file()
         default_cfg: dict[str, Any] = {
@@ -81,11 +102,11 @@ class AIConfigManager:
                 logger.warning("Failed to load ai_config.json: %s", e)
 
         cls._config_cache = default_cfg
-        return cls._config_cache
+        return dict(cls._config_cache)
 
     @classmethod
     def save(cls, new_cfg: dict[str, Any]) -> None:
-        cfg = cls.load()
+        cfg = cls.load(force_reload=True)
         cfg.update(new_cfg)
         cls._config_cache = cfg
         cfg_file = cls.get_config_file()
@@ -110,7 +131,7 @@ class AIChatWorker(QThread):
     ) -> None:
         super().__init__(parent)
         self.messages = messages
-        self.config = config or AIConfigManager.load()
+        self.config = config or AIConfigManager.load(force_reload=True)
         self._is_stopped = False
 
     def stop(self) -> None:
@@ -120,6 +141,7 @@ class AIChatWorker(QThread):
         endpoint = str(self.config.get("endpoint", DEFAULT_AI_ENDPOINT)).strip()
         api_key = str(self.config.get("api_key", DEFAULT_AI_KEY)).strip()
         model = str(self.config.get("model", DEFAULT_AI_MODEL)).strip()
+        ssl_verify = bool(self.config.get("ssl_verify", True))
         timeout = int(self.config.get("timeout_sec", 35))
         stream_enabled = bool(self.config.get("stream", True))
 
@@ -140,15 +162,30 @@ class AIChatWorker(QThread):
             "temperature": 0.4,
         }
 
+        session = requests.Session()
+        if ssl_verify:
+            try:
+                import truststore
+                ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                session.mount("https://", TruststoreAdapter(ssl_context=ctx))
+            except Exception:
+                pass
+        else:
+            try:
+                import urllib3
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            except Exception:
+                pass
+
         accumulated_text = ""
         try:
-            with requests.post(
+            with session.post(
                 endpoint,
                 json=payload,
                 headers=headers,
                 stream=stream_enabled,
                 timeout=timeout,
-                verify=True,
+                verify=ssl_verify,
             ) as resp:
                 resp.raise_for_status()
                 resp.encoding = "utf-8"
@@ -195,13 +232,18 @@ class AIChatWorker(QThread):
                     err_body = e.response.text[:300]
             self.error.emit(f"AI 서버 응답 오류 (HTTP {e.response.status_code if e.response else 'N/A'}):\n{err_body}")
         except requests.exceptions.SSLError as e:
-            self.error.emit(f"SSL 보안 인증서 검증 실패:\n{e}\n\n(기관 전용 사설 인증서인 경우 Windows 인증서 저장소에 등록되어 있는지 확인해 주세요.)")
+            self.error.emit(f"SSL 보안 인증서 검증 실패:\n{e}\n\n(기관 전용 사설 인증서 또는 행정망 환경인 경우 AI 설정에서 '표준 SSL 보안 인증서 검증 활성화' 체크를 해제해 주세요.)")
         except requests.exceptions.Timeout:
             self.error.emit(f"요청 시간 초과 ({timeout}초 경과). 서버 상태를 확인해 주세요.")
         except requests.exceptions.RequestException as e:
             self.error.emit(f"네트워크 통신 오류: {e}")
         except Exception as e:
             self.error.emit(f"AI 통신 오류 발생: {e}")
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
 
 
 class AISettingsDialog(QDialog):
@@ -277,30 +319,38 @@ class AISettingsDialog(QDialog):
         self.combo_preset.addItem("공공기관 행정망 (CLOVA Studio GOV)", "clova_gov")
         self.combo_preset.addItem("공공기관 범정부 AI (dev.ai.go.kr)", "gov")
         self.combo_preset.addItem("사내 자체 구축 LLM / Ollama (직접 입력)", "custom")
-        self.combo_preset.currentIndexChanged.connect(self._on_preset_changed)
         form.addRow("망 환경 프리셋:", self.combo_preset)
 
         self.edit_endpoint = QLineEdit(self)
         self.edit_endpoint.setText(self.cfg.get("endpoint", DEFAULT_AI_ENDPOINT))
         form.addRow("API 엔드포인트:", self.edit_endpoint)
 
+        key_layout = QHBoxLayout()
+        key_layout.setContentsMargins(0, 0, 0, 0)
+        key_layout.setSpacing(6)
         self.edit_key = QLineEdit(self)
         self.edit_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.edit_key.setText(self.cfg.get("api_key", DEFAULT_AI_KEY))
-        form.addRow("API Key:", self.edit_key)
+        self.btn_toggle_key = QPushButton("보기", self)
+        self.btn_toggle_key.setFixedWidth(52)
+        self.btn_toggle_key.setStyleSheet(f"background-color: {panel}; color: {text}; border: 1px solid {line}; padding: 4px 8px; border-radius: 4px; font-size: 11px;")
+        self.btn_toggle_key.clicked.connect(self._toggle_key_visibility)
+        key_layout.addWidget(self.edit_key, 1)
+        key_layout.addWidget(self.btn_toggle_key)
+        form.addRow("API Key:", key_layout)
 
         self.edit_model = QLineEdit(self)
         self.edit_model.setText(self.cfg.get("model", DEFAULT_AI_MODEL))
         form.addRow("모델명 (Model):", self.edit_model)
 
-        self.chk_ssl = QCheckBox("표준 SSL 보안 인증서 검증 활성화 (권장)", self)
+        self.chk_ssl = QCheckBox("표준 SSL 보안 인증서 검증 활성화 (해제 시 기관 사설인증서 허용)", self)
         self.chk_ssl.setChecked(self.cfg.get("ssl_verify", True))
         form.addRow("보안 검증:", self.chk_ssl)
 
         layout.addWidget(group)
 
         lbl_hint = QLabel(
-            "업무망/행정망 환경에서는 기관에서 발급받은 내부 엔드포인트 및 인증키를 입력하여 사용할 수 있습니다.",
+            "업무망/행정망 환경에서 SSL 보안 오류가 발생할 경우 '보안 검증' 체크를 해제하시면 기관 내부망에서도 정상 연결됩니다.",
             self,
         )
         lbl_hint.setWordWrap(True)
@@ -322,10 +372,21 @@ class AISettingsDialog(QDialog):
         btn_layout.addWidget(btn_cancel)
         layout.addLayout(btn_layout)
 
+        # Set preset index without triggering _on_preset_changed
         curr_provider = self.cfg.get("provider", "commandcode")
         idx = self.combo_preset.findData(curr_provider)
         if idx >= 0:
             self.combo_preset.setCurrentIndex(idx)
+        # Connect only AFTER initial population
+        self.combo_preset.currentIndexChanged.connect(self._on_preset_changed)
+
+    def _toggle_key_visibility(self) -> None:
+        if self.edit_key.echoMode() == QLineEdit.EchoMode.Password:
+            self.edit_key.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.btn_toggle_key.setText("숨김")
+        else:
+            self.edit_key.setEchoMode(QLineEdit.EchoMode.Password)
+            self.btn_toggle_key.setText("보기")
 
     def _on_preset_changed(self, index: int) -> None:
         data = self.combo_preset.currentData()
@@ -337,12 +398,11 @@ class AISettingsDialog(QDialog):
         elif data == "clova_gov":
             self.edit_endpoint.setText("https://api.clovastudio.go.kr/api/v1/chat/completions")
             self.edit_model.setText("HCX-GOV-THINK-V1-32B")
-            self.edit_key.clear()
             self.edit_key.setPlaceholderText("기관에서 발급받은 CLOVA GOV API 키를 입력하세요")
         elif data == "gov":
             self.edit_endpoint.setText("https://dev.ai.go.kr/api/v1/chat/completions")
             self.edit_model.setText("HCX-003")
-            self.edit_key.clear()
+            self.edit_key.setPlaceholderText("범정부 AI API 키를 입력하세요")
 
     def _save_settings(self) -> None:
         new_data = {
@@ -353,6 +413,7 @@ class AISettingsDialog(QDialog):
             "ssl_verify": self.chk_ssl.isChecked(),
         }
         AIConfigManager.save(new_data)
+        self.cfg = AIConfigManager.load(force_reload=True)
         QMessageBox.information(self, "설정 완료", "AI 연동 설정이 성공적으로 저장되었습니다.")
         self.accept()
 
