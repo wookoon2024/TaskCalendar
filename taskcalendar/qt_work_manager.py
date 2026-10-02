@@ -5101,7 +5101,7 @@ class WorkManagerDialog(QDialog):
         reg_title = sheet_title if sheet_title.startswith("[업무]") else f"[업무] {sheet_title}"
         saved = self.main_window.register_schedule_from_work(
             title=reg_title,
-            description=sheet_title,
+            description=reg_title,
             work_id=sheet.db_id,
             work_type="work",
         )
@@ -5118,7 +5118,7 @@ class WorkManagerDialog(QDialog):
         reg_title = cat_clean if cat_clean.startswith("[업무]") else f"[업무] {cat_clean}"
         saved = self.main_window.register_schedule_from_work(
             title=reg_title,
-            description=cat_clean,
+            description=reg_title,
             work_id=cat_id,
             work_type="folder",
         )
