@@ -4,8 +4,8 @@ Useful when files were transferred across network security filters where .ico / 
 """
 from __future__ import annotations
 
-import shutil
 import struct
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -26,14 +26,32 @@ def restore_app_icon() -> bool:
 
 def restore_rhwp_wasm() -> bool:
     assets_dir = ROOT / "taskcalendar" / "assets" / "rhwp" / "studio" / "assets"
-    dat_path = assets_dir / "rhwp_bg-PUGAA2uC.dat"
     wasm_path = assets_dir / "rhwp_bg-PUGAA2uC.wasm"
-    if dat_path.exists() and (not wasm_path.exists() or wasm_path.stat().st_size == 0):
-        raw = dat_path.read_bytes()
-        if not raw.startswith(b"\x00asm"):
-            raw = bytes(b ^ 0xA5 for b in raw)
-        wasm_path.write_bytes(raw)
-        print(f"[OK] Restored {wasm_path.relative_to(ROOT)} from DAT (unmasked)")
+    png_path = assets_dir / "rhwp_engine.png"
+    if png_path.exists() and (not wasm_path.exists() or wasm_path.stat().st_size == 0):
+        data = png_path.read_bytes()
+        idx = 8
+        idat_acc = bytearray()
+        w, h = 0, 0
+        while idx < len(data):
+            clen = struct.unpack(">I", data[idx : idx + 4])[0]
+            ctype = data[idx + 4 : idx + 8]
+            cdata = data[idx + 8 : idx + 8 + clen]
+            if ctype == b"IHDR":
+                w, h = struct.unpack(">II", cdata[:8])
+            elif ctype == b"IDAT":
+                idat_acc.extend(cdata)
+            idx += 12 + clen
+        decomp = zlib.decompress(bytes(idat_acc))
+        rb = w * 4
+        payload = bytearray()
+        for i in range(h):
+            start = i * (rb + 1) + 1
+            payload.extend(decomp[start : start + rb])
+        olen = struct.unpack(">I", payload[:4])[0]
+        wasm_bytes = bytes(payload[4 : 4 + olen])
+        wasm_path.write_bytes(wasm_bytes)
+        print(f"[OK] Restored {wasm_path.relative_to(ROOT)} from {png_path.name} ({len(wasm_bytes):,} bytes)")
         return True
     return False
 

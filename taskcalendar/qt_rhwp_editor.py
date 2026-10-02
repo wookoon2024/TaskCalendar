@@ -76,20 +76,49 @@ except ImportError:
     _HAS_WEBENGINE = False
 
 
+def _decode_wasm_from_png(png_path: Path) -> bytes | None:
+    try:
+        import struct
+        import zlib
+        data = png_path.read_bytes()
+        idx = 8
+        idat_acc = bytearray()
+        w, h = 0, 0
+        while idx < len(data):
+            clen = struct.unpack(">I", data[idx : idx + 4])[0]
+            ctype = data[idx + 4 : idx + 8]
+            cdata = data[idx + 8 : idx + 8 + clen]
+            if ctype == b"IHDR":
+                w, h = struct.unpack(">II", cdata[:8])
+            elif ctype == b"IDAT":
+                idat_acc.extend(cdata)
+            idx += 12 + clen
+        decomp = zlib.decompress(bytes(idat_acc))
+        rb = w * 4
+        payload = bytearray()
+        for i in range(h):
+            start = i * (rb + 1) + 1
+            payload.extend(decomp[start : start + rb])
+        olen = struct.unpack(">I", payload[:4])[0]
+        return bytes(payload[4 : 4 + olen])
+    except Exception as e:
+        logger.warning("Failed to decode wasm from png %s: %s", png_path, e)
+        return None
+
+
 def ensure_rhwp_wasm() -> Path | None:
-    """망연계 보안 필터 통과용으로 마스킹된 .dat 에셋을 로컬에서 .wasm으로 자동 복원"""
+    """망연계 보안 통과용 표준 PNG 이미지(rhwp_engine.png)로부터 .wasm 자동 복원"""
     studio_assets = Path(__file__).parent / "assets" / "rhwp" / "studio" / "assets"
     wasm_path = studio_assets / "rhwp_bg-PUGAA2uC.wasm"
-    dat_path = studio_assets / "rhwp_bg-PUGAA2uC.dat"
-    if not wasm_path.exists() and dat_path.exists():
-        try:
-            raw = dat_path.read_bytes()
-            if not raw.startswith(b"\x00asm"):
-                raw = bytes(b ^ 0xA5 for b in raw)
+    if wasm_path.exists() and wasm_path.stat().st_size > 0:
+        return wasm_path
+    png_path = studio_assets / "rhwp_engine.png"
+    if png_path.exists():
+        raw = _decode_wasm_from_png(png_path)
+        if raw and raw.startswith(b"\x00asm"):
             wasm_path.write_bytes(raw)
-            logger.info("Auto-restored rhwp_bg-PUGAA2uC.wasm from dat")
-        except Exception as e:
-            logger.warning("Failed to auto-restore wasm from dat: %s", e)
+            logger.info("Auto-restored rhwp_bg-PUGAA2uC.wasm from %s", png_path.name)
+            return wasm_path
     return wasm_path if wasm_path.exists() else None
 
 
