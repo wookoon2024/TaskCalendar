@@ -3240,111 +3240,6 @@ class WorkManagerDialog(QDialog):
         main_layout.setSpacing(0)
 
         # =========================================================================
-        # 1. 맨 위: 통합 검색 및 상단 도구 바 (열기/닫기 토글 지원)
-        # =========================================================================
-        self.top_bar = QFrame()
-        self.top_bar.setStyleSheet(f"""
-            QFrame {{
-                background-color: {panel};
-                border: 1px solid {line};
-                border-radius: 8px;
-                padding: 4px 8px;
-            }}
-        """)
-        top_layout = QHBoxLayout(self.top_bar)
-        top_layout.setContentsMargins(4, 2, 4, 2)
-        top_layout.setSpacing(8)
-
-        top_btn_style = f"""
-            QPushButton {{
-                background-color: {panel};
-                color: {text};
-                border: 1px solid {line};
-                border-radius: 6px;
-                padding: 4px 12px;
-                font-size: 12px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background-color: {panel_alt};
-                border-color: #94A3B8;
-                color: {text};
-            }}
-            QPushButton:pressed {{
-                background-color: #E2E8F0;
-            }}
-        """
-
-        top_layout.addStretch(1)
-
-        # 검색 입력창 (가로길이 2배 = 480px, 단정한 테두리)
-        self.search_input = QLineEdit()
-        self.search_input.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
-        self.search_input.setPlaceholderText("업무, 본문, 첨부파일 검색... (Esc로 닫기)")
-        self.search_input.setFixedHeight(30)
-        self.search_input.setFixedWidth(480)
-        self.search_input.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: {panel_alt};
-                border: 1px solid {line};
-                border-radius: 6px;
-                padding: 4px 12px;
-                font-size: 12px;
-                color: {text};
-            }}
-            QLineEdit:focus {{
-                background-color: {panel};
-                border: 1.5px solid {accent};
-            }}
-        """)
-        self.search_input.textChanged.connect(self._on_search_text_changed)
-        self.search_input.returnPressed.connect(lambda: self._on_search_text_changed(self.search_input.text()))
-        top_layout.addWidget(self.search_input)
-
-        # 검색 버튼
-        self.btn_search = QPushButton("검색")
-        self.btn_search.setFixedHeight(30)
-        self.btn_search.setAutoDefault(False)
-        self.btn_search.setDefault(False)
-        self.btn_search.setStyleSheet(self._top_btn_style())
-        self.btn_search.clicked.connect(lambda: self._on_search_text_changed(self.search_input.text()))
-        top_layout.addWidget(self.btn_search)
-
-        top_layout.addStretch(1)
-
-        # 검색창 닫기 버튼 (✕)
-        self.btn_close_search = QPushButton("✕")
-        self.btn_close_search.setFixedSize(24, 24)
-        self.btn_close_search.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_close_search.setToolTip("검색창 닫기 (Esc)")
-        self.btn_close_search.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                border: none;
-                color: {muted};
-                font-size: 13px;
-                font-weight: bold;
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background-color: {panel_alt};
-                color: {text};
-            }}
-        """)
-        self.btn_close_search.clicked.connect(self._toggle_search_bar)
-        top_layout.addWidget(self.btn_close_search)
-
-        main_layout.addWidget(self.top_bar)
-
-        self.top_bar_spacer = QWidget()
-        self.top_bar_spacer.setFixedHeight(6)
-        main_layout.addWidget(self.top_bar_spacer)
-
-        # 초기 시작 시 검색창 숨김 (요청 반영: 탭 바 [🔍 검색] 클릭 시 노출)
-        self.top_bar.hide()
-        self.top_bar_spacer.hide()
-
-        # =========================================================================
         # 2. 탭 바: 검색창 바로 아래, 본문(스플리터) 상단에 딱 붙여 배치
         # =========================================================================
         self.bottom_bar = QFrame()
@@ -3436,17 +3331,7 @@ class WorkManagerDialog(QDialog):
         bottom_layout.addWidget(self.sheet_tab_bar, 0, alignment=Qt.AlignmentFlag.AlignBottom)
         bottom_layout.addStretch(1)
 
-        # 탭 우측 끝 도구: [🔍 검색] [업무 템플릿] [저장]
-        self.btn_toggle_search = QPushButton("🔍 검색")
-        self.btn_toggle_search.setFixedHeight(26)
-        self.btn_toggle_search.setAutoDefault(False)
-        self.btn_toggle_search.setDefault(False)
-        self.btn_toggle_search.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_toggle_search.setToolTip("통합 검색창 열기/닫기 (Ctrl+F)")
-        self.btn_toggle_search.setStyleSheet(self._sub_btn_style())
-        self.btn_toggle_search.clicked.connect(self._toggle_search_bar)
-        bottom_layout.addWidget(self.btn_toggle_search, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
-
+        # 탭 우측 끝 도구: [업무 템플릿] [저장]
         self.btn_template = QPushButton("업무 템플릿")
         self.btn_template.setFixedHeight(26)
         self.btn_template.setAutoDefault(False)
@@ -3540,6 +3425,46 @@ class WorkManagerDialog(QDialog):
         left_header.addWidget(self.btn_reg_cal)
 
         left_layout.addLayout(left_header)
+
+        # -------------------------------------------------------------------------
+        # 검색 영역: 업무분류 바로 아랫줄 (검색창 + 우측 검색 버튼)
+        # -------------------------------------------------------------------------
+        search_layout = QHBoxLayout()
+        search_layout.setContentsMargins(2, 2, 2, 2)
+        search_layout.setSpacing(4)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("업무, 본문, 첨부 검색... (Ctrl+F)")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setFixedHeight(26)
+        self.search_input.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {panel_alt};
+                border: 1px solid {line};
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 11px;
+                color: {text};
+            }}
+            QLineEdit:focus {{
+                background-color: {panel};
+                border: 1.5px solid {accent};
+            }}
+        """)
+        self.search_input.textChanged.connect(self._on_search_text_changed)
+        self.search_input.returnPressed.connect(lambda: self._on_search_text_changed(self.search_input.text()))
+        search_layout.addWidget(self.search_input, 1)
+
+        self.btn_search = QPushButton("검색")
+        self.btn_search.setFixedHeight(26)
+        self.btn_search.setFixedWidth(46)
+        self.btn_search.setAutoDefault(False)
+        self.btn_search.setDefault(False)
+        self.btn_search.setStyleSheet(self._sub_btn_style())
+        self.btn_search.clicked.connect(lambda: self._on_search_text_changed(self.search_input.text()))
+        search_layout.addWidget(self.btn_search)
+
+        left_layout.addLayout(search_layout)
 
         self.category_tree = CompactCategoryTree()
         self.category_tree.setStyle(QStyleFactory.create("Fusion"))
@@ -4055,6 +3980,12 @@ class WorkManagerDialog(QDialog):
                 return
             event.ignore()
             return
+        if event.key() == Qt.Key.Key_Escape:
+            if hasattr(self, "search_input") and self.search_input.hasFocus():
+                self.search_input.clear()
+                self.search_input.clearFocus()
+                event.accept()
+                return
         super().keyPressEvent(event)
 
     # =========================================================================
@@ -7230,30 +7161,16 @@ class WorkManagerDialog(QDialog):
     def _on_editor_text_changed(self) -> None:
         self._mark_active_sheet_dirty()
 
-    def _toggle_search_bar(self) -> None:
-        """상단 검색창 열기/닫기 토글"""
-        is_vis = self.top_bar.isVisible()
-        self.top_bar.setVisible(not is_vis)
-        if hasattr(self, "top_bar_spacer"):
-            self.top_bar_spacer.setVisible(not is_vis)
-        if not is_vis:
+    def _open_search_bar(self) -> None:
+        """단축키(Ctrl+F)로 검색창 포커스"""
+        if hasattr(self, "_left_expanded") and not self._left_expanded:
+            self._expand_left_panel()
+        if hasattr(self, "search_input") and self.search_input:
             self.search_input.setFocus()
             self.search_input.selectAll()
-            if hasattr(self, "btn_toggle_search"):
-                self.btn_toggle_search.setText("🔍 검색 닫기")
-        else:
-            if hasattr(self, "btn_toggle_search"):
-                self.btn_toggle_search.setText("🔍 검색")
 
-    def _open_search_bar(self) -> None:
-        """단축키(Ctrl+F)로 검색창 열고 포커스"""
-        self.top_bar.setVisible(True)
-        if hasattr(self, "top_bar_spacer"):
-            self.top_bar_spacer.setVisible(True)
-        self.search_input.setFocus()
-        self.search_input.selectAll()
-        if hasattr(self, "btn_toggle_search"):
-            self.btn_toggle_search.setText("🔍 검색 닫기")
+    def _toggle_search_bar(self) -> None:
+        self._open_search_bar()
 
     def _on_search_text_changed(self, query: str) -> None:
         """통합 검색 및 RAG FTS5 매칭 필터링"""
@@ -7651,30 +7568,20 @@ class WorkManagerDialog(QDialog):
             }}
         """)
 
-        if hasattr(self, "top_bar") and self.top_bar:
-            self.top_bar.setStyleSheet(f"""
-                QFrame {{
-                    background-color: {panel};
-                    border: 1px solid {line};
-                    border-radius: 8px;
-                    padding: 4px 8px;
-                }}
-            """)
-
         for btn in (
             getattr(self, "btn_import", None),
             getattr(self, "btn_export", None),
-            getattr(self, "btn_search", None),
             getattr(self, "btn_new_work", None),
             getattr(self, "btn_template", None),
         ):
             if btn:
-                btn.setStyleSheet(self._top_btn_style())
+                btn.setStyleSheet(self._sub_btn_style())
 
         if hasattr(self, "btn_save_work") and self.btn_save_work:
             self.btn_save_work.setStyleSheet(self._primary_btn_style())
 
         for btn in (
+            getattr(self, "btn_search", None),
             getattr(self, "btn_add_cat", None),
             getattr(self, "btn_reg_cal", None),
             getattr(self, "btn_add_folder", None),
@@ -7708,9 +7615,9 @@ class WorkManagerDialog(QDialog):
                 QLineEdit {{
                     background-color: {panel_alt};
                     border: 1px solid {line};
-                    border-radius: 6px;
-                    padding: 4px 12px;
-                    font-size: 12px;
+                    border-radius: 4px;
+                    padding: 2px 6px;
+                    font-size: 11px;
                     color: {text};
                 }}
                 QLineEdit:focus {{
