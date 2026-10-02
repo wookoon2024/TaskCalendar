@@ -215,6 +215,7 @@ def run() -> None:
     _enable_windows_dpi_awareness()
     _set_windows_app_id()
     app = ensure_qt_application()
+    app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("K캘린더")
     # 내장 폰트(Pretendard) 등록 + 전역 글자 크기 배율 훅 설치
     fonts.install_style_hook()

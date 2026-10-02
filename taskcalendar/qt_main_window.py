@@ -5024,7 +5024,8 @@ class MainWindow(QMainWindow):
             linked_work_id=work_id,
             linked_work_type=work_type,
         )
-        dialog = EntryDialog(self, EntryType.SCHEDULE, target_day, entry)
+        owner = self._work_manager_dialog if (getattr(self, "_work_manager_dialog", None) and self._work_manager_dialog.isVisible()) else self
+        dialog = EntryDialog(owner, EntryType.SCHEDULE, target_day, entry)
         if dialog.exec():
             res = dialog.result
             if res:

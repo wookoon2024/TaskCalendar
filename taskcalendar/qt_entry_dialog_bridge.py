@@ -12,9 +12,12 @@ from taskcalendar.qt_dialogs import EntryDialog, SettingsDialog
 def ensure_qt_application() -> QApplication:
     app = QApplication.instance()
     if app is not None:
+        app.setQuitOnLastWindowClosed(False)
         return app
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-    return QApplication([])
+    app = QApplication([])
+    app.setQuitOnLastWindowClosed(False)
+    return app
 
 
 def _center_dialog_on_screen(dialog: QDialog) -> None:
