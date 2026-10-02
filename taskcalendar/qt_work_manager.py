@@ -812,14 +812,14 @@ def extract_document_content(file_path: Path | str) -> tuple[str, bytes | None]:
             if ext == ".hwpx":
                 try:
                     import zipfile
-                    import xml.etree.ElementTree as ET
+                    import re
                     with zipfile.ZipFile(path, "r") as z:
                         for name in z.namelist():
                             if name.startswith("Contents/section") and name.endswith(".xml"):
-                                root = ET.fromstring(z.read(name))
-                                text_nodes = [elem.text for elem in root.iter() if elem.text and elem.tag.endswith("t")]
+                                xml_data = z.read(name).decode("utf-8", errors="ignore")
+                                text_nodes = re.findall(r"<[^:]+:t[^>]*>(.*?)</[^:]+:t>", xml_data)
                                 if text_nodes:
-                                    extracted_text += "\n".join(text_nodes) + "\n"
+                                    extracted_text += "\n".join(t for t in text_nodes if t.strip()) + "\n"
                 except Exception:
                     pass
             return extracted_text.strip(), raw_bytes
@@ -842,17 +842,18 @@ def extract_document_content(file_path: Path | str) -> tuple[str, bytes | None]:
             logger.warning(f"Failed to extract PDF text from {path}: {e}")
             return "", None
 
-    # 3. DOCX 워드 문서 (표준 zipfile 및 XML 파싱)
+    # 3. DOCX 워드 문서 (표준 zipfile 및 안전한 텍스트 추출)
     if ext == ".docx":
         try:
             import zipfile
-            import xml.etree.ElementTree as ET
+            import re
             with zipfile.ZipFile(path, "r") as z:
-                xml_content = z.read("word/document.xml")
-                tree = ET.fromstring(xml_content)
+                xml_content = z.read("word/document.xml").decode("utf-8", errors="ignore")
                 paras = []
-                for p in tree.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"):
-                    p_text = "".join(node.text for node in p.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t") if node.text)
+                p_matches = re.findall(r"<w:p[ >](.*?)</w:p>", xml_content, flags=re.DOTALL)
+                for p_body in p_matches:
+                    t_nodes = re.findall(r"<w:t[^>]*>(.*?)</w:t>", p_body)
+                    p_text = "".join(t_nodes).strip()
                     if p_text:
                         paras.append(p_text)
                 return "\n".join(paras), None
@@ -2108,7 +2109,10 @@ def export_sheet_to_hwpx(sheet: WorkSheetData, dest_path: Path | str) -> bool:
         # 2. hwpx 스킬 베이스 템플릿을 활용하여 완전한 HWPX 패키지 조립
         base_tmpl = Path(os.path.expanduser("~")) / ".gemini" / "config" / "skills" / "hwpx-skill" / "templates" / "base"
         if base_tmpl.exists() and (base_tmpl / "Contents" / "section0.xml").exists():
-            from xml.sax.saxutils import escape as xml_escape
+            import html
+
+            def xml_escape(val: str) -> str:
+                return html.escape(str(val or ""), quote=True).replace("'", "&apos;")
 
             text = sheet.content_text or sheet.title or ""
             p_xmls = []
