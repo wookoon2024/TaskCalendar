@@ -13,6 +13,13 @@ from restore import restore_app_icon, restore_rhwp_wasm, restore_chrome_extensio
 ROOT = Path(__file__).resolve().parent
 
 SPEC_TEMPLATE = '''# -*- mode: python ; coding: utf-8 -*-
+try:
+    from restore import restore_app_icon, restore_rhwp_wasm, restore_chrome_extension_zip
+    restore_app_icon()
+    restore_rhwp_wasm()
+    restore_chrome_extension_zip()
+except Exception:
+    pass
 
 a = Analysis(
     ['main.py'],

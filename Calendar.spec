@@ -1,11 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
-
+try:
+    from restore import restore_app_icon, restore_rhwp_wasm, restore_chrome_extension_zip
+    restore_app_icon()
+    restore_rhwp_wasm()
+    restore_chrome_extension_zip()
+except Exception:
+    pass
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('taskcalendar/assets', 'taskcalendar/assets'), ('data/holidays_kr.json', 'data'), ('업무 템플릿', '업무 템플릿')],
+    datas=[('taskcalendar/assets', 'taskcalendar/assets'), ('data/holidays_kr.json', 'data'), ('chrome_extension', 'chrome_extension'), ('업무 템플릿', '업무 템플릿')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

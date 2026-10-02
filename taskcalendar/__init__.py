@@ -15,5 +15,5 @@ if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
     except Exception:
         pass
 
-__version__ = "v1.9.35"
+__version__ = "v1.9.36"
 APP_VERSION = __version__
