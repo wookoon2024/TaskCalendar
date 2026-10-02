@@ -326,8 +326,9 @@ def register_protocol_handler() -> bool:
         protocol_key = r"Software\Classes\taskcalendar"
 
         # Register DefaultIcon in registry
-        from taskcalendar.paths import asset_path
         ico_path = asset_path("app_icon.ico")
+        if not ico_path.exists():
+            ico_path = asset_path("app_icon.png")
         icon_str = f'"{exe_path}",0' if exe_path else f'"{ico_path}"'
         try:
             with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, protocol_key + r"\DefaultIcon", 0, winreg.KEY_SET_VALUE) as key:

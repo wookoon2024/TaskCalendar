@@ -95,9 +95,20 @@ class _QuietStudioHandler(http.server.SimpleHTTPRequestHandler):
             fonts_dir = (Path(__file__).parent / "assets" / "fonts").resolve()
             subpath = clean_path[len("/fonts/"):].split("?")[0].split("#")[0]
             target = (fonts_dir / subpath).resolve()
-            if str(target).startswith(str(fonts_dir)) and target.exists():
-                return str(target)
-        return super().translate_path(clean_path)
+        resolved = super().translate_path(clean_path)
+        # .wasm 요청 시 실제 파일이 없으면 .dat 또는 .bin 대체 파일 탐색
+        if clean_path.endswith(".wasm") and not Path(resolved).exists():
+            for alt_ext in (".dat", ".bin"):
+                cand = Path(resolved).with_suffix(alt_ext)
+                if cand.exists():
+                    return str(cand)
+        return resolved
+
+    def guess_type(self, path: str) -> str:
+        p = str(path).lower()
+        if p.endswith(".wasm") or "rhwp_bg" in p:
+            return "application/wasm"
+        return super().guess_type(path)
 
     extensions_map = {
         **http.server.SimpleHTTPRequestHandler.extensions_map,
