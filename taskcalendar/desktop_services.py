@@ -409,7 +409,7 @@ def register_explorer_context_menus() -> bool:
         ico_path = asset_path("app_icon.ico")
         if not ico_path.exists():
             ico_path = asset_path("app_icon.png")
-        icon_str = f'"{exe_path}",0' if exe_path else f'"{ico_path}"'
+        icon_str = f"{exe_path},0" if exe_path else str(ico_path.resolve())
 
         # 0. 구버전 분리 키 정리
         unregister_explorer_context_menus()
@@ -422,35 +422,43 @@ def register_explorer_context_menus() -> bool:
         except Exception:
             pass
 
-        # 1. 파일 우클릭: "업무로 등록" (*\shell\TaskCalendar.1.WorkDoc) - 아이콘 제거
+        # 1. 파일 우클릭: "업무로 등록" (*\shell\TaskCalendar.1.WorkDoc)
         key_doc = r"Software\Classes\*\shell\TaskCalendar.1.WorkDoc"
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_doc, 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "TaskCalendar 업무로 등록")
+            if icon_str:
+                winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_str)
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_doc + r"\command", 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, cmd_import)
 
-        # 2. 파일 우클릭: "업무 첨부파일로 등록" (*\shell\TaskCalendar.2.WorkAttach) - 아이콘 제거
+        # 2. 파일 우클릭: "업무 첨부파일로 등록" (*\shell\TaskCalendar.2.WorkAttach)
         key_attach = r"Software\Classes\*\shell\TaskCalendar.2.WorkAttach"
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_attach, 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "TaskCalendar 업무 첨부파일로 등록")
+            if icon_str:
+                winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_str)
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_attach + r"\command", 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, cmd_attach)
 
-        # 3. 폴더 우클릭: "업무로 등록" (Directory\shell\TaskCalendar.1.WorkFolder) - 아이콘 제거
+        # 3. 폴더 우클릭: "업무로 등록" (Directory\shell\TaskCalendar.1.WorkFolder)
         key_f_doc = r"Software\Classes\Directory\shell\TaskCalendar.1.WorkFolder"
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_f_doc, 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "TaskCalendar 업무로 등록")
+            if icon_str:
+                winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_str)
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_f_doc + r"\command", 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, cmd_import_folder)
 
-        # 4. 폴더 우클릭: "업무 첨부파일로 등록" (Directory\shell\TaskCalendar.2.AttachFolder) - 아이콘 제거
+        # 4. 폴더 우클릭: "업무 첨부파일로 등록" (Directory\shell\TaskCalendar.2.AttachFolder)
         key_f_attach = r"Software\Classes\Directory\shell\TaskCalendar.2.AttachFolder"
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_f_attach, 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "TaskCalendar 업무 첨부파일로 등록")
+            if icon_str:
+                winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_str)
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_f_attach + r"\command", 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, cmd_attach_folder)
 
-        logger.info("[register_explorer_context_menus] Registered Windows Explorer context menus successfully (no icons, Win11 direct)")
+        logger.info("[register_explorer_context_menus] Registered Windows Explorer context menus successfully with app icon")
         return True
     except Exception:
         logger.exception("Failed to register Windows Explorer context menus")
