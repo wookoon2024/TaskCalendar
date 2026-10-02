@@ -3445,7 +3445,7 @@ class WorkManagerDialog(QDialog):
             }}
         """)
         self.category_tree.itemClicked.connect(self._on_tree_item_clicked)
-        self.category_tree.itemDoubleClicked.connect(self._on_tree_item_clicked)
+        self.category_tree.itemDoubleClicked.connect(self._on_tree_item_double_clicked)
         self.category_tree.itemExpanded.connect(self._on_tree_item_expanded)
         self.category_tree.itemCollapsed.connect(self._on_tree_item_collapsed)
         self.category_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -4968,7 +4968,13 @@ class WorkManagerDialog(QDialog):
         self._sync_tree_selection(self._active_sheet_index)
 
     def _on_tree_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
-        """좌측 트리 문서 클릭 시 하단 탭으로 열기 (폴더 클릭 시 선택 하이라이트 및 펼침/접힘 토글)"""
+        """좌측 트리 항목 클릭 (폴더 클릭 시 펼침/접힘 토글, 문서는 단순 선택)"""
+        sheet = item.data(0, Qt.UserRole)
+        if not isinstance(sheet, WorkSheetData):
+            item.setExpanded(not item.isExpanded())
+
+    def _on_tree_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+        """좌측 트리 문서 더블클릭 시 에디터로 열기 (폴더 더블클릭 시 펼침/접힘 토글)"""
         sheet = item.data(0, Qt.UserRole)
         if isinstance(sheet, WorkSheetData):
             self.open_sheet(sheet)

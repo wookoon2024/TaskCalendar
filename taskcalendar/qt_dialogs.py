@@ -5469,7 +5469,6 @@ class EntryViewDialog(QDialog):
         entry: CalendarEntry,
         on_download_attachment: Callable[[str], None] | None = None,
         on_edit_entry: Callable[[CalendarEntry], None] | None = None,
-        on_open_work: Callable[[CalendarEntry], None] | None = None,
     ) -> None:
         super().__init__(parent)
         logger.info(f"[EntryViewDialog.__init__] entry_type={entry_type}, id={entry.entry_id if entry else None}, title='{entry.title if entry else ''}'")
@@ -5478,7 +5477,6 @@ class EntryViewDialog(QDialog):
         self.entry = entry
         self._on_download_attachment = on_download_attachment
         self._on_edit_entry = on_edit_entry
-        self._on_open_work = on_open_work
         if entry_type != EntryType.MEMO:
             self.setWindowModality(Qt.WindowModality.WindowModal)
         else:
@@ -5645,10 +5643,6 @@ class EntryViewDialog(QDialog):
             root.addWidget(attach_card)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        if callable(self._on_open_work):
-            work_btn = buttons.addButton("💼 해당 업무 열기", QDialogButtonBox.ButtonRole.ActionRole)
-            work_btn.setObjectName("secondary")
-            work_btn.clicked.connect(self._handle_open_work)
         edit_btn = buttons.addButton("수정", QDialogButtonBox.ButtonRole.ActionRole)
         edit_btn.setObjectName("secondary")
         edit_btn.clicked.connect(self._edit_entry)
@@ -5719,14 +5713,6 @@ class EntryViewDialog(QDialog):
         entry_to_edit = self.entry
         self.accept()
         QTimer.singleShot(50, lambda: callback(entry_to_edit))
-
-    def _handle_open_work(self) -> None:
-        callback = getattr(self, "_on_open_work", None)
-        if callback is None:
-            return
-        entry_target = self.entry
-        self.accept()
-        QTimer.singleShot(50, lambda: callback(entry_target))
 
     def _muted(self, text: str) -> QLabel:
         label = QLabel(text)
