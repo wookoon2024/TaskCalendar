@@ -5083,6 +5083,20 @@ class WorkManagerDialog(QDialog):
             return
         if not sheet.db_id and self.repository:
             self._save_current_sheet_data()
+            if not sheet.db_id:
+                sheet.db_id = self.repository.upsert_work_item(
+                    work_id=None,
+                    title=sheet.title or "새 업무",
+                    category_name=sheet.category,
+                    category_id=sheet.category_id,
+                    cycle=sheet.cycle,
+                    assignee=sheet.assignee,
+                    deadline=sheet.deadline,
+                    content_text=sheet.content_text or "",
+                    content_html=sheet.content_html or "",
+                    hwpx_blob=sheet.hwpx_blob,
+                )
+                self.repository.save()
         sheet_title = (sheet.title or "새 업무").strip()
         reg_title = sheet_title if sheet_title.startswith("[업무]") else f"[업무] {sheet_title}"
         saved = self.main_window.register_schedule_from_work(
@@ -5554,15 +5568,34 @@ class WorkManagerDialog(QDialog):
             return
 
         weekdays = ["월", "화", "수", "목", "금", "토", "일"]
+        # 기간 일정을 일단위(1일 1줄)로 전개
+        schedule_rows: list[tuple[date, CalendarEntry]] = []
         for entry in entries:
-            # 1줄 형식: 날짜 / 제목
-            if entry.start_date and entry.end_date and entry.start_date != entry.end_date:
-                date_txt = f"{entry.start_date.strftime('%m.%d')}~{entry.end_date.strftime('%m.%d')}"
-            else:
-                d = entry.start_date or entry.day or date.today()
-                w = weekdays[d.weekday()]
-                date_txt = f"{d.strftime('%m.%d')}({w})"
+            s_d = entry.start_date or entry.day or date.today()
+            e_d = entry.end_date or entry.day or s_d
+            if s_d > e_d:
+                s_d, e_d = e_d, s_d
+            cur = s_d
+            while cur <= e_d:
+                schedule_rows.append((cur, entry))
+                cur += timedelta(days=1)
 
+        # 날짜순, 시작시간순, ID순 정렬
+        schedule_rows.sort(key=lambda x: (x[0], x[1].start_time or "00:00", x[1].entry_id or 0))
+
+        if hasattr(self, "sched_title"):
+            self.sched_title.setText(f"📅 관련 일정 ({len(schedule_rows)})")
+
+        if not schedule_rows:
+            empty_item = QListWidgetItem("(등록된 일정 없음)")
+            empty_item.setFlags(Qt.ItemFlag.NoItemFlags)
+            empty_item.setForeground(QColor(self.palette.get("muted", "#94A3B8")))
+            self.work_schedule_list.addItem(empty_item)
+            return
+
+        for cur_date, entry in schedule_rows:
+            w = weekdays[cur_date.weekday()]
+            date_txt = f"{cur_date.strftime('%m.%d')}({w})"
             time_txt = f" {entry.start_time}" if (not entry.all_day and entry.start_time) else ""
             display_title = entry.title or sheet.title or "일정"
             line_txt = f"📌 {date_txt}{time_txt}  {display_title}"
@@ -5570,7 +5603,8 @@ class WorkManagerDialog(QDialog):
             item = QListWidgetItem(line_txt)
             item.setData(Qt.UserRole, entry.entry_id)
             item.setData(Qt.UserRole + 1, entry)
-            item.setToolTip(f"제목: {entry.title}\n일시: {date_txt}{time_txt}\n설명: {entry.description or '(없음)'}\n(더블클릭 시 캘린더로 이동 / 우클릭 메뉴)")
+            item.setData(Qt.UserRole + 2, cur_date)
+            item.setToolTip(f"제목: {entry.title}\n일시: {date_txt}{time_txt}\n설명: {entry.description or '(없음)'}\n(더블클릭 시 해당 일자 캘린더로 이동 / 우클릭 메뉴)")
             self.work_schedule_list.addItem(item)
 
     def _on_add_work_schedule_clicked(self) -> None:
@@ -5588,27 +5622,28 @@ class WorkManagerDialog(QDialog):
             Toast(self, "이동할 일정을 선택하세요.")
             return
         entry = item.data(Qt.UserRole + 1)
+        target_day = item.data(Qt.UserRole + 2)
         if not isinstance(entry, CalendarEntry):
             return
-        self._jump_to_calendar_entry(entry)
+        self._jump_to_calendar_entry(entry, target_day=target_day)
 
-    def _jump_to_calendar_entry(self, entry: CalendarEntry) -> None:
+    def _jump_to_calendar_entry(self, entry: CalendarEntry, target_day: date | None = None) -> None:
         if not self.main_window:
             return
-        target_day = entry.start_date or entry.day or date.today()
+        if target_day is None:
+            target_day = entry.start_date or entry.day or date.today()
         self.main_window.current_date = target_day
         self.main_window.selected_day = target_day
-        self.main_window._load_month_entries()
-        self.main_window._render_calendar()
-        self.main_window._render_sidebar()
+        self.main_window.refresh()
         self.main_window.show()
         self.main_window.raise_()
         self.main_window.activateWindow()
 
     def _on_schedule_item_double_clicked(self, item: QListWidgetItem) -> None:
         entry = item.data(Qt.UserRole + 1)
+        target_day = item.data(Qt.UserRole + 2)
         if isinstance(entry, CalendarEntry):
-            self._jump_to_calendar_entry(entry)
+            self._jump_to_calendar_entry(entry, target_day=target_day)
 
     def _on_edit_work_schedule_clicked(self) -> None:
         item = self.work_schedule_list.currentItem()
@@ -5625,11 +5660,13 @@ class WorkManagerDialog(QDialog):
         if dlg.exec():
             res = dlg.result
             if res:
+                res.entry_id = entry.entry_id
+                res.linked_work_id = entry.linked_work_id
+                res.linked_work_type = entry.linked_work_type
                 self.repository.upsert_entry(res)
                 self.repository.save()
-                self.main_window._load_month_entries()
-                self.main_window._render_calendar()
-                self.main_window._render_sidebar()
+                if self.main_window:
+                    self.main_window.refresh()
                 self._refresh_work_schedules_list()
                 Toast(self, "일정이 수정되었습니다.")
 
@@ -5649,12 +5686,12 @@ class WorkManagerDialog(QDialog):
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.repository.delete_entry(entry.entry_id)
-            self.repository.save()
+            target_id = getattr(entry, "source_entry_id", None) or entry.entry_id
+            if target_id is not None:
+                self.repository.delete_entry(target_id)
+                self.repository.save()
             if self.main_window:
-                self.main_window._load_month_entries()
-                self.main_window._render_calendar()
-                self.main_window._render_sidebar()
+                self.main_window.refresh()
             self._refresh_work_schedules_list()
             Toast(self, "일정이 삭제되었습니다.")
 

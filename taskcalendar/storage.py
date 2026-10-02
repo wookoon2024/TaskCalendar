@@ -904,10 +904,10 @@ class EncryptedRepository:
         if work_title:
             cleaned = work_title.strip()
             if cleaned:
-                # [업무] 접두어가 붙어있는 경우와 순수 제목 둘 다 매칭
+                # [업무] 접두어가 붙어있는 경우와 순수 제목 매칭 (부분일치 %like%로 인한 타 업무 오매칭 방지)
                 title_with_tag = f"[업무] {cleaned}" if not cleaned.startswith("[업무]") else cleaned
-                clauses.append("(title = ? OR title = ? OR title LIKE ?)")
-                params.extend([cleaned, title_with_tag, f"%{cleaned}%"])
+                clauses.append("(title = ? OR title = ?)")
+                params.extend([cleaned, title_with_tag])
         if not clauses:
             return []
         sql = f"""

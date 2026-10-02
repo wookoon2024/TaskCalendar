@@ -2277,6 +2277,7 @@ class EntryDialog(QDialog):
             recurrence_month_end=rec_leap,
             icon_type=str(getattr(self, "_selected_icon", "")),
             bg_color=str(self.bg_color_combo.currentData()),
+            entry_id=self.entry.entry_id if (self.entry and self.entry.entry_id) else None,
             alert_type=AlertType.POPUP if self.alert_popup.isChecked() else AlertType.NONE,
             alert_offset=str(self.alert_offset_combo.currentData()),
             linked_work_id=getattr(self.entry, "linked_work_id", None) if (self.entry and getattr(self.entry, "linked_work_id", None) is not None) else self._linked_work_id,

@@ -4207,6 +4207,8 @@ class MainWindow(QMainWindow):
         self._sync_sticker_overlay()
         self._render_stickers()
         self._apply_clickable_cursor()
+        if getattr(self, "_work_manager_dialog", None) is not None and self._work_manager_dialog.isVisible():
+            self._work_manager_dialog._refresh_work_schedules_list()
 
     def _get_calendar_task_statuses(self) -> list[str]:
         from taskcalendar.qt_task_manager import get_calendar_task_statuses
@@ -5033,6 +5035,7 @@ class MainWindow(QMainWindow):
                 self._load_month_entries()
                 self._render_calendar()
                 self._render_sidebar()
+                self.refresh()
                 return saved
         return None
 
