@@ -58,6 +58,8 @@ class CalendarEntry:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     source_entry_id: int | None = None
+    linked_work_id: int | None = None
+    linked_work_type: str = ""
 
 
 @dataclass(slots=True)

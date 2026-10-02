@@ -175,6 +175,23 @@ def create_package() -> Path:
                 included_count += 1
                 total_bytes += file_path.stat().st_size
 
+        # 5. chrome_extension files (unpacked source)
+        ce_root = ROOT / "chrome_extension"
+        if ce_root.exists():
+            for dirpath, dirnames, filenames in os.walk(ce_root):
+                dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIRS and not d.startswith(".")]
+                for fname in filenames:
+                    file_path = Path(dirpath) / fname
+                    suf = file_path.suffix.lower()
+                    if not suf or suf in BLOCKED_EXTENSIONS:
+                        continue
+                    if file_path.name in EXCLUDED_FILES:
+                        continue
+                    rel_path = file_path.relative_to(ROOT)
+                    zf.write(file_path, str(rel_path).replace("\\", "/"))
+                    included_count += 1
+                    total_bytes += file_path.stat().st_size
+
     zip_size = out_path.stat().st_size
     print(f"\nPackage created successfully: {out_path.name}")
     print(f"- Total files: {included_count}")

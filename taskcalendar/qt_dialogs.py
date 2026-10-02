@@ -1013,6 +1013,8 @@ class EntryDialog(QDialog):
         self.entry = entry
         self.result: CalendarEntry | None = None
         self.attachments = list(entry.attachments if entry else [])
+        self._linked_work_id = getattr(entry, "linked_work_id", None) if entry else None
+        self._linked_work_type = getattr(entry, "linked_work_type", "") if entry else ""
 
         entry_start = entry.start_date if entry else None
         entry_day = entry.day if entry else None
@@ -2197,6 +2199,8 @@ class EntryDialog(QDialog):
             bg_color=str(self.bg_color_combo.currentData()),
             alert_type=AlertType.POPUP if self.alert_popup.isChecked() else AlertType.NONE,
             alert_offset=str(self.alert_offset_combo.currentData()),
+            linked_work_id=getattr(self.entry, "linked_work_id", None) if (self.entry and getattr(self.entry, "linked_work_id", None) is not None) else self._linked_work_id,
+            linked_work_type=getattr(self.entry, "linked_work_type", "") if (self.entry and getattr(self.entry, "linked_work_type", "")) else self._linked_work_type,
         )
         self.accept()
 
@@ -6640,19 +6644,19 @@ class SettingsDialog(QDialog):
         guide_layout = QVBoxLayout(guide_box)
         guide_layout.setContentsMargins(8, 8, 8, 8)
         guide_layout.setSpacing(4)
-        guide_title = QLabel("📌 간편 등록 3단계 방법:")
+        guide_title = QLabel("📌 간편 등록 방법:")
         guide_title.setStyleSheet(f"font-weight: 600; color: {self.palette.get('text', '#1F2328')}; font-size: 11px;")
         guide_layout.addWidget(guide_title)
 
-        step1 = QLabel("1️⃣ 아래 [크롬 확장프로그램 자동 연동 / 열기] 버튼을 클릭합니다.")
+        step1 = QLabel("1️⃣ [크롬 브라우저 실행] 버튼을 클릭하여 크롬 확장 관리자 창(chrome://extensions)을 엽니다.")
         step1.setObjectName("muted")
         guide_layout.addWidget(step1)
 
-        step2 = QLabel("2️⃣ 열린 Chrome 확장 관리자 창 우측 상단의 [개발자 모드] 스위치를 켭니다 (ON).")
+        step2 = QLabel("2️⃣ 크롬 창 우측 상단의 [개발자 모드] 스위치를 켭니다 (ON).")
         step2.setObjectName("muted")
         guide_layout.addWidget(step2)
 
-        step3 = QLabel("3️⃣ [압축해제된 확장 프로그램을 로드합니다]를 클릭하고 열린 폴더를 선택(또는 폴더를 크롬 창으로 드래그)하면 등록 완료!")
+        step3 = QLabel("3️⃣ [확장프로그램 폴더 열기] 버튼을 누른 후, 표시된 chrome_extension.zip 압축을 푼 폴더를 크롬 창으로 드래그 앤 드롭하면 설치 완료!")
         step3.setObjectName("muted")
         guide_layout.addWidget(step3)
 
@@ -6663,61 +6667,23 @@ class SettingsDialog(QDialog):
         chrome_btn_row.setContentsMargins(0, 4, 0, 0)
         chrome_btn_row.setSpacing(8)
 
-        btn_auto_chrome = QPushButton("🌐 크롬 확장프로그램 자동 연동 / 열기")
+        btn_auto_chrome = QPushButton("🌐 크롬 브라우저 실행")
         btn_auto_chrome.setObjectName("primary")
         btn_auto_chrome.setFixedHeight(32)
-        btn_auto_chrome.setToolTip("Chrome 브라우저 확장 관리자 페이지를 열고 확장 프로그램 폴더를 탐색기로 열어 원클릭 등록을 지원합니다.")
+        btn_auto_chrome.setToolTip("Chrome 브라우저 확장 관리자 페이지(chrome://extensions)를 엽니다.")
         btn_auto_chrome.clicked.connect(self._open_chrome_extension_setup)
         chrome_btn_row.addWidget(btn_auto_chrome)
 
         btn_open_chrome_dir = QPushButton("📁 확장프로그램 폴더 열기")
         btn_open_chrome_dir.setFixedHeight(32)
-        btn_open_chrome_dir.setToolTip("크롬 확장 프로그램 소스 폴더를 윈도우 파일 탐색기로 엽니다.")
+        btn_open_chrome_dir.setToolTip("확장 프로그램 파일(chrome_extension.zip)이 있는 프로그램 폴더를 엽니다.")
         btn_open_chrome_dir.clicked.connect(self._open_chrome_extension_folder)
         chrome_btn_row.addWidget(btn_open_chrome_dir)
-
-        btn_copy_chrome_path = QPushButton("📋 폴더 경로 복사")
-        btn_copy_chrome_path.setFixedHeight(32)
-        btn_copy_chrome_path.setToolTip("확장 프로그램 폴더의 전체 경로를 클립보드에 복사합니다.")
-        btn_copy_chrome_path.clicked.connect(self._copy_chrome_extension_path)
-        chrome_btn_row.addWidget(btn_copy_chrome_path)
 
         chrome_btn_row.addStretch(1)
         chrome_layout.addLayout(chrome_btn_row)
 
         pg_doc_layout.addWidget(chrome_card)
-
-        # 2. 한글 문서(HWP/HWPX) 웹 엔진 안내 카드
-        doc_engine_card = QFrame()
-        doc_engine_card.setObjectName("card")
-        doc_engine_layout = QVBoxLayout(doc_engine_card)
-        doc_engine_layout.setContentsMargins(14, 12, 14, 12)
-        doc_engine_layout.setSpacing(8)
-
-        doc_engine_title = QLabel("한글(HWP/HWPX) 웹 에디터 엔진")
-        doc_engine_title.setObjectName("sectionTitle")
-        doc_engine_layout.addWidget(doc_engine_title)
-
-        doc_engine_desc = QLabel(
-            "업무 관리에서 별도의 한글 소프트웨어(한컴오피스) 설치 없이도 한글 문서(*.hwp, *.hwpx)를\n"
-            "브라우저 및 로컬 Canvas 기술로 고속 열람·편집할 수 있는 독립 내장 웹 엔진이 적용되어 있습니다."
-        )
-        doc_engine_desc.setObjectName("subtitle")
-        doc_engine_desc.setWordWrap(True)
-        doc_engine_layout.addWidget(doc_engine_desc)
-
-        engine_status_row = QHBoxLayout()
-        engine_status_lbl = QLabel("현재 엔진 상태:")
-        engine_status_lbl.setObjectName("muted")
-        engine_status_row.addWidget(engine_status_lbl)
-
-        engine_status_val = QLabel("✅ 정상 작동 중 (WASM / 로컬 가속 엔진 활성화)")
-        engine_status_val.setStyleSheet(f"font-weight: 600; color: {self.palette.get('accent', '#2563EB')};")
-        engine_status_row.addWidget(engine_status_val)
-        engine_status_row.addStretch(1)
-        doc_engine_layout.addLayout(engine_status_row)
-
-        pg_doc_layout.addWidget(doc_engine_card)
         pg_doc_layout.addStretch(1)
 
         # -------------------------------------------------------------
@@ -6770,22 +6736,39 @@ class SettingsDialog(QDialog):
         self.work_delete_attachments_check.setChecked(self._work_delete_attachments_default)
         opt_layout.addWidget(self.work_delete_attachments_check)
 
-        cycle_row = QHBoxLayout()
-        cycle_lbl = QLabel("신규 업무 기본 주기:")
-        cycle_lbl.setObjectName("muted")
-        cycle_row.addWidget(cycle_lbl)
-
-        self.work_default_cycle_combo = QComboBox()
-        for c in ["수시", "일일", "주간", "월간", "분기", "반기", "연간"]:
-            self.work_default_cycle_combo.addItem(c, c)
-        c_idx = self.work_default_cycle_combo.findData(self._work_default_cycle)
-        if c_idx >= 0:
-            self.work_default_cycle_combo.setCurrentIndex(c_idx)
-        cycle_row.addWidget(self.work_default_cycle_combo)
-        cycle_row.addStretch(1)
-        opt_layout.addLayout(cycle_row)
-
         pg_work_layout.addWidget(opt_card)
+
+        # 3. 한글 문서(HWP/HWPX) 웹 엔진 안내 카드
+        doc_engine_card = QFrame()
+        doc_engine_card.setObjectName("card")
+        doc_engine_layout = QVBoxLayout(doc_engine_card)
+        doc_engine_layout.setContentsMargins(14, 12, 14, 12)
+        doc_engine_layout.setSpacing(8)
+
+        doc_engine_title = QLabel("한글(HWP/HWPX) 웹 에디터 엔진")
+        doc_engine_title.setObjectName("sectionTitle")
+        doc_engine_layout.addWidget(doc_engine_title)
+
+        doc_engine_desc = QLabel(
+            "업무 관리에서 별도의 한글 소프트웨어(한컴오피스) 설치 없이도 한글 문서(*.hwp, *.hwpx)를\n"
+            "브라우저 및 로컬 Canvas 기술로 고속 열람·편집할 수 있는 독립 내장 웹 엔진이 적용되어 있습니다."
+        )
+        doc_engine_desc.setObjectName("subtitle")
+        doc_engine_desc.setWordWrap(True)
+        doc_engine_layout.addWidget(doc_engine_desc)
+
+        engine_status_row = QHBoxLayout()
+        engine_status_lbl = QLabel("현재 엔진 상태:")
+        engine_status_lbl.setObjectName("muted")
+        engine_status_row.addWidget(engine_status_lbl)
+
+        engine_status_val = QLabel("✅ 정상 작동 중 (WASM / 로컬 가속 엔진 활성화)")
+        engine_status_val.setStyleSheet(f"font-weight: 600; color: {self.palette.get('accent', '#2563EB')};")
+        engine_status_row.addWidget(engine_status_val)
+        engine_status_row.addStretch(1)
+        doc_engine_layout.addLayout(engine_status_row)
+
+        pg_work_layout.addWidget(doc_engine_card)
         pg_work_layout.addStretch(1)
 
         # 페이지들을 요청된 순서대로 스택 위젯에 등록:
@@ -6970,7 +6953,7 @@ class SettingsDialog(QDialog):
             "work_enable_context_menu": self.work_context_menu_check.isChecked(),
             "work_copy_attachments_default": self.work_copy_attachments_check.isChecked(),
             "work_delete_attachments_default": self.work_delete_attachments_check.isChecked(),
-            "work_default_cycle": str(self.work_default_cycle_combo.currentData() or "수시"),
+            "work_default_cycle": getattr(self, "_work_default_cycle", "수시"),
         }
         self.accept()
 
@@ -7324,20 +7307,48 @@ class SettingsDialog(QDialog):
         target.mkdir(parents=True, exist_ok=True)
         return target.resolve()
 
+    def _ensure_chrome_extension_zip(self) -> Path | None:
+        """Finds or automatically creates chrome_extension.zip in the application runtime folder."""
+        import zipfile
+        from taskcalendar.paths import runtime_root, package_root
+        
+        candidates = [
+            runtime_root() / "chrome_extension.zip",
+            Path(sys.executable).parent / "chrome_extension.zip" if getattr(sys, "frozen", False) else None,
+            package_root().parent / "chrome_extension.zip",
+        ]
+        for c in candidates:
+            if c and c.exists() and c.is_file() and c.stat().st_size > 0:
+                return c.resolve()
+
+        ext_dir = self._get_chrome_extension_dir()
+        target_zip = runtime_root() / "chrome_extension.zip"
+        if ext_dir.exists() and (ext_dir / "manifest.json").exists():
+            try:
+                with zipfile.ZipFile(target_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for root_dir, _, files in os.walk(ext_dir):
+                        for f in files:
+                            if f.endswith(".zip") or f.endswith(".pyc") or f == ".DS_Store":
+                                continue
+                            fp = Path(root_dir) / f
+                            zf.write(fp, fp.relative_to(ext_dir))
+                return target_zip.resolve()
+            except Exception as e:
+                logger.warning(f"Failed to auto-create chrome_extension.zip: {e}")
+
+        return target_zip if target_zip.exists() else None
+
     def _open_chrome_extension_setup(self) -> None:
         import os
         import subprocess
         import winreg
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
 
         ext_dir = self._get_chrome_extension_dir()
         dir_str = str(ext_dir)
 
-        # 1. 클립보드에 경로 복사
-        clipboard = QApplication.clipboard()
-        if clipboard:
-            clipboard.setText(dir_str)
-
-        # 2. Chrome 실행 파일 경로 탐색
+        # Chrome 실행 파일 경로 탐색
         chrome_exe = None
         for root_key in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
             try:
@@ -7360,56 +7371,55 @@ class SettingsDialog(QDialog):
                     chrome_exe = p
                     break
 
-        # 3. 크롬 실행 (--load-extension 플래그 포함)
         chrome_launched = False
         if chrome_exe:
             try:
-                subprocess.Popen([chrome_exe, f"--load-extension={dir_str}", "chrome://extensions"])
+                cmd = [chrome_exe]
+                if ext_dir.exists() and (ext_dir / "manifest.json").exists():
+                    cmd.append(f"--load-extension={dir_str}")
+                cmd.append("chrome://extensions")
+                subprocess.Popen(cmd)
                 chrome_launched = True
             except Exception as e:
                 logger.warning(f"Failed to launch Chrome directly: {e}")
 
-        # 4. 파일 탐색기로 확장 프로그램 폴더 열기
-        try:
-            os.startfile(dir_str)
-        except Exception as e:
-            logger.warning(f"Failed to open folder in explorer: {e}")
+        if not chrome_launched:
+            QDesktopServices.openUrl(QUrl("chrome://extensions"))
 
-        # 5. 사용자 안내 메시지
-        launch_msg = (
-            "크롬 브라우저와 확장 프로그램 폴더가 함께 열렸습니다!\n\n"
-            if chrome_launched
-            else "확장 프로그램 폴더가 열렸습니다!\n(크롬 주소창에 chrome://extensions 를 입력해 이동하세요)\n\n"
-        )
         QMessageBox.information(
             self,
-            "크롬 확장프로그램 간편 연동 안내",
-            f"{launch_msg}"
-            "【간편 등록 3단계 방법】\n"
-            "1. 크롬 확장 관리자 우측 상단의 [개발자 모드] 스위치를 켭니다.\n"
-            "2. 좌측 상단 [압축해제된 확장 프로그램을 로드합니다] 버튼을 클릭합니다.\n"
-            "3. 방금 열린 탐색기 폴더를 선택하거나 해당 폴더를 크롬 창으로 끌어다 놓으세요.\n\n"
-            "※ 폴더 경로가 이미 클립보드에 자동 복사되었습니다.",
+            "크롬 브라우저 실행 안내",
+            "크롬 브라우저가 실행되었습니다!\n\n"
+            "【간편 등록 방법】\n"
+            "1. 크롬 확장 관리자(chrome://extensions) 우측 상단의 [개발자 모드]를 켭니다.\n"
+            "2. 환경설정의 [📁 확장프로그램 폴더 열기] 버튼을 누릅니다.\n"
+            "3. 열린 폴더에서 chrome_extension.zip 압축을 푼 폴더를 크롬 창으로 끌어다 놓으세요.",
         )
 
     def _open_chrome_extension_folder(self) -> None:
         import os
+        import subprocess
+
+        zip_path = self._ensure_chrome_extension_zip()
+        if zip_path and zip_path.exists():
+            try:
+                # 탐색기에서 chrome_extension.zip을 선택한 상태로 열기
+                subprocess.Popen(f'explorer /select,"{zip_path.resolve()}"')
+                return
+            except Exception:
+                pass
+            try:
+                os.startfile(str(zip_path.parent))
+                return
+            except Exception as e:
+                QMessageBox.warning(self, "오류", f"폴더를 여는 중 오류가 발생했습니다.\n{e}")
+                return
+
         ext_dir = self._get_chrome_extension_dir()
         try:
             os.startfile(str(ext_dir))
         except Exception as e:
             QMessageBox.warning(self, "오류", f"폴더를 여는 중 오류가 발생했습니다.\n{e}")
-
-    def _copy_chrome_extension_path(self) -> None:
-        ext_dir = self._get_chrome_extension_dir()
-        clipboard = QApplication.clipboard()
-        if clipboard:
-            clipboard.setText(str(ext_dir))
-            QMessageBox.information(
-                self,
-                "복사 완료",
-                f"확장 프로그램 폴더 경로가 클립보드에 복사되었습니다.\n\n{ext_dir}",
-            )
 
 
 class AlarmEditDialog(QDialog):

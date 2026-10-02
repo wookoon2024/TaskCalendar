@@ -572,15 +572,19 @@ class DraggableCalendarEntryChip(QFrame):
         completed: bool = False,
         bg_color: str = "",
         on_reorder=None,
+        on_context_menu=None,
     ) -> None:
         super().__init__(parent)
         self.entry = entry
         self.source_day = source_day
         self._on_edit = on_edit
         self._on_reorder = on_reorder
+        self._on_context_menu = on_context_menu
         self._press_pos: QPoint | None = None
         self.setCursor(Qt.PointingHandCursor)
         self.setAcceptDrops(True)
+        if getattr(entry, "linked_work_id", None):
+            self.setToolTip(f"💼 [연결된 업무: {entry.title}]\n(마우스 우클릭 시 해당 업무로 바로 이동)")
         chip_bg = str(bg_color or "").strip()
         actual_entry_fg = entry_fg
         actual_time_fg = time_fg
@@ -614,6 +618,11 @@ class DraggableCalendarEntryChip(QFrame):
                 icon_lbl.setPixmap(pix.scaled(15, 15, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
                 icon_lbl.setStyleSheet("background: transparent; border: none; margin-right: 2px;")
                 chip_layout.addWidget(icon_lbl)
+        elif getattr(entry, "linked_work_id", None):
+            link_lbl = QLabel("💼")
+            link_lbl.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            link_lbl.setStyleSheet("background: transparent; border: none; font-size: 10px; margin-right: 2px;")
+            chip_layout.addWidget(link_lbl)
         if time_text:
             time_label = QLabel(time_text)
             time_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
@@ -632,7 +641,19 @@ class DraggableCalendarEntryChip(QFrame):
             self._press_pos = event.globalPosition().toPoint()
             event.accept()
             return
+        elif event.button() == Qt.RightButton:
+            if callable(self._on_context_menu):
+                self._on_context_menu(event.globalPosition().toPoint())
+                event.accept()
+                return
         event.ignore()
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        if callable(self._on_context_menu):
+            self._on_context_menu(event.globalPos())
+            event.accept()
+            return
+        super().contextMenuEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         if self._press_pos is not None and (event.buttons() & Qt.LeftButton):
@@ -4444,6 +4465,7 @@ class MainWindow(QMainWindow):
                     completed_on_day,
                     entry.bg_color,
                     on_reorder,
+                    on_context_menu=lambda pos, e=entry: self._show_schedule_context_menu(e, pos),
                 )
                 cell.items_layout.addWidget(chip, 0, Qt.AlignLeft)
             if len(schedule_entries) > available_schedule_slots:
@@ -4593,6 +4615,7 @@ class MainWindow(QMainWindow):
                 card.reordered.connect(self._on_memo_card_reordered)
             else:
                 card._on_double_click = lambda e=entry: self._edit_entry(e.entry_type, e)
+                card._on_context_menu = lambda pos, e=entry: self._show_schedule_context_menu(e, pos)
                 card.reordered.connect(
                     lambda s_id, t_id, before: self._move_calendar_entry(
                         s_id, self.selected_day, self.selected_day, t_id, before
@@ -4624,6 +4647,9 @@ class MainWindow(QMainWindow):
             details.append(f"담당: {entry.assignee}")
         if entry.status and entry.status != "완료":
             details.append(f"상태: {entry.status}")
+        if getattr(entry, "linked_work_id", None):
+            link_tag = "업무연동" if getattr(entry, "linked_work_type", "work") == "work" else "분류연동"
+            details.append(f"💼 {link_tag}")
         meta_row = QWidget()
         meta_row.setStyleSheet("background: transparent; border: none;")
         meta_layout = QHBoxLayout(meta_row)
@@ -4927,6 +4953,91 @@ class MainWindow(QMainWindow):
         del_act.triggered.connect(lambda _=False, e=entry: self._delete_entry(e))
 
         menu.exec(global_pos)
+
+    def _show_schedule_context_menu(self, entry: CalendarEntry, global_pos: QPoint) -> None:
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #d0d5dd;
+                padding: 4px 0px;
+                border-radius: 6px;
+            }
+            QMenu::item {
+                padding: 6px 20px 6px 16px;
+                font-size: 12px;
+                color: #222222;
+            }
+            QMenu::item:selected {
+                background-color: #f1f5f9;
+                color: #0f172a;
+            }
+        """)
+
+        has_work_link = bool(getattr(entry, "linked_work_id", None))
+        if has_work_link:
+            work_label = "💼 해당 업무로 바로 가기" if getattr(entry, "linked_work_type", "work") == "work" else "📁 해당 업무 분류(폴더)로 바로 가기"
+            work_act = menu.addAction(work_label)
+            work_act.triggered.connect(lambda _=False, e=entry: self.open_linked_work(e.linked_work_id, getattr(e, "linked_work_type", "work")))
+            menu.addSeparator()
+
+        edit_act = menu.addAction("✏️ 일정 수정")
+        edit_act.triggered.connect(lambda _=False, e=entry: self._edit_entry(e.entry_type, e))
+        del_act = menu.addAction("🗑️ 일정 삭제")
+        del_act.triggered.connect(lambda _=False, e=entry: self._delete_entry(e))
+
+        menu.exec(global_pos)
+
+    def open_linked_work(self, work_id: int | None, work_type: str = "work") -> None:
+        """연결된 업무 또는 분류 폴더로 WorkManager를 열고 해당 항목 선택"""
+        self._open_work_manager()
+        dlg = getattr(self, "_work_manager_dialog", None)
+        if dlg is not None:
+            dlg.show()
+            dlg.raise_()
+            dlg.activateWindow()
+            dlg.select_work_item_or_category(work_id, work_type)
+
+    def register_schedule_from_work(
+        self,
+        title: str,
+        description: str = "",
+        work_id: int | None = None,
+        work_type: str = "work",
+        target_day: date | None = None,
+    ) -> CalendarEntry | None:
+        """업무 관리자에서 요청된 일정 등록 다이얼로그 호출 및 저장"""
+        from taskcalendar.qt_dialogs import EntryDialog
+        if target_day is None:
+            target_day = self.selected_day or date.today()
+
+        entry = CalendarEntry(
+            entry_type=EntryType.SCHEDULE,
+            title=title,
+            description=description or title,
+            day=target_day,
+            start_date=target_day,
+            end_date=target_day,
+            all_day=True,
+            icon_type="💼",
+            linked_work_id=work_id,
+            linked_work_type=work_type,
+        )
+        dialog = EntryDialog(self, EntryType.SCHEDULE, target_day, entry)
+        if dialog.exec():
+            res = dialog.result
+            if res:
+                res.linked_work_id = work_id
+                res.linked_work_type = work_type
+                if not res.icon_type:
+                    res.icon_type = "💼"
+                saved = self.repository.upsert_entry(res)
+                self.repository.save()
+                self._load_month_entries()
+                self._render_calendar()
+                self._render_sidebar()
+                return saved
+        return None
 
     def _close_memo_entry(self, entry: CalendarEntry) -> None:
         if entry.entry_id is None:

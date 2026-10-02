@@ -56,10 +56,32 @@ def restore_rhwp_wasm() -> bool:
     return False
 
 
+def restore_chrome_extension_zip() -> bool:
+    import os
+    import zipfile
+    ext_dir = ROOT / "chrome_extension"
+    zip_path = ROOT / "chrome_extension.zip"
+    if ext_dir.exists() and (ext_dir / "manifest.json").exists() and (not zip_path.exists() or zip_path.stat().st_size == 0):
+        try:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for root, _, files in os.walk(ext_dir):
+                    for f in files:
+                        if f.endswith(".zip") or f.endswith(".pyc") or f == ".DS_Store":
+                            continue
+                        fp = Path(root) / f
+                        zf.write(fp, fp.relative_to(ext_dir))
+            print(f"[OK] Generated {zip_path.name} ({zip_path.stat().st_size:,} bytes)")
+            return True
+        except Exception as e:
+            print(f"[WARN] Failed to create chrome_extension.zip: {e}")
+    return False
+
+
 def main() -> None:
     print("Checking and restoring network-filtered assets...")
     restore_app_icon()
     restore_rhwp_wasm()
+    restore_chrome_extension_zip()
     print("Asset restoration complete.")
 
 

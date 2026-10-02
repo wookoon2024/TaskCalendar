@@ -240,6 +240,8 @@ class EncryptedRepository:
                 alert_type TEXT NOT NULL DEFAULT 'none',
                 alert_offset TEXT NOT NULL DEFAULT 'at_start',
                 memo_group TEXT NOT NULL DEFAULT '',
+                linked_work_id INTEGER DEFAULT NULL,
+                linked_work_type TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -352,6 +354,8 @@ class EncryptedRepository:
             "alert_type": "ALTER TABLE entries ADD COLUMN alert_type TEXT NOT NULL DEFAULT 'none'",
             "alert_offset": "ALTER TABLE entries ADD COLUMN alert_offset TEXT NOT NULL DEFAULT 'at_start'",
             "memo_group": "ALTER TABLE entries ADD COLUMN memo_group TEXT NOT NULL DEFAULT ''",
+            "linked_work_id": "ALTER TABLE entries ADD COLUMN linked_work_id INTEGER DEFAULT NULL",
+            "linked_work_type": "ALTER TABLE entries ADD COLUMN linked_work_type TEXT NOT NULL DEFAULT ''",
         }
         for name, sql in additions.items():
             if name not in existing:
@@ -761,6 +765,8 @@ class EncryptedRepository:
             entry.alert_type.value,
             entry.alert_offset,
             getattr(entry, "memo_group", "") or "",
+            getattr(entry, "linked_work_id", None),
+            getattr(entry, "linked_work_type", "") or "",
         )
         if entry.entry_id is None:
             cursor = self.connection.execute(
@@ -769,9 +775,9 @@ class EncryptedRepository:
                     entry_type, title, description, day, start_date, end_date,
                     start_time, end_time, all_day, assignee, department, status, attachments_json,
                     recurrence_enabled, recurrence_type, recurrence_interval,
-                    recurrence_weekdays_json, recurrence_month_day, recurrence_month_week, recurrence_month_end, completed_dates_json, icon_type, bg_color, alert_type, alert_offset, memo_group, created_at, updated_at
+                    recurrence_weekdays_json, recurrence_month_day, recurrence_month_week, recurrence_month_end, completed_dates_json, icon_type, bg_color, alert_type, alert_offset, memo_group, linked_work_id, linked_work_type, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values + (now, now),
             )
@@ -786,7 +792,7 @@ class EncryptedRepository:
                     SET entry_type=?, title=?, description=?, day=?, start_date=?, end_date=?,
                         start_time=?, end_time=?, all_day=?, assignee=?, department=?, status=?, attachments_json=?,
                         recurrence_enabled=?, recurrence_type=?, recurrence_interval=?,
-                        recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, created_at=?, updated_at=?
+                        recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, linked_work_id=?, linked_work_type=?, created_at=?, updated_at=?
                     WHERE id = ?
                     """,
                     values + (entry.created_at.isoformat(timespec="seconds"), now, entry.entry_id),
@@ -798,7 +804,7 @@ class EncryptedRepository:
                     SET entry_type=?, title=?, description=?, day=?, start_date=?, end_date=?,
                         start_time=?, end_time=?, all_day=?, assignee=?, department=?, status=?, attachments_json=?,
                         recurrence_enabled=?, recurrence_type=?, recurrence_interval=?,
-                        recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, updated_at=?
+                        recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, linked_work_id=?, linked_work_type=?, updated_at=?
                     WHERE id = ?
                     """,
                     values + (now, entry.entry_id),
@@ -1015,6 +1021,8 @@ class EncryptedRepository:
             alert_type=AlertType(row["alert_type"] or "none"),
             alert_offset=row["alert_offset"] or "at_start",
             memo_group=row["memo_group"] if "memo_group" in row.keys() and row["memo_group"] else "",
+            linked_work_id=row["linked_work_id"] if "linked_work_id" in row.keys() else None,
+            linked_work_type=row["linked_work_type"] if "linked_work_type" in row.keys() and row["linked_work_type"] else "",
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )

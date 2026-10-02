@@ -3123,6 +3123,14 @@ class WorkManagerDialog(QDialog):
         btn_add_cat.setStyleSheet(self._sub_btn_style())
         btn_add_cat.clicked.connect(self._on_add_category)
         left_header.addWidget(btn_add_cat)
+
+        btn_reg_cal = QPushButton("📅 일정등록")
+        btn_reg_cal.setFixedHeight(20)
+        btn_reg_cal.setStyleSheet(self._sub_btn_style())
+        btn_reg_cal.setToolTip("선택한 업무 또는 폴더를 캘린더에 일정으로 등록합니다.")
+        btn_reg_cal.clicked.connect(self._register_selected_to_calendar)
+        left_header.addWidget(btn_reg_cal)
+
         left_layout.addLayout(left_header)
 
         self.category_tree = CompactCategoryTree()
@@ -4605,12 +4613,16 @@ class WorkManagerDialog(QDialog):
             act_rename = menu.addAction("✏️ 이름 바꾸기")
             act_dup = menu.addAction("📋 복제")
             menu.addSeparator()
+            act_reg_cal = menu.addAction("📅 캘린더에 일정 등록")
+            menu.addSeparator()
             act_delete = menu.addAction("🗑️ 업무 삭제 (DB 영구 삭제)")
             menu.addSeparator()
             act_add_doc = menu.addAction("➕ 새 업무 추가")
             action = menu.exec(self.category_tree.mapToGlobal(pos))
             if action == act_open:
                 self.open_sheet(sheet)
+            elif action == act_reg_cal:
+                self._register_sheet_to_calendar(sheet)
             elif action == act_rename:
                 new_title, ok = QInputDialog.getText(self, "업무 이름 변경", "새 이름:", text=sheet.title)
                 if ok and new_title.strip():
@@ -4646,12 +4658,16 @@ class WorkManagerDialog(QDialog):
             act_add_sub = menu.addAction("📁 하위 폴더(분류) 추가")
             act_rename = menu.addAction("✏️ 폴더 이름 변경")
             menu.addSeparator()
+            act_reg_cal = menu.addAction("📅 캘린더에 일정 등록")
+            menu.addSeparator()
             act_delete = menu.addAction("🗑️ 폴더 삭제")
             menu.addSeparator()
             act_add_cat = menu.addAction("📁 새 루트 분류(폴더) 추가")
             action = menu.exec(self.category_tree.mapToGlobal(pos))
             if action == act_add_doc:
                 self._on_add_sheet_in_category(cat_name, cat_id)
+            elif action == act_reg_cal:
+                self._register_category_to_calendar(cat_name, cat_id)
             elif action == act_add_sub:
                 self._on_add_sub_category(cat_id, cat_name)
             elif action == act_rename:
@@ -4660,6 +4676,115 @@ class WorkManagerDialog(QDialog):
                 self._on_delete_category(cat_name)
             elif action == act_add_cat:
                 self._on_add_category()
+
+    def _register_selected_to_calendar(self) -> None:
+        """선택된 업무 또는 폴더를 캘린더에 일정으로 등록"""
+        item = self.category_tree.currentItem()
+        if not item:
+            if 0 <= self._active_sheet_index < len(self._open_sheets):
+                self._register_sheet_to_calendar(self._open_sheets[self._active_sheet_index])
+                return
+            QMessageBox.information(self, "안내", "캘린더에 등록할 업무 또는 분류(폴더)를 먼저 선택하세요.")
+            return
+        sheet = item.data(0, Qt.UserRole)
+        if isinstance(sheet, WorkSheetData):
+            self._register_sheet_to_calendar(sheet)
+        else:
+            cat_name = item.data(0, Qt.UserRole + 2) or item.text(0).replace("📁 ", "").replace("📂 ", "").strip()
+            cat_id = item.data(0, Qt.UserRole + 1)
+            self._register_category_to_calendar(cat_name, cat_id)
+
+    def _register_sheet_to_calendar(self, sheet: WorkSheetData) -> None:
+        """업무 항목을 캘린더 일정으로 등록"""
+        if not self.main_window:
+            QMessageBox.warning(self, "오류", "메인 캘린더 창을 찾을 수 없습니다.")
+            return
+        if not sheet.db_id and self.repository:
+            self._save_current_sheet_data()
+        saved = self.main_window.register_schedule_from_work(
+            title=sheet.title or "새 업무",
+            description=sheet.title or "새 업무",
+            work_id=sheet.db_id,
+            work_type="work",
+        )
+        if saved:
+            Toast(self, f"'{sheet.title}' 일정이 캘린더에 등록되었습니다.")
+
+    def _register_category_to_calendar(self, cat_name: str, cat_id: int | None) -> None:
+        """업무 분류(폴더)를 캘린더 일정으로 등록"""
+        if not self.main_window:
+            QMessageBox.warning(self, "오류", "메인 캘린더 창을 찾을 수 없습니다.")
+            return
+        saved = self.main_window.register_schedule_from_work(
+            title=cat_name,
+            description=cat_name,
+            work_id=cat_id,
+            work_type="folder",
+        )
+        if saved:
+            Toast(self, f"'{cat_name}' 분류 일정이 캘린더에 등록되었습니다.")
+
+    def select_work_item_or_category(self, item_id: int | None, item_type: str = "work") -> None:
+        """캘린더에서 링크 클릭 시 해당 업무 또는 폴더를 열고 트리를 선택"""
+        if item_id is None:
+            return
+        if item_type in ("work", "item"):
+            target_sheet = None
+            for s in self._all_sheets:
+                if s.db_id == item_id:
+                    target_sheet = s
+                    break
+            if target_sheet:
+                self.open_sheet(target_sheet)
+                self._select_sheet_in_tree(target_sheet)
+        elif item_type in ("folder", "category"):
+            self._select_category_in_tree(item_id)
+
+    def _select_sheet_in_tree(self, sheet: WorkSheetData) -> None:
+        """트리에서 sheet 항목을 찾아 부모 펼치고 선택"""
+        def find_item(parent_item: QTreeWidgetItem | None) -> QTreeWidgetItem | None:
+            count = parent_item.childCount() if parent_item else self.category_tree.topLevelItemCount()
+            for i in range(count):
+                child = parent_item.child(i) if parent_item else self.category_tree.topLevelItem(i)
+                data = child.data(0, Qt.UserRole)
+                if data == sheet or (isinstance(data, WorkSheetData) and data.db_id == sheet.db_id):
+                    return child
+                res = find_item(child)
+                if res:
+                    return res
+            return None
+
+        found = find_item(None)
+        if found:
+            p = found.parent()
+            while p:
+                p.setExpanded(True)
+                p = p.parent()
+            self.category_tree.setCurrentItem(found)
+            self.category_tree.scrollToItem(found)
+
+    def _select_category_in_tree(self, cat_id: int) -> None:
+        """트리에서 cat_id 폴더 항목을 찾아 부모 펼치고 선택"""
+        def find_item(parent_item: QTreeWidgetItem | None) -> QTreeWidgetItem | None:
+            count = parent_item.childCount() if parent_item else self.category_tree.topLevelItemCount()
+            for i in range(count):
+                child = parent_item.child(i) if parent_item else self.category_tree.topLevelItem(i)
+                if child.data(0, Qt.UserRole + 1) == cat_id:
+                    return child
+                res = find_item(child)
+                if res:
+                    return res
+            return None
+
+        found = find_item(None)
+        if found:
+            p = found.parent()
+            while p:
+                p.setExpanded(True)
+                p = p.parent()
+            found.setExpanded(True)
+            self.category_tree.setCurrentItem(found)
+            self.category_tree.scrollToItem(found)
 
     def _on_add_sub_category(self, parent_id: int | None, parent_name: str) -> None:
         """하위 폴더(분류) 생성"""

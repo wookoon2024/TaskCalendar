@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from restore import restore_app_icon, restore_rhwp_wasm
+from restore import restore_app_icon, restore_rhwp_wasm, restore_chrome_extension_zip
 
 ROOT = Path(__file__).resolve().parent
 
@@ -18,7 +18,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('taskcalendar/assets', 'taskcalendar/assets'), ('data/holidays_kr.json', 'data')],
+    datas=[('taskcalendar/assets', 'taskcalendar/assets'), ('data/holidays_kr.json', 'data'), ('chrome_extension', 'chrome_extension')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -70,6 +70,7 @@ def main() -> None:
     print("=== Step 1: Restoring assets ===")
     restore_app_icon()
     restore_rhwp_wasm()
+    restore_chrome_extension_zip()
 
     print("=== Step 2: Preparing spec file ===")
     spec_path = ROOT / "Calendar.spec"
@@ -83,9 +84,15 @@ def main() -> None:
     res = subprocess.run(cmd)
     if res.returncode == 0:
         print("\n=== Build Completed Successfully! ===")
-        dist_exe = ROOT / "dist" / "Calendar.exe"
+        dist_dir = ROOT / "dist"
+        dist_exe = dist_dir / "Calendar.exe"
         if dist_exe.exists():
             print(f"Output executable: {dist_exe} ({dist_exe.stat().st_size:,} bytes)")
+        ext_zip = ROOT / "chrome_extension.zip"
+        if ext_zip.exists():
+            import shutil
+            shutil.copy2(ext_zip, dist_dir / "chrome_extension.zip")
+            print(f"Output extension: {dist_dir / 'chrome_extension.zip'} ({ext_zip.stat().st_size:,} bytes)")
     else:
         print(f"\n[ERROR] PyInstaller failed with exit code {res.returncode}")
         sys.exit(res.returncode)
