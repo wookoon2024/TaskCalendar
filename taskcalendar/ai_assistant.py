@@ -151,13 +151,14 @@ class AIChatWorker(QThread):
                 verify=True,
             ) as resp:
                 resp.raise_for_status()
+                resp.encoding = "utf-8"
                 if stream_enabled:
-                    for line in resp.iter_lines(decode_unicode=True):
+                    for raw_line in resp.iter_lines(decode_unicode=False):
                         if self._is_stopped:
                             break
-                        if not line:
+                        if not raw_line:
                             continue
-                        line_str = line.strip()
+                        line_str = raw_line.decode("utf-8", errors="replace").strip()
                         if line_str.startswith("data: "):
                             data_str = line_str[6:].strip()
                             if data_str == "[DONE]":
@@ -175,17 +176,23 @@ class AIChatWorker(QThread):
                                 continue
                     self.finished.emit(accumulated_text)
                 else:
-                    res_data = resp.json()
-                    choices = res_data.get("choices", [])
-                    if choices:
-                        content = choices[0].get("message", {}).get("content", "")
-                        self.finished.emit(content)
-                    else:
-                        self.finished.emit(resp.text)
+                    try:
+                        res_data = resp.json()
+                        choices = res_data.get("choices", [])
+                        if choices:
+                            content = choices[0].get("message", {}).get("content", "")
+                            self.finished.emit(content)
+                        else:
+                            self.finished.emit(resp.content.decode("utf-8", errors="replace"))
+                    except Exception:
+                        self.finished.emit(resp.content.decode("utf-8", errors="replace"))
         except requests.exceptions.HTTPError as e:
             err_body = ""
             if e.response is not None:
-                err_body = e.response.text[:300]
+                try:
+                    err_body = e.response.content.decode("utf-8", errors="replace")[:300]
+                except Exception:
+                    err_body = e.response.text[:300]
             self.error.emit(f"AI 서버 응답 오류 (HTTP {e.response.status_code if e.response else 'N/A'}):\n{err_body}")
         except requests.exceptions.SSLError as e:
             self.error.emit(f"SSL 보안 인증서 검증 실패:\n{e}\n\n(기관 전용 사설 인증서인 경우 Windows 인증서 저장소에 등록되어 있는지 확인해 주세요.)")
