@@ -40,6 +40,7 @@ from PySide6.QtGui import (
     QPageLayout,
     QPageSize,
     QPainter,
+    QPalette,
     QPdfWriter,
     QPen,
     QPolygonF,
@@ -211,27 +212,20 @@ class CompactCategoryItemDelegate(QStyledItemDelegate):
         is_sel = bool(view and view.selectionModel() and view.selectionModel().isSelected(index))
         is_parent = not index.parent().isValid()
 
-        painter.save()
+        if is_parent:
+            opt.font.setBold(True)
+        else:
+            opt.font.setBold(False)
 
         if is_sel:
-            painter.setPen(QColor('#0284C7'))
+            opt.palette.setColor(QPalette.ColorRole.Text, QColor('#0284C7'))
+            opt.palette.setColor(QPalette.ColorRole.HighlightedText, QColor('#0284C7'))
         elif opt.state & QStyle.State_MouseOver:
-            painter.setPen(QColor('#0F172A'))
+            opt.palette.setColor(QPalette.ColorRole.Text, QColor('#0F172A'))
         else:
-            painter.setPen(QColor('#1E293B') if is_parent else QColor('#334155'))
+            opt.palette.setColor(QPalette.ColorRole.Text, QColor('#1E293B') if is_parent else QColor('#334155'))
 
-        font = QFont(ui_font_family())
-        font.setPixelSize(12)
-        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality)
-        if is_parent or is_sel:
-            font.setBold(True)
-        else:
-            font.setBold(False)
-        painter.setFont(font)
-
-        text_rect = opt.rect.adjusted(2, 0, -2, 0)
-        painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, opt.text)
-        painter.restore()
+        super().paint(painter, opt, index)
 
 
 class CompactCategoryTree(QTreeWidget):
