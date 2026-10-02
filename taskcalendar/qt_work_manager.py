@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import zipfile
 from collections import Counter
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import (
