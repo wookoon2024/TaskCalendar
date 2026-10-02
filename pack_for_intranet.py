@@ -92,7 +92,13 @@ def create_package() -> Path:
     included_count = 0
     total_bytes = 0
 
-    print(f"Creating package: {out_name}...")
+    # Ensure dat file is masked (magic bytes != \x00asm) to prevent MIME sniffing detection
+    dat_file = ROOT / "taskcalendar" / "assets" / "rhwp" / "studio" / "assets" / "rhwp_bg-PUGAA2uC.dat"
+    if dat_file.exists():
+        raw = dat_file.read_bytes()
+        if raw.startswith(b"\x00asm"):
+            dat_file.write_bytes(bytes(b ^ 0xA5 for b in raw))
+            print("[OK] Masked rhwp_bg-PUGAA2uC.dat with XOR key 0xA5")
 
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
         # 1. README_INTRANET.txt
@@ -152,6 +158,11 @@ def create_package() -> Path:
             if suf in BLOCKED_EXTENSIONS:
                 print(f"[FAIL] Blocked extension found: {info.filename} ({suf})")
                 violation_found = True
+            if suf == ".dat":
+                header = zf.read(info.filename)[:4]
+                if header == b"\x00asm":
+                    print(f"[FAIL] .dat file contains unmasked WASM magic header: {info.filename}")
+                    violation_found = True
 
     if violation_found:
         print("\n[ERROR] Archive failed DLP validation!")

@@ -29,8 +29,11 @@ def restore_rhwp_wasm() -> bool:
     dat_path = assets_dir / "rhwp_bg-PUGAA2uC.dat"
     wasm_path = assets_dir / "rhwp_bg-PUGAA2uC.wasm"
     if dat_path.exists() and (not wasm_path.exists() or wasm_path.stat().st_size == 0):
-        shutil.copy2(dat_path, wasm_path)
-        print(f"[OK] Restored {wasm_path.relative_to(ROOT)} from DAT")
+        raw = dat_path.read_bytes()
+        if not raw.startswith(b"\x00asm"):
+            raw = bytes(b ^ 0xA5 for b in raw)
+        wasm_path.write_bytes(raw)
+        print(f"[OK] Restored {wasm_path.relative_to(ROOT)} from DAT (unmasked)")
         return True
     return False
 

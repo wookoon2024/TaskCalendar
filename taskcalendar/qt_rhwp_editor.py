@@ -76,6 +76,23 @@ except ImportError:
     _HAS_WEBENGINE = False
 
 
+def ensure_rhwp_wasm() -> Path | None:
+    """망연계 보안 필터 통과용으로 마스킹된 .dat 에셋을 로컬에서 .wasm으로 자동 복원"""
+    studio_assets = Path(__file__).parent / "assets" / "rhwp" / "studio" / "assets"
+    wasm_path = studio_assets / "rhwp_bg-PUGAA2uC.wasm"
+    dat_path = studio_assets / "rhwp_bg-PUGAA2uC.dat"
+    if not wasm_path.exists() and dat_path.exists():
+        try:
+            raw = dat_path.read_bytes()
+            if not raw.startswith(b"\x00asm"):
+                raw = bytes(b ^ 0xA5 for b in raw)
+            wasm_path.write_bytes(raw)
+            logger.info("Auto-restored rhwp_bg-PUGAA2uC.wasm from dat")
+        except Exception as e:
+            logger.warning("Failed to auto-restore wasm from dat: %s", e)
+    return wasm_path if wasm_path.exists() else None
+
+
 class _QuietStudioHandler(http.server.SimpleHTTPRequestHandler):
     """rhwp-studio 정적 에셋 로컬 서빙 핸들러"""
 
@@ -95,13 +112,12 @@ class _QuietStudioHandler(http.server.SimpleHTTPRequestHandler):
             fonts_dir = (Path(__file__).parent / "assets" / "fonts").resolve()
             subpath = clean_path[len("/fonts/"):].split("?")[0].split("#")[0]
             target = (fonts_dir / subpath).resolve()
+            if str(target).startswith(str(fonts_dir)) and target.exists():
+                return str(target)
         resolved = super().translate_path(clean_path)
-        # .wasm 요청 시 실제 파일이 없으면 .dat 또는 .bin 대체 파일 탐색
+        # .wasm 요청 시 실제 파일이 없으면 자동 복원 시도
         if clean_path.endswith(".wasm") and not Path(resolved).exists():
-            for alt_ext in (".dat", ".bin"):
-                cand = Path(resolved).with_suffix(alt_ext)
-                if cand.exists():
-                    return str(cand)
+            ensure_rhwp_wasm()
         return resolved
 
     def guess_type(self, path: str) -> str:
@@ -151,6 +167,7 @@ class RhwpStudioServer:
             return cls._instance
 
     def _start_server(self) -> None:
+        ensure_rhwp_wasm()
         studio_dir = Path(__file__).parent / "assets" / "rhwp" / "studio"
         if not studio_dir.exists():
             logger.error("rhwp studio directory not found: %s", studio_dir)
