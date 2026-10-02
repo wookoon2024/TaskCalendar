@@ -4844,9 +4844,25 @@ class WorkManagerDialog(QDialog):
             }
         """)
 
+        from taskcalendar.paths import runtime_root, package_root
+        import shutil
+
         tpl_dir = runtime_root() / "업무 템플릿"
         if not tpl_dir.exists():
             tpl_dir.mkdir(parents=True, exist_ok=True)
+
+        # 단일 exe만 배포된 경우 내장된 번들 템플릿을 자동으로 추출(시딩)
+        try:
+            bundled_tpl = package_root().parent / "업무 템플릿"
+            if bundled_tpl.exists() and bundled_tpl.is_dir() and not any(tpl_dir.iterdir()):
+                for item in bundled_tpl.iterdir():
+                    dst = tpl_dir / item.name
+                    if item.is_dir():
+                        shutil.copytree(item, dst, dirs_exist_ok=True)
+                    elif item.is_file():
+                        shutil.copy2(item, dst)
+        except Exception:
+            pass
 
         categories = sorted([d for d in tpl_dir.iterdir() if d.is_dir()])
         for cat in categories:
