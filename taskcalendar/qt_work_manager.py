@@ -202,7 +202,7 @@ class CompactCategoryItemDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option, index):
         size = super().sizeHint(option, index)
-        return QSize(size.width(), max(size.height(), 26))
+        return QSize(size.width(), max(size.height(), 24))
 
     def paint(self, painter, option, index):
         opt = QStyleOptionViewItem(option)
@@ -212,7 +212,6 @@ class CompactCategoryItemDelegate(QStyledItemDelegate):
         is_parent = not index.parent().isValid()
 
         painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         if is_sel:
             painter.setPen(QColor('#0284C7'))
@@ -222,9 +221,10 @@ class CompactCategoryItemDelegate(QStyledItemDelegate):
             painter.setPen(QColor('#1E293B') if is_parent else QColor('#334155'))
 
         font = QFont(opt.font)
-        font.setPixelSize(13)
         if is_parent or is_sel:
             font.setBold(True)
+        else:
+            font.setBold(False)
         painter.setFont(font)
 
         text_rect = opt.rect.adjusted(2, 0, -2, 0)
@@ -3472,7 +3472,6 @@ class WorkManagerDialog(QDialog):
         left_layout.addLayout(search_layout)
 
         self.category_tree = CompactCategoryTree()
-        self.category_tree.setStyle(QStyleFactory.create("Fusion"))
         self.category_tree.setItemDelegate(CompactCategoryItemDelegate(self.category_tree))
         self.category_tree.setHeaderHidden(True)
         self.category_tree.setIndentation(14)
@@ -3485,12 +3484,12 @@ class WorkManagerDialog(QDialog):
                 border-radius: 4px;
                 background-color: {panel_alt};
                 color: {text};
-                font-size: 13px;
+                font-size: 12px;
                 padding: 2px 2px;
                 outline: none;
             }}
             QTreeWidget::item {{
-                height: 26px;
+                height: 24px;
                 padding: 0px 4px;
                 margin: 1px 1px;
                 border: none;
@@ -5040,11 +5039,6 @@ class WorkManagerDialog(QDialog):
             item.setFlags(item.flags() | Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsDragEnabled)
             item.setData(0, Qt.UserRole + 1, cat_id)
             item.setData(0, Qt.UserRole + 2, raw_name)
-            font = item.font(0)
-            font.setBold(True)
-            font.setPixelSize(13)
-            item.setFont(0, font)
-            item.setForeground(0, QColor("#1E293B"))
             cat_items_map[cat_id] = item
 
             if not parent_id:
@@ -7643,12 +7637,12 @@ class WorkManagerDialog(QDialog):
                     border-radius: 4px;
                     background-color: {panel_alt};
                     color: {text};
-                    font-size: 13px;
+                    font-size: 12px;
                     padding: 2px 2px;
                     outline: none;
                 }}
                 QTreeWidget::item {{
-                    height: 26px;
+                    height: 24px;
                     padding: 0px 4px;
                     margin: 1px 1px;
                     border: none;
