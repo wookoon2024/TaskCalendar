@@ -220,7 +220,9 @@ class CompactCategoryItemDelegate(QStyledItemDelegate):
         else:
             painter.setPen(QColor('#1E293B') if is_parent else QColor('#334155'))
 
-        font = QFont(opt.font)
+        font = QFont(ui_font_family())
+        font.setPixelSize(12)
+        font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality)
         if is_parent or is_sel:
             font.setBold(True)
         else:
@@ -3229,6 +3231,7 @@ class WorkManagerDialog(QDialog):
             QDialog {{
                 background-color: {self.palette.get("bg", "#F1F5F9")};
                 color: {text};
+                font-family: {font_family_css()};
             }}
             QSplitter::handle {{
                 background-color: {line};
@@ -3472,6 +3475,7 @@ class WorkManagerDialog(QDialog):
         left_layout.addLayout(search_layout)
 
         self.category_tree = CompactCategoryTree()
+        self.category_tree.setFont(QFont(ui_font_family(), 9))
         self.category_tree.setItemDelegate(CompactCategoryItemDelegate(self.category_tree))
         self.category_tree.setHeaderHidden(True)
         self.category_tree.setIndentation(14)
@@ -3480,15 +3484,17 @@ class WorkManagerDialog(QDialog):
         self.category_tree.setAnimated(False)
         self.category_tree.setStyleSheet(f"""
             QTreeWidget {{
+                font-family: {font_family_css()};
+                font-size: 12px;
                 border: 1px solid {line};
                 border-radius: 4px;
                 background-color: {panel_alt};
                 color: {text};
-                font-size: 12px;
                 padding: 2px 2px;
                 outline: none;
             }}
             QTreeWidget::item {{
+                font-family: {font_family_css()};
                 height: 24px;
                 padding: 0px 4px;
                 margin: 1px 1px;
@@ -7631,17 +7637,20 @@ class WorkManagerDialog(QDialog):
             """)
 
         if hasattr(self, "category_tree") and self.category_tree:
+            self.category_tree.setFont(QFont(ui_font_family(), 9))
             self.category_tree.setStyleSheet(f"""
                 QTreeWidget {{
+                    font-family: {font_family_css()};
+                    font-size: 12px;
                     border: 1px solid {line};
                     border-radius: 4px;
                     background-color: {panel_alt};
                     color: {text};
-                    font-size: 12px;
                     padding: 2px 2px;
                     outline: none;
                 }}
                 QTreeWidget::item {{
+                    font-family: {font_family_css()};
                     height: 24px;
                     padding: 0px 4px;
                     margin: 1px 1px;
