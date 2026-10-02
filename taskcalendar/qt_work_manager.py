@@ -950,6 +950,254 @@ def extract_document_content(file_path: Path | str) -> tuple[str, bytes | None]:
     return "", None
 
 
+def check_document_drm(file_path: Path | str, raw_bytes: bytes | None = None) -> tuple[bool, str]:
+    """
+    한글(HWP, HWPX) 및 주요 문서 파일이 DRM(Fasoo, SoftCamp, MarkAny 등)으로 암호화되어 있는지 감지.
+    반환: (is_drm, drm_vendor_or_reason)
+    """
+    path = Path(file_path)
+    if not path.exists():
+        return False, ""
+
+    if raw_bytes is None:
+        try:
+            with open(path, "rb") as f:
+                raw_bytes = f.read(4096)
+        except Exception as e:
+            return False, f"파일 읽기 오류: {e}"
+
+    if not raw_bytes or len(raw_bytes) < 8:
+        return False, ""
+
+    header_sample = raw_bytes[:1024]
+    header_lower = header_sample.lower()
+
+    # 명시적 DRM 시그니처 검사 (국내 주요 공공기관 및 대기업 DRM)
+    if b"fs_packet" in header_lower or b"fsdn" in header_lower or b"fasoo" in header_lower:
+        return True, "Fasoo DRM (파수 엔터프라이즈 문서보안)"
+    if b"scdoc" in header_lower or b"scpkg" in header_lower or b"documentsafer" in header_lower or b"softcamp" in header_lower:
+        return True, "SoftCamp Document Safer (소프트캠프 문서보안)"
+    if b"markany" in header_lower or b"made" in header_lower or b"drm" in header_lower[:64]:
+        return True, "MarkAny DRM (마크애니 문서보안)"
+
+    ext = path.suffix.lower()
+    if ext == ".hwpx":
+        if not raw_bytes.startswith(b"PK\x03\x04"):
+            return True, "사내 문서보안 솔루션 (DRM 암호화 파일)"
+    elif ext == ".hwp":
+        OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+        if not raw_bytes.startswith(OLE_MAGIC) and not raw_bytes.startswith(b"HWP Document File"):
+            return True, "사내 문서보안 솔루션 (DRM 암호화 파일)"
+    elif ext in (".docx", ".xlsx", ".pptx"):
+        if not raw_bytes.startswith(b"PK\x03\x04"):
+            return True, "사내 문서보안 솔루션 (DRM 암호화 파일)"
+    elif ext == ".pdf":
+        if not raw_bytes.startswith(b"%PDF"):
+            return True, "사내 문서보안 솔루션 (DRM 암호화 파일)"
+
+    return False, ""
+
+
+def try_extract_via_hwp_com(file_path: Path | str) -> tuple[str, bytes | None]:
+    """
+    PC에 설치된 한글 프로그램(Hwp.exe)의 OLE Automation(COM)을 통해
+    DRM 파일의 텍스트 또는 HWPX 변환 바이트 추출 시도.
+    한글 프로그램은 DRM 화이트리스트에 등록되어 있으므로 정상 복호화 가능.
+    """
+    try:
+        import win32com.client
+        import pythoncom
+        pythoncom.CoInitialize()
+        try:
+            hwp = win32com.client.Dispatch("HWPFrame.HwpObject")
+        except Exception:
+            return "", None
+
+        try:
+            hwp.RegisterModule("FilePathCheckDLL", "FilePathCheckerModule")
+        except Exception:
+            pass
+
+        try:
+            if hasattr(hwp, "XHwpWindows") and hwp.XHwpWindows.Count > 0:
+                hwp.XHwpWindows.Item(0).Visible = False
+
+            opened = hwp.Open(str(Path(file_path).resolve()), "HWP", "forceopen:true")
+            if not opened:
+                hwp.Quit()
+                return "", None
+
+            text = hwp.GetTextFile("TEXT", "")
+
+            hwpx_bytes = None
+            try:
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".hwpx", delete=False) as tmp:
+                    tmp_hwpx = tmp.name
+                hwp.SaveAs(tmp_hwpx, "HWPX")
+                tmp_p = Path(tmp_hwpx)
+                if tmp_p.exists() and tmp_p.stat().st_size > 0:
+                    is_re_drm, _ = check_document_drm(tmp_p)
+                    if not is_re_drm:
+                        hwpx_bytes = tmp_p.read_bytes()
+                try:
+                    tmp_p.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+            hwp.Clear(1)
+            hwp.Quit()
+            return (text or "").strip(), hwpx_bytes
+        except Exception as e:
+            logger.warning(f"Error during Hwp COM extraction: {e}")
+            try:
+                hwp.Quit()
+            except Exception:
+                pass
+            return "", None
+        finally:
+            pythoncom.CoUninitialize()
+    except Exception as e:
+        logger.warning(f"win32com dispatch failed: {e}")
+        return "", None
+
+
+class WorkDrmWarningDialog(QDialog):
+    """DRM 암호화 문서 감지 시 사용자에게 사유와 해결 방법을 안내하고 선택지를 제공하는 모달 다이얼로그"""
+
+    def __init__(self, parent=None, file_path: Path | str = "", drm_vendor: str = "", palette: dict | None = None):
+        super().__init__(parent)
+        self.p = Path(file_path)
+        self.drm_vendor = drm_vendor or "사내 문서보안(DRM)"
+        self.action = "cancel"
+        pal = palette or {}
+
+        self.setWindowTitle("보안(DRM) 암호화 문서 안내")
+        self.setFixedWidth(530)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(12)
+
+        # 상단 헤더
+        hdr_row = QHBoxLayout()
+        hdr_row.setSpacing(12)
+        icon_lbl = QLabel("🔒")
+        icon_lbl.setStyleSheet("font-size: 28px;")
+        hdr_row.addWidget(icon_lbl)
+
+        hdr_v = QVBoxLayout()
+        hdr_v.setSpacing(3)
+        t_lbl = QLabel("사내 보안(DRM) 암호화 문서 감지")
+        t_lbl.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {pal.get('text', '#1F2328')};")
+        s_lbl = QLabel("선택하신 문서는 보안 솔루션으로 암호화되어 있어 직접 변환할 수 없습니다.")
+        s_lbl.setStyleSheet(f"font-size: 12px; color: {pal.get('muted', '#656D76')};")
+        hdr_v.addWidget(t_lbl)
+        hdr_v.addWidget(s_lbl)
+        hdr_row.addLayout(hdr_v)
+        layout.addLayout(hdr_row)
+
+        # 파일 정보 카드
+        try:
+            sz = self.p.stat().st_size
+            sz_str = f"{sz / 1024 / 1024:.2f} MB" if sz >= 1024 * 1024 else f"{sz / 1024:.1f} KB"
+        except Exception:
+            sz_str = "알 수 없음"
+
+        info_box = QFrame()
+        info_box.setStyleSheet(f"""
+            QFrame {{
+                background-color: {pal.get('panel_alt', '#F8FAFC')};
+                border: 1px solid {pal.get('line', '#E2E8F0')};
+                border-radius: 6px;
+            }}
+        """)
+        info_layout = QVBoxLayout(info_box)
+        info_layout.setContentsMargins(12, 10, 12, 10)
+        info_layout.setSpacing(4)
+        f_lbl = QLabel(f"• <b>대상 파일:</b> {self.p.name} ({sz_str})")
+        d_lbl = QLabel(f"• <b>감지된 보안 솔루션:</b> {self.drm_vendor}")
+        for lbl in (f_lbl, d_lbl):
+            lbl.setStyleSheet(f"font-size: 11px; color: {pal.get('text', '#1F2328')};")
+            lbl.setWordWrap(True)
+            info_layout.addWidget(lbl)
+        layout.addWidget(info_box)
+
+        # 상세 사유 및 가이드 카드
+        guide_box = QFrame()
+        guide_box.setStyleSheet("""
+            QFrame {{
+                background-color: #FFFBEB;
+                border: 1px solid #FDE68A;
+                border-radius: 6px;
+            }}
+        """)
+        guide_layout = QVBoxLayout(guide_box)
+        guide_layout.setContentsMargins(12, 10, 12, 10)
+        guide_layout.setSpacing(6)
+
+        g_title = QLabel("💡 한글 프로그램에서는 열리는데 왜 K캘린더에서는 안 열리나요?")
+        g_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #92400E;")
+        guide_layout.addWidget(g_title)
+
+        g_desc = QLabel(
+            "사내 DRM(Fasoo, SoftCamp 등)은 보안 정책상 오직 공인된 <b>한글(Hwp.exe) 정품 프로그램</b>에만 실시간 복호화 권한을 부여합니다.<br>"
+            "따라서 외부 프로그램이나 웹 에디터가 파일을 직접 읽으면 암호문으로만 확인됩니다."
+        )
+        g_desc.setTextFormat(Qt.TextFormat.RichText)
+        g_desc.setStyleSheet("font-size: 11px; color: #78350F; line-height: 1.4;")
+        g_desc.setWordWrap(True)
+        guide_layout.addWidget(g_desc)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("color: #FDE68A; margin: 2px 0;")
+        guide_layout.addWidget(sep)
+
+        sol_title = QLabel("📌 권장 등록 방법 (가장 빠르고 간편한 방법):")
+        sol_title.setStyleSheet("font-size: 11px; font-weight: bold; color: #92400E;")
+        guide_layout.addWidget(sol_title)
+
+        sol_desc = QLabel(
+            "1. <b>한글 프로그램</b>에서 해당 문서를 엽니다.<br>"
+            "2. 본문 전체 선택(<b>Ctrl + A</b>) ➔ 복사(<b>Ctrl + C</b>)합니다.<br>"
+            "3. K캘린더 업무 편집기에 붙여넣기(<b>Ctrl + V</b>)하시면 표와 서식이 그대로 즉시 등록됩니다!<br>"
+            "<span style='color: #B45309;'>(또는 사내 결재 시스템에서 '보안 해제(반출)' 승인 후 등록해 주세요.)</span>"
+        )
+        sol_desc.setTextFormat(Qt.TextFormat.RichText)
+        sol_desc.setStyleSheet("font-size: 11px; color: #78350F; line-height: 1.4;")
+        sol_desc.setWordWrap(True)
+        guide_layout.addWidget(sol_desc)
+
+        layout.addWidget(guide_box)
+
+        # 하단 액션 버튼
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        self.btn_attach = QPushButton("📁 원본 첨부파일로 보관하고 업무 등록")
+        self.btn_attach.setFixedHeight(34)
+        self.btn_attach.setToolTip("본문 변환 대신 원본 암호화 파일을 첨부파일 목록에 보관합니다. (더블클릭 시 한글 프로그램으로 열람 가능)")
+        self.btn_attach.clicked.connect(self._on_attach_only)
+        btn_row.addWidget(self.btn_attach)
+
+        btn_row.addStretch(1)
+
+        self.btn_cancel = QPushButton("취소")
+        self.btn_cancel.setFixedHeight(34)
+        self.btn_cancel.clicked.connect(self.reject)
+        btn_row.addWidget(self.btn_cancel)
+
+        layout.addLayout(btn_row)
+
+    def _on_attach_only(self):
+        self.action = "attach_only"
+        self.accept()
+
+
 class WorkDocumentImportDialog(QDialog):
     """외부 문서 파일 드래그앤드롭 또는 탐색기 우클릭 등록 시 표시되는 확인 및 분류 선택 모달"""
 
@@ -1000,11 +1248,25 @@ class WorkDocumentImportDialog(QDialog):
         info_layout.addWidget(name_lbl)
 
         full_path_str = str(self.path.resolve() if self.path.exists() else self.path)
-        path_lbl = QLabel(full_path_str)
+        try:
+            sz = self.path.stat().st_size
+            sz_str = f"{sz / 1024 / 1024:.2f} MB" if sz >= 1024 * 1024 else f"{sz / 1024:.1f} KB"
+            is_large = sz >= 5 * 1024 * 1024
+        except Exception:
+            sz_str = ""
+            is_large = False
+
+        meta_info = f"크기: {sz_str}  |  위치: {full_path_str}" if sz_str else full_path_str
+        path_lbl = QLabel(meta_info)
         path_lbl.setStyleSheet(f"font-size: 11px; color: {text_muted}; border: none; line-height: 1.4;")
         path_lbl.setWordWrap(True)
         path_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         info_layout.addWidget(path_lbl)
+
+        if is_large:
+            large_hint = QLabel("⚡ 5MB 이상의 대용량 문서입니다. 등록 진행 시 단계별 진행 안내 창이 표시됩니다.")
+            large_hint.setStyleSheet("font-size: 11px; color: #D97706; font-weight: 500; border: none;")
+            info_layout.addWidget(large_hint)
 
         layout.addWidget(header_frame)
 
@@ -5797,6 +6059,82 @@ class WorkManagerDialog(QDialog):
         chosen_title = res["title"]
         copy_attachment = res["copy_attachment"]
 
+        # 1. 파일 크기 계산 및 진행 상태 다이얼로그 초기화
+        try:
+            file_size = p.stat().st_size
+            size_mb_str = f"{file_size / 1024 / 1024:.1f}MB" if file_size >= 1024 * 1024 else f"{file_size / 1024:.0f}KB"
+        except Exception:
+            file_size = 0
+            size_mb_str = ""
+
+        progress = QProgressDialog(self)
+        progress.setWindowTitle("업무 등록 진행")
+        progress.setLabelText(f"문서 파일을 검사하고 있습니다...\n({p.name} {size_mb_str})")
+        progress.setRange(0, 100)
+        progress.setValue(10)
+        progress.setCancelButton(None)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.resize(380, 120)
+        progress.show()
+        QApplication.processEvents()
+
+        # 2. DRM 상태 확인
+        progress.setLabelText(f"보안(DRM) 암호화 여부 검사 중...\n({p.name})")
+        progress.setValue(20)
+        QApplication.processEvents()
+
+        is_drm, drm_vendor = check_document_drm(p)
+        content_text = ""
+        hwpx_blob = None
+
+        if is_drm:
+            # 한글(HWP) 정품 프로그램 연동 백그라운드 복호화 추출 시도
+            progress.setLabelText(f"사내 보안(DRM) 감지됨\n한글(HWP) 정품 프로그램을 통한 본문 복호화 시도 중...")
+            progress.setValue(35)
+            QApplication.processEvents()
+
+            com_text, com_hwpx = try_extract_via_hwp_com(p)
+            if com_text or com_hwpx:
+                content_text, hwpx_blob = com_text, com_hwpx
+            else:
+                # COM 복호화 실패 시 안내 팝업 모달 표시
+                progress.close()
+                drm_dlg = WorkDrmWarningDialog(self, p, drm_vendor, palette=self.palette)
+                if drm_dlg.exec() == QDialog.DialogCode.Accepted and drm_dlg.action == "attach_only":
+                    content_text = (
+                        f"[사내 보안(DRM) 암호화 문서]\n\n"
+                        f"• 파일명: {p.name} ({size_mb_str})\n"
+                        f"• 감지된 보안 솔루션: {drm_vendor}\n\n"
+                        "【내용 등록 방법】\n"
+                        "한글(HWP) 정품 프로그램에서 해당 문서를 연 뒤, "
+                        "전체 선택(Ctrl+A) ➔ 복사(Ctrl+C)하여 여기에 붙여넣기(Ctrl+V)하세요.\n"
+                        "원본 암호화 파일은 우측 첨부파일에 안전하게 보관되었습니다."
+                    )
+                    hwpx_blob = None
+                    copy_attachment = True
+
+                    progress = QProgressDialog(self)
+                    progress.setWindowTitle("업무 등록 진행")
+                    progress.setLabelText("원본 파일을 첨부파일로 보관하고 업무를 생성 중입니다...")
+                    progress.setRange(0, 100)
+                    progress.setValue(50)
+                    progress.setCancelButton(None)
+                    progress.setWindowModality(Qt.WindowModality.WindowModal)
+                    progress.setMinimumDuration(0)
+                    progress.resize(380, 120)
+                    progress.show()
+                    QApplication.processEvents()
+                else:
+                    return
+
+        if not is_drm or (content_text and not hwpx_blob and not is_drm):
+            progress.setLabelText(f"문서 본문 및 서식 데이터 추출 중...\n({size_mb_str} 대용량 문서 파싱)")
+            progress.setValue(45)
+            QApplication.processEvents()
+            content_text, hwpx_blob = extract_document_content(p)
+
+        # 3. 카테고리 준비
         chosen_cat_id = None
         for cat in self._category_rows:
             if cat["name"] == chosen_cat:
@@ -5807,7 +6145,10 @@ class WorkManagerDialog(QDialog):
             self._load_categories_from_db()
             self._refresh_category_combos()
 
-        content_text, hwpx_blob = extract_document_content(p)
+        # 4. DB 저장
+        progress.setLabelText("업무 데이터베이스 저장 중...")
+        progress.setValue(65)
+        QApplication.processEvents()
 
         db_id = None
         if self.repository:
@@ -5822,8 +6163,12 @@ class WorkManagerDialog(QDialog):
                 sort_order=len(self._all_sheets) + 1,
             )
 
+        # 5. 첨부파일 저장
         attachments = []
         if copy_attachment and self.repository and db_id:
+            progress.setLabelText(f"첨부파일 보관소 복사 중... ({size_mb_str})")
+            progress.setValue(80)
+            QApplication.processEvents()
             try:
                 dest_path, size_str, dest_name = self.repository.copy_work_attachment_file(db_id, p)
                 att_id = self.repository.add_work_attachment(
@@ -5845,9 +6190,12 @@ class WorkManagerDialog(QDialog):
             except Exception as e:
                 logger.exception("Failed to copy imported document as attachment: %s", e)
 
-        # 연계된 첨부파일 폴더({문서명}_첨부파일 등)가 있는 경우 하위 파일 자동 복사 및 복원
+        # 6. 연계 첨부파일 폴더 처리
         att_dir = find_associated_attachment_dir(p)
         if att_dir and self.repository and db_id:
+            progress.setLabelText("연계 첨부파일 폴더 동기화 중...")
+            progress.setValue(88)
+            QApplication.processEvents()
             try:
                 for att_item in sorted(att_dir.rglob("*")):
                     if att_item.is_dir():
@@ -5889,7 +6237,17 @@ class WorkManagerDialog(QDialog):
         )
         self._all_sheets.append(new_sheet)
         self._refresh_category_tree()
+
+        # 7. 에디터 로드
+        progress.setLabelText("웹에디터로 문서를 로드하고 있습니다...")
+        progress.setValue(95)
+        QApplication.processEvents()
+
         self.open_sheet(new_sheet)
+
+        progress.setValue(100)
+        QApplication.processEvents()
+        progress.close()
 
     def import_attachment_file(self, file_path: str | Path) -> None:
         """외부 파일 우클릭 시 특정 업무의 첨부파일로 바로 등록"""
@@ -6010,7 +6368,25 @@ class WorkManagerDialog(QDialog):
             cat_name, cat_id = dir_to_cat[parent_dir]
             doc_title = file_p.stem
 
-            content_text, hwpx_blob = extract_document_content(file_p)
+            is_drm, drm_vendor = check_document_drm(file_p)
+            content_text = ""
+            hwpx_blob = None
+            if is_drm:
+                com_text, com_hwpx = try_extract_via_hwp_com(file_p)
+                if com_text or com_hwpx:
+                    content_text, hwpx_blob = com_text, com_hwpx
+                else:
+                    content_text = (
+                        f"[사내 보안(DRM) 암호화 문서]\n\n"
+                        f"• 파일명: {file_p.name}\n"
+                        f"• 감지된 보안 솔루션: {drm_vendor}\n\n"
+                        "한글(HWP) 정품 프로그램에서 문서를 열고 내용 복사(Ctrl+A, Ctrl+C) 후 여기에 붙여넣기(Ctrl+V)하세요.\n"
+                        "원본 암호화 파일은 우측 첨부파일에 안전하게 보관되었습니다."
+                    )
+                    hwpx_blob = None
+                    copy_as_att = True
+            else:
+                content_text, hwpx_blob = extract_document_content(file_p)
 
             db_id = None
             if self.repository:

@@ -166,6 +166,26 @@ class _QuietStudioHandler(http.server.SimpleHTTPRequestHandler):
         ".ttf": "font/ttf",
     }
 
+    def do_GET(self) -> None:
+        clean_path = self.path.split("?")[0]
+        if clean_path == "/api/current_doc":
+            server = RhwpStudioServer.get_instance()
+            blob = server.get_current_blob()
+            if blob is not None:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(blob)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.end_headers()
+                self.wfile.write(blob)
+                return
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+        super().do_GET()
+
     def end_headers(self) -> None:
         # WASM 및 ES 모듈 스트리밍 컴파일 및 보안 헤더, CORS 허용
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -184,9 +204,18 @@ class RhwpStudioServer:
 
     def __init__(self) -> None:
         self.port: int = 0
+        self._current_blob: bytes | None = None
         self._server: http.server.ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._start_server()
+
+    def set_current_blob(self, blob: bytes | None) -> None:
+        with self._lock:
+            self._current_blob = blob
+
+    def get_current_blob(self) -> bytes | None:
+        with self._lock:
+            return self._current_blob
 
     @classmethod
     def get_instance(cls) -> RhwpStudioServer:
@@ -448,22 +477,41 @@ class RhwpEditorWidget(QWidget):
         doc_filename = safe_title if safe_title.lower().endswith(('.hwp', '.hwpx')) else f"{safe_title}{ext}"
 
         if hwpx_bytes:
-            b64_str = base64.b64encode(hwpx_bytes).decode("ascii")
-            js = f"""
-            (async function() {{
-                var b64 = "{b64_str}";
-                var bin = atob(b64);
-                var len = bin.length;
-                var bytes = new Uint8Array(len);
-                for (var i = 0; i < len; i++) {{
-                    bytes[i] = bin.charCodeAt(i);
-                }}
-                var deps = window.rhwpStudio?.plugins?.deps;
-                if (deps && deps.loadDocument) {{
-                    await deps.loadDocument(bytes, "{doc_filename}");
-                }}
-            }})();
-            """
+            if self.server and self.server.port > 0:
+                self.server.set_current_blob(hwpx_bytes)
+                js = f"""
+                (async function() {{
+                    try {{
+                        var resp = await fetch("/api/current_doc?t=" + Date.now());
+                        if (!resp.ok) throw new Error("HTTP " + resp.status);
+                        var buf = await resp.arrayBuffer();
+                        var bytes = new Uint8Array(buf);
+                        var deps = window.rhwpStudio?.plugins?.deps;
+                        if (deps && deps.loadDocument) {{
+                            await deps.loadDocument(bytes, "{doc_filename}");
+                        }}
+                    }} catch(e) {{
+                        console.error("Failed to load document via fetch:", e);
+                    }}
+                }})();
+                """
+            else:
+                b64_str = base64.b64encode(hwpx_bytes).decode("ascii")
+                js = f"""
+                (async function() {{
+                    var b64 = "{b64_str}";
+                    var bin = atob(b64);
+                    var len = bin.length;
+                    var bytes = new Uint8Array(len);
+                    for (var i = 0; i < len; i++) {{
+                        bytes[i] = bin.charCodeAt(i);
+                    }}
+                    var deps = window.rhwpStudio?.plugins?.deps;
+                    if (deps && deps.loadDocument) {{
+                        await deps.loadDocument(bytes, "{doc_filename}");
+                    }}
+                }})();
+                """
         else:
             json_text = json.dumps(text)
             js = f"""
