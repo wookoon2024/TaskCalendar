@@ -17,6 +17,7 @@ from PySide6.QtCore import (
     QMimeData,
     QPoint,
     QPointF,
+    QPropertyAnimation,
     QRect,
     QSettings,
     QSize,
@@ -56,6 +57,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -119,6 +121,78 @@ def get_file_extension_icon(filename: str) -> str:
     elif ext in (".py", ".js", ".html", ".css", ".json", ".xml"):
         return "💻"
     return "📎"
+
+
+class FloatingToastOverlay(QFrame):
+    """업무창 정중앙에 스킨 색상에 맞춰 떴다가 자동으로 페이드아웃되며 사라지는 플로팅 알림창"""
+
+    def __init__(self, parent: QWidget, message: str, palette: dict[str, str], duration_ms: int = 1200) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+
+        panel = palette.get("panel", "#FFFFFF")
+        text = palette.get("text", "#1F2328")
+        line = palette.get("line", "#CBD5E0")
+        accent = palette.get("accent", "#2563EB")
+
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {panel};
+                border: 1.5px solid {accent};
+                border-radius: 18px;
+            }}
+            QLabel {{
+                color: {text};
+                font-size: 13px;
+                font-weight: 600;
+                background: transparent;
+                border: none;
+            }}
+            QLabel#iconLbl {{
+                color: {accent};
+                font-size: 15px;
+                font-weight: bold;
+                background: transparent;
+                border: none;
+            }}
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(18, 9, 20, 9)
+        layout.setSpacing(8)
+
+        icon_lbl = QLabel("✓", self)
+        icon_lbl.setObjectName("iconLbl")
+        layout.addWidget(icon_lbl)
+
+        text_lbl = QLabel(message, self)
+        layout.addWidget(text_lbl)
+
+        self.adjustSize()
+        self._reposition()
+
+        self._opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._opacity_effect)
+        self._opacity_effect.setOpacity(1.0)
+
+        self._anim = QPropertyAnimation(self._opacity_effect, b"opacity")
+        self._anim.setDuration(350)
+        self._anim.setStartValue(1.0)
+        self._anim.setEndValue(0.0)
+        self._anim.finished.connect(self.close)
+
+        QTimer.singleShot(duration_ms, self._start_fade_out)
+
+    def _reposition(self) -> None:
+        if self.parent():
+            parent_rect = self.parent().rect()
+            x = (parent_rect.width() - self.width()) // 2
+            y = (parent_rect.height() - self.height()) // 2
+            self.move(x, y)
+
+    def _start_fade_out(self) -> None:
+        self._anim.start()
 
 
 class CompactCategoryItemDelegate(QStyledItemDelegate):
@@ -3888,6 +3962,22 @@ class WorkManagerDialog(QDialog):
         super().hideEvent(event)
         self._save_window_state()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_active_toast") and self._active_toast and self._active_toast.isVisible():
+            self._active_toast._reposition()
+
+    def show_floating_toast(self, message: str) -> None:
+        """업무 관리창 정중앙에 스킨 색상에 맞춰 떴다가 자동으로 사라지는 플로팅 알림 표시"""
+        if hasattr(self, "_active_toast") and self._active_toast:
+            try:
+                self._active_toast.close()
+            except Exception:
+                pass
+        self._active_toast = FloatingToastOverlay(self, message, self.palette, duration_ms=1200)
+        self._active_toast.show()
+        self._active_toast.raise_()
+
     def _restore_window_state(self) -> None:
         """이전 종료 시점의 창 위치, 크기, 좌우 패널 상태 및 폴더 펼침 상태 복원"""
         left_expanded = None
@@ -4288,7 +4378,7 @@ class WorkManagerDialog(QDialog):
     def _on_save_button_clicked(self) -> None:
         """저장 버튼(또는 Ctrl+S) 클릭 시 rhwp 에디터 내용 추출 및 DB 영구 저장"""
         if self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
-            QMessageBox.information(self, "안내", "저장할 열린 문서가 없습니다.")
+            self.show_floating_toast("저장할 열린 문서가 없습니다.")
             return
 
         def _after_export(text: str, hwpx_bytes: bytes | None):
@@ -4321,7 +4411,7 @@ class WorkManagerDialog(QDialog):
                 current.is_dirty = False
                 self._update_tab_title(current)
                 self._refresh_category_tree()
-                QMessageBox.information(self, "저장 완료", f"'{current.title}' 업무 매뉴얼이 DB에 성공적으로 저장되었습니다.")
+                self.show_floating_toast(f"'{current.title}' 저장 완료")
 
         self.editor.export_document_data(_after_export)
 
