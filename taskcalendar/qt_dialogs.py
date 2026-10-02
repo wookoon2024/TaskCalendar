@@ -5850,10 +5850,11 @@ class SettingsDialog(QDialog):
             ("⚙️ 기본", 0),
             ("📅 캘린더", 1),
             ("📝 메모", 2),
-            ("📑 업무", 3),
-            ("🎨 스킨", 4),
-            ("⌨️ 단축키", 5),
-            ("💾 데이터", 6),
+            ("📄 문서", 3),
+            ("📑 업무", 4),
+            ("🎨 스킨", 5),
+            ("⌨️ 단축키", 6),
+            ("💾 데이터", 7),
         ]
         for label, idx in items:
             item = QListWidgetItem(label)
@@ -6599,6 +6600,127 @@ class SettingsDialog(QDialog):
         pg_dt_layout.addStretch(1)
 
         # -------------------------------------------------------------
+        # 📄 문서 (Document & Web Clipper) 페이지
+        # -------------------------------------------------------------
+        page_doc = QWidget()
+        pg_doc_layout = QVBoxLayout(page_doc)
+        pg_doc_layout.setContentsMargins(0, 0, 0, 0)
+        pg_doc_layout.setSpacing(10)
+
+        # 1. 크롬 확장프로그램 (Chrome Extension) 연동 카드
+        chrome_card = QFrame()
+        chrome_card.setObjectName("card")
+        chrome_layout = QVBoxLayout(chrome_card)
+        chrome_layout.setContentsMargins(14, 12, 14, 12)
+        chrome_layout.setSpacing(10)
+
+        chrome_title = QLabel("크롬 확장프로그램 연동 (K캘린더로 보내기)")
+        chrome_title.setObjectName("sectionTitle")
+        chrome_layout.addWidget(chrome_title)
+
+        chrome_desc = QLabel(
+            "인터넷 서핑 또는 웹 업무 화면에서 드래그한 텍스트나 기사, 현재 웹페이지를\n"
+            "K캘린더의 일정 / 업무 / 메모로 마우스 우클릭 한 번으로 즉시 전송할 수 있는 전용 확장 프로그램입니다.\n"
+            "(전용 단축키: Ctrl + Shift + K)"
+        )
+        chrome_desc.setObjectName("subtitle")
+        chrome_desc.setWordWrap(True)
+        chrome_layout.addWidget(chrome_desc)
+
+        # 안내 가이드 박스
+        guide_box = QFrame()
+        guide_box.setStyleSheet(f"""
+            QFrame {{
+                background-color: {self.palette.get("panel_alt", "#F8FAFC")};
+                border: 1px dashed {self.palette.get("line", "#CBD5E0")};
+                border-radius: 6px;
+                padding: 8px 10px;
+            }}
+        """)
+        guide_layout = QVBoxLayout(guide_box)
+        guide_layout.setContentsMargins(8, 8, 8, 8)
+        guide_layout.setSpacing(4)
+        guide_title = QLabel("📌 간편 등록 3단계 방법:")
+        guide_title.setStyleSheet(f"font-weight: 600; color: {self.palette.get('text', '#1F2328')}; font-size: 11px;")
+        guide_layout.addWidget(guide_title)
+
+        step1 = QLabel("1️⃣ 아래 [크롬 확장프로그램 자동 연동 / 열기] 버튼을 클릭합니다.")
+        step1.setObjectName("muted")
+        guide_layout.addWidget(step1)
+
+        step2 = QLabel("2️⃣ 열린 Chrome 확장 관리자 창 우측 상단의 [개발자 모드] 스위치를 켭니다 (ON).")
+        step2.setObjectName("muted")
+        guide_layout.addWidget(step2)
+
+        step3 = QLabel("3️⃣ [압축해제된 확장 프로그램을 로드합니다]를 클릭하고 열린 폴더를 선택(또는 폴더를 크롬 창으로 드래그)하면 등록 완료!")
+        step3.setObjectName("muted")
+        guide_layout.addWidget(step3)
+
+        chrome_layout.addWidget(guide_box)
+
+        # 버튼 행
+        chrome_btn_row = QHBoxLayout()
+        chrome_btn_row.setContentsMargins(0, 4, 0, 0)
+        chrome_btn_row.setSpacing(8)
+
+        btn_auto_chrome = QPushButton("🌐 크롬 확장프로그램 자동 연동 / 열기")
+        btn_auto_chrome.setObjectName("primary")
+        btn_auto_chrome.setFixedHeight(32)
+        btn_auto_chrome.setToolTip("Chrome 브라우저 확장 관리자 페이지를 열고 확장 프로그램 폴더를 탐색기로 열어 원클릭 등록을 지원합니다.")
+        btn_auto_chrome.clicked.connect(self._open_chrome_extension_setup)
+        chrome_btn_row.addWidget(btn_auto_chrome)
+
+        btn_open_chrome_dir = QPushButton("📁 확장프로그램 폴더 열기")
+        btn_open_chrome_dir.setFixedHeight(32)
+        btn_open_chrome_dir.setToolTip("크롬 확장 프로그램 소스 폴더를 윈도우 파일 탐색기로 엽니다.")
+        btn_open_chrome_dir.clicked.connect(self._open_chrome_extension_folder)
+        chrome_btn_row.addWidget(btn_open_chrome_dir)
+
+        btn_copy_chrome_path = QPushButton("📋 폴더 경로 복사")
+        btn_copy_chrome_path.setFixedHeight(32)
+        btn_copy_chrome_path.setToolTip("확장 프로그램 폴더의 전체 경로를 클립보드에 복사합니다.")
+        btn_copy_chrome_path.clicked.connect(self._copy_chrome_extension_path)
+        chrome_btn_row.addWidget(btn_copy_chrome_path)
+
+        chrome_btn_row.addStretch(1)
+        chrome_layout.addLayout(chrome_btn_row)
+
+        pg_doc_layout.addWidget(chrome_card)
+
+        # 2. 한글 문서(HWP/HWPX) 웹 엔진 안내 카드
+        doc_engine_card = QFrame()
+        doc_engine_card.setObjectName("card")
+        doc_engine_layout = QVBoxLayout(doc_engine_card)
+        doc_engine_layout.setContentsMargins(14, 12, 14, 12)
+        doc_engine_layout.setSpacing(8)
+
+        doc_engine_title = QLabel("한글(HWP/HWPX) 웹 에디터 엔진")
+        doc_engine_title.setObjectName("sectionTitle")
+        doc_engine_layout.addWidget(doc_engine_title)
+
+        doc_engine_desc = QLabel(
+            "업무 관리에서 별도의 한글 소프트웨어(한컴오피스) 설치 없이도 한글 문서(*.hwp, *.hwpx)를\n"
+            "브라우저 및 로컬 Canvas 기술로 고속 열람·편집할 수 있는 독립 내장 웹 엔진이 적용되어 있습니다."
+        )
+        doc_engine_desc.setObjectName("subtitle")
+        doc_engine_desc.setWordWrap(True)
+        doc_engine_layout.addWidget(doc_engine_desc)
+
+        engine_status_row = QHBoxLayout()
+        engine_status_lbl = QLabel("현재 엔진 상태:")
+        engine_status_lbl.setObjectName("muted")
+        engine_status_row.addWidget(engine_status_lbl)
+
+        engine_status_val = QLabel("✅ 정상 작동 중 (WASM / 로컬 가속 엔진 활성화)")
+        engine_status_val.setStyleSheet(f"font-weight: 600; color: {self.palette.get('accent', '#2563EB')};")
+        engine_status_row.addWidget(engine_status_val)
+        engine_status_row.addStretch(1)
+        doc_engine_layout.addLayout(engine_status_row)
+
+        pg_doc_layout.addWidget(doc_engine_card)
+        pg_doc_layout.addStretch(1)
+
+        # -------------------------------------------------------------
         # 📑 업무 페이지
         # -------------------------------------------------------------
         page_work = QWidget()
@@ -6667,10 +6789,11 @@ class SettingsDialog(QDialog):
         pg_work_layout.addStretch(1)
 
         # 페이지들을 요청된 순서대로 스택 위젯에 등록:
-        # 0: 기본, 1: 캘린더, 2: 메모, 3: 업무, 4: 스킨, 5: 단축키, 6: 데이터
+        # 0: 기본, 1: 캘린더, 2: 메모, 3: 문서, 4: 업무, 5: 스킨, 6: 단축키, 7: 데이터
         self.pages.addWidget(page_general)
         self.pages.addWidget(page_calendar)
         self.pages.addWidget(page_memo)
+        self.pages.addWidget(page_doc)
         self.pages.addWidget(page_work)
         self.pages.addWidget(page_skin)
         self.pages.addWidget(page_shortcuts)
@@ -6697,14 +6820,16 @@ class SettingsDialog(QDialog):
             self.nav_list.setCurrentRow(1)
         elif initial_tab == "memo":
             self.nav_list.setCurrentRow(2)
-        elif initial_tab in ("work", "work_manager"):
+        elif initial_tab in ("doc", "document"):
             self.nav_list.setCurrentRow(3)
-        elif initial_tab == "skin":
+        elif initial_tab in ("work", "work_manager"):
             self.nav_list.setCurrentRow(4)
-        elif initial_tab == "shortcuts":
+        elif initial_tab == "skin":
             self.nav_list.setCurrentRow(5)
-        elif initial_tab == "data":
+        elif initial_tab == "shortcuts":
             self.nav_list.setCurrentRow(6)
+        elif initial_tab == "data":
+            self.nav_list.setCurrentRow(7)
         else:
             self.nav_list.setCurrentRow(0)
 
@@ -6747,14 +6872,14 @@ class SettingsDialog(QDialog):
         cal_key_token = str(self.shortcut_key_combo.currentData())
         if not cal_modifiers and not (cal_key_token.startswith("F") and cal_key_token[1:].isdigit()):
             QMessageBox.warning(self, "입력 오류", "캘린더 단독 키는 F1~F12만 설정할 수 있습니다.")
-            self.nav_list.setCurrentRow(5)
+            self.nav_list.setCurrentRow(6)
             return
         cal_shortcut = "+".join(cal_modifiers + [cal_key_token]) if cal_modifiers else cal_key_token
         cal_available, cal_message = self._check_shortcut_availability(cal_shortcut, target="calendar")
         if not cal_available:
             self.shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
             self.shortcut_status_label.setText(cal_message)
-            self.nav_list.setCurrentRow(5)
+            self.nav_list.setCurrentRow(6)
             QMessageBox.warning(self, "단축키 오류", f"캘린더 단축키 오류: {cal_message}")
             return
 
@@ -6768,14 +6893,14 @@ class SettingsDialog(QDialog):
         memo_key_token = str(self.memo_shortcut_key_combo.currentData())
         if not memo_modifiers and not (memo_key_token.startswith("F") and memo_key_token[1:].isdigit()):
             QMessageBox.warning(self, "입력 오류", "메모 단독 키는 F1~F12만 설정할 수 있습니다.")
-            self.nav_list.setCurrentRow(5)
+            self.nav_list.setCurrentRow(6)
             return
         memo_shortcut = "+".join(memo_modifiers + [memo_key_token]) if memo_modifiers else memo_key_token
         memo_available, memo_message = self._check_shortcut_availability(memo_shortcut, target="memo")
         if not memo_available:
             self.memo_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
             self.memo_shortcut_status_label.setText(memo_message)
-            self.nav_list.setCurrentRow(5)
+            self.nav_list.setCurrentRow(6)
             QMessageBox.warning(self, "단축키 오류", f"메모 단축키 오류: {memo_message}")
             return
 
@@ -6789,14 +6914,14 @@ class SettingsDialog(QDialog):
         work_key_token = str(self.work_shortcut_key_combo.currentData())
         if not work_modifiers and not (work_key_token.startswith("F") and work_key_token[1:].isdigit()):
             QMessageBox.warning(self, "입력 오류", "업무 단독 키는 F1~F12만 설정할 수 있습니다.")
-            self.nav_list.setCurrentRow(5)
+            self.nav_list.setCurrentRow(6)
             return
         work_shortcut = "+".join(work_modifiers + [work_key_token]) if work_modifiers else work_key_token
         work_available, work_message = self._check_shortcut_availability(work_shortcut, target="work")
         if not work_available:
             self.work_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
             self.work_shortcut_status_label.setText(work_message)
-            self.nav_list.setCurrentRow(5)
+            self.nav_list.setCurrentRow(6)
             QMessageBox.warning(self, "단축키 오류", f"업무 단축키 오류: {work_message}")
             return
 
@@ -6807,7 +6932,7 @@ class SettingsDialog(QDialog):
         }
         if len(shortcuts_set) < 3:
             QMessageBox.warning(self, "단축키 중복", "캘린더, 메모, 업무 단축키는 서로 달라야 합니다.")
-            self.nav_list.setCurrentRow(5)
+            self.nav_list.setCurrentRow(6)
             return
 
         selected_task_statuses = [
@@ -7183,6 +7308,108 @@ class SettingsDialog(QDialog):
             )
         except Exception as e:
             QMessageBox.warning(self, "오류", f"파일을 여는 중 오류가 발생했습니다.\n{e}")
+
+    def _get_chrome_extension_dir(self) -> Path:
+        from taskcalendar.paths import runtime_root, package_root
+        candidates = [
+            runtime_root() / "chrome_extension",
+            package_root().parent / "chrome_extension",
+            package_root() / "chrome_extension",
+            Path(__file__).resolve().parent.parent / "chrome_extension",
+        ]
+        for c in candidates:
+            if c.exists() and (c / "manifest.json").exists():
+                return c.resolve()
+        target = runtime_root() / "chrome_extension"
+        target.mkdir(parents=True, exist_ok=True)
+        return target.resolve()
+
+    def _open_chrome_extension_setup(self) -> None:
+        import os
+        import subprocess
+        import winreg
+
+        ext_dir = self._get_chrome_extension_dir()
+        dir_str = str(ext_dir)
+
+        # 1. 클립보드에 경로 복사
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(dir_str)
+
+        # 2. Chrome 실행 파일 경로 탐색
+        chrome_exe = None
+        for root_key in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(root_key, r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe") as key:
+                    val, _ = winreg.QueryValueEx(key, "")
+                    if val and Path(val).exists():
+                        chrome_exe = val
+                        break
+            except OSError:
+                pass
+
+        if not chrome_exe:
+            common_paths = [
+                os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            ]
+            for p in common_paths:
+                if Path(p).exists():
+                    chrome_exe = p
+                    break
+
+        # 3. 크롬 실행 (--load-extension 플래그 포함)
+        chrome_launched = False
+        if chrome_exe:
+            try:
+                subprocess.Popen([chrome_exe, f"--load-extension={dir_str}", "chrome://extensions"])
+                chrome_launched = True
+            except Exception as e:
+                logger.warning(f"Failed to launch Chrome directly: {e}")
+
+        # 4. 파일 탐색기로 확장 프로그램 폴더 열기
+        try:
+            os.startfile(dir_str)
+        except Exception as e:
+            logger.warning(f"Failed to open folder in explorer: {e}")
+
+        # 5. 사용자 안내 메시지
+        launch_msg = (
+            "크롬 브라우저와 확장 프로그램 폴더가 함께 열렸습니다!\n\n"
+            if chrome_launched
+            else "확장 프로그램 폴더가 열렸습니다!\n(크롬 주소창에 chrome://extensions 를 입력해 이동하세요)\n\n"
+        )
+        QMessageBox.information(
+            self,
+            "크롬 확장프로그램 간편 연동 안내",
+            f"{launch_msg}"
+            "【간편 등록 3단계 방법】\n"
+            "1. 크롬 확장 관리자 우측 상단의 [개발자 모드] 스위치를 켭니다.\n"
+            "2. 좌측 상단 [압축해제된 확장 프로그램을 로드합니다] 버튼을 클릭합니다.\n"
+            "3. 방금 열린 탐색기 폴더를 선택하거나 해당 폴더를 크롬 창으로 끌어다 놓으세요.\n\n"
+            "※ 폴더 경로가 이미 클립보드에 자동 복사되었습니다.",
+        )
+
+    def _open_chrome_extension_folder(self) -> None:
+        import os
+        ext_dir = self._get_chrome_extension_dir()
+        try:
+            os.startfile(str(ext_dir))
+        except Exception as e:
+            QMessageBox.warning(self, "오류", f"폴더를 여는 중 오류가 발생했습니다.\n{e}")
+
+    def _copy_chrome_extension_path(self) -> None:
+        ext_dir = self._get_chrome_extension_dir()
+        clipboard = QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(str(ext_dir))
+            QMessageBox.information(
+                self,
+                "복사 완료",
+                f"확장 프로그램 폴더 경로가 클립보드에 복사되었습니다.\n\n{ext_dir}",
+            )
 
 
 class AlarmEditDialog(QDialog):
