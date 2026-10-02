@@ -5523,6 +5523,13 @@ class WorkManagerDialog(QDialog):
         self.file_list.blockSignals(False)
         self.right_title.setText(f"📎 첨부파일 ({file_count})")
 
+    def _get_current_sheet(self) -> WorkSheetData | None:
+        """현재 열려있는 활성 시트 반환"""
+        if hasattr(self, "_open_sheets") and hasattr(self, "_active_sheet_index"):
+            if 0 <= self._active_sheet_index < len(self._open_sheets):
+                return self._open_sheets[self._active_sheet_index]
+        return None
+
     def _refresh_work_schedules_list(self, sheet: WorkSheetData | None = None) -> None:
         """현재 시트와 연결된 캘린더 일정 목록을 갱신하여 1줄씩 표시"""
         if not hasattr(self, "work_schedule_list") or not self.work_schedule_list:

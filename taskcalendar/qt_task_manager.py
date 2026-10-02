@@ -1084,6 +1084,7 @@ class TaskManagerDialog(QDialog):
             self.category_combo.view().setMinimumWidth(100)
         self._refresh_filter_categories()
         self.category_combo.currentIndexChanged.connect(self._apply_filters)
+        self.category_combo.activated.connect(self._apply_filters)
         tb_layout.addWidget(self.category_combo)
 
         # (2) 상태
@@ -1093,7 +1094,8 @@ class TaskManagerDialog(QDialog):
         if self.status_combo.view():
             self.status_combo.view().setMinimumWidth(90)
         self._refresh_filter_statuses()
-        self.status_combo.currentIndexChanged.connect(self._apply_filters)
+        self.status_combo.currentIndexChanged.connect(self._on_status_combo_changed)
+        self.status_combo.activated.connect(self._on_status_combo_changed)
         tb_layout.addWidget(self.status_combo)
 
         # (3) 기간(시작일~종료일)
@@ -1104,6 +1106,7 @@ class TaskManagerDialog(QDialog):
             self.period_combo.view().setMinimumWidth(110)
         self.period_combo.addItems(["기간", "오늘", "이번 주", "이번 달", "최근 3개월", "올해", "직접 지정"])
         self.period_combo.currentIndexChanged.connect(self._on_period_combo_changed)
+        self.period_combo.activated.connect(self._on_period_combo_changed)
         tb_layout.addWidget(self.period_combo)
 
         self.start_date_edit = SafeDateEdit()
@@ -1114,6 +1117,9 @@ class TaskManagerDialog(QDialog):
         self.start_date_edit.setDate(date.today() - timedelta(days=30))
         self.start_date_edit.setEnabled(True)
         self.start_date_edit.dateChanged.connect(self._on_custom_date_changed)
+        self.start_date_edit.editingFinished.connect(self._on_custom_date_changed)
+        if self.start_date_edit.calendarWidget():
+            self.start_date_edit.calendarWidget().clicked.connect(self._on_custom_date_changed)
         tb_layout.addWidget(self.start_date_edit)
 
         self.lbl_tilde = QLabel("~")
@@ -1127,6 +1133,9 @@ class TaskManagerDialog(QDialog):
         self.end_date_edit.setDate(date.today())
         self.end_date_edit.setEnabled(True)
         self.end_date_edit.dateChanged.connect(self._on_custom_date_changed)
+        self.end_date_edit.editingFinished.connect(self._on_custom_date_changed)
+        if self.end_date_edit.calendarWidget():
+            self.end_date_edit.calendarWidget().clicked.connect(self._on_custom_date_changed)
         tb_layout.addWidget(self.end_date_edit)
 
         # (4) 제목+내용 검색 (남은 가로 공간 확장)
@@ -1755,10 +1764,47 @@ class TaskManagerDialog(QDialog):
         """상태 탭 전환 (전체/등록/진행/완료) 및 스타일 갱신"""
         self._current_tab = tab
         self._update_tab_styles()
+        if hasattr(self, "status_combo") and self.status_combo:
+            self.status_combo.blockSignals(True)
+            if tab == "all":
+                self.status_combo.setCurrentIndex(0)
+            elif tab == "reg":
+                idx = self.status_combo.findText("등록")
+                if idx >= 0:
+                    self.status_combo.setCurrentIndex(idx)
+            elif tab == "prog":
+                idx = self.status_combo.findText("진행중")
+                if idx < 0:
+                    idx = self.status_combo.findText("진행")
+                if idx >= 0:
+                    self.status_combo.setCurrentIndex(idx)
+            elif tab == "done":
+                idx = self.status_combo.findText("완료")
+                if idx >= 0:
+                    self.status_combo.setCurrentIndex(idx)
+            self.status_combo.blockSignals(False)
+        self._current_page = 1
         self._apply_filters()
 
-    def _on_period_combo_changed(self) -> None:
-        """기간 콤보박스 변경 시 시작일/종료일 자동 설정 및 필터링"""
+    def _on_status_combo_changed(self, *args) -> None:
+        """상태 콤보박스 변경 시 탭과 자동 동기화 후 즉시 필터 적용"""
+        if not hasattr(self, "status_combo") or not self.status_combo:
+            return
+        selected = self.status_combo.currentText()
+        if selected == "등록":
+            self._current_tab = "reg"
+        elif selected in ("진행", "진행중"):
+            self._current_tab = "prog"
+        elif selected == "완료":
+            self._current_tab = "done"
+        else:
+            self._current_tab = "all"
+        self._update_tab_styles()
+        self._current_page = 1
+        self._apply_filters()
+
+    def _on_period_combo_changed(self, *args) -> None:
+        """기간 콤보박스 변경 시 시작일/종료일 자동 설정 및 즉시 필터링"""
         selected = self.period_combo.currentText()
         today = date.today()
         self.start_date_edit.blockSignals(True)
@@ -1793,16 +1839,30 @@ class TaskManagerDialog(QDialog):
 
         self.start_date_edit.blockSignals(False)
         self.end_date_edit.blockSignals(False)
+        self._current_page = 1
         self._apply_filters()
 
-    def _on_custom_date_changed(self) -> None:
-        """사용자가 날짜를 직접 변경 시 '직접 지정' 모드로 전환 후 필터 적용"""
+    def _on_custom_date_changed(self, *args) -> None:
+        """사용자가 날짜를 직접 변경 시 '직접 지정' 모드로 전환 후 즉시 필터 적용"""
+        s_date = self.start_date_edit.date()
+        e_date = self.end_date_edit.date()
+        sender = self.sender()
+        if sender == self.start_date_edit and s_date > e_date:
+            self.end_date_edit.blockSignals(True)
+            self.end_date_edit.setDate(s_date)
+            self.end_date_edit.blockSignals(False)
+        elif sender == self.end_date_edit and e_date < s_date:
+            self.start_date_edit.blockSignals(True)
+            self.start_date_edit.setDate(e_date)
+            self.start_date_edit.blockSignals(False)
+
         if self.period_combo.currentText() != "직접 지정":
             self.period_combo.blockSignals(True)
             idx = self.period_combo.findText("직접 지정")
             if idx >= 0:
                 self.period_combo.setCurrentIndex(idx)
             self.period_combo.blockSignals(False)
+        self._current_page = 1
         self._apply_filters()
 
     def _open_category_manager(self) -> None:
@@ -1842,8 +1902,8 @@ class TaskManagerDialog(QDialog):
         self._all_tasks.sort(key=lambda x: (x.day or date.min, x.created_at or datetime.min), reverse=True)
         self._apply_filters()
 
-    def _apply_filters(self) -> None:
-        """탭(전체/등록/진행/완료), 분류, 상태, 기간, 검색어 필터 적용"""
+    def _apply_filters(self, *args) -> None:
+        """탭(전체/등록/진행/완료), 분류, 상태, 기간, 검색어 필터 즉시 적용"""
         query = self.search_input.text().strip().lower()
         selected_cat = self.category_combo.currentText()
         selected_status = self.status_combo.currentText()
@@ -1851,36 +1911,39 @@ class TaskManagerDialog(QDialog):
 
         filtered = []
         for task in self._all_tasks:
-            # 1. 상태 탭 필터 (전체 / 등록 / 진행 / 완료)
-            if self._current_tab == "reg" and (task.status or "등록") != "등록":
-                continue
-            elif self._current_tab == "prog" and task.status not in ("진행", "진행중"):
-                continue
-            elif self._current_tab == "done" and task.status != "완료":
-                continue
+            # 1. 상태 필터 (콤보박스 및 탭 동기화 상태)
+            st = task.status or "등록"
+            if selected_status not in ("상태", "전체", ""):
+                if st != selected_status:
+                    continue
+            elif self._current_tab != "all":
+                if self._current_tab == "reg" and st != "등록":
+                    continue
+                elif self._current_tab == "prog" and st not in ("진행", "진행중"):
+                    continue
+                elif self._current_tab == "done" and st != "완료":
+                    continue
 
             # 2. 분류 필터
-            if selected_cat != "분류":
+            if selected_cat not in ("분류", "전체", ""):
                 task_cat = task.memo_group or "일반"
                 if task_cat != selected_cat:
                     continue
 
-            # 3. 상태 필터
-            if selected_status != "상태":
-                if (task.status or "등록") != selected_status:
+            # 3. 기간 필터 (시작일 ~ 종료일)
+            if selected_period not in ("기간", "전체", "전체 기간", "전체(기간)", "기간(전체)"):
+                t_start = task.day or task.start_date or (task.created_at.date() if task.created_at else None)
+                t_end = task.end_date or t_start
+                if not t_start:
                     continue
-
-            # 4. 기간 필터 (시작일 ~ 종료일)
-            if selected_period != "기간":
-                t_day = task.day or (task.created_at.date() if task.created_at else None)
-                if not t_day:
-                    continue
+                if not t_end:
+                    t_end = t_start
                 start_d = self.start_date_edit.date().toPython()
                 end_d = self.end_date_edit.date().toPython()
-                if not (start_d <= t_day <= end_d):
+                if not (t_start <= end_d and t_end >= start_d):
                     continue
 
-            # 5. 검색어 필터 (제목, 부서, 기안자, 세부내용, 분류)
+            # 4. 검색어 필터 (제목, 부서, 기안자, 세부내용, 분류)
             if query:
                 title_match = query in (task.title or "").lower()
                 dept_match = query in (getattr(task, "department", "") or "").lower()
