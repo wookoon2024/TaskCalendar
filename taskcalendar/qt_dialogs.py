@@ -1682,53 +1682,21 @@ class EntryDialog(QDialog):
                 ("영구", "forever", 40),
             ]
             self.period_buttons: list[QPushButton] = []
+            self._period_button_map: dict[str, tuple[QPushButton, int]] = {}
             for btn_text, duration_key, btn_w in btn_defs:
                 p_btn = QPushButton(btn_text)
                 p_btn.setFixedWidth(btn_w)
                 p_btn.setFixedHeight(26)
                 p_btn.setCursor(Qt.PointingHandCursor)
                 p_btn.setToolTip(f"종료일을 시작일 기준 {btn_text} 뒤로 자동 설정")
-                if duration_key == "forever":
-                    p_btn.setStyleSheet(f"""
-                        QPushButton {{
-                            min-width: 40px;
-                            max-width: 40px;
-                            font-size: 11px;
-                            font-weight: bold;
-                            padding: 2px 2px;
-                            background: {self.palette['accent_soft']};
-                            color: {self.palette['accent']};
-                            border: 1px solid {self.palette['accent']};
-                            border-radius: 4px;
-                        }}
-                        QPushButton:hover {{
-                            background: {self.palette['panel_alt']};
-                            border-color: {self.palette['accent']};
-                            color: {self.palette['accent']};
-                        }}
-                    """)
-                else:
-                    p_btn.setStyleSheet(f"""
-                        QPushButton {{
-                            min-width: {btn_w}px;
-                            max-width: {btn_w}px;
-                            font-size: 11px;
-                            font-weight: 500;
-                            padding: 2px 2px;
-                            background: {self.palette['panel_alt']};
-                            color: {self.palette['text']};
-                            border: 1px solid {self.palette['line']};
-                            border-radius: 4px;
-                        }}
-                        QPushButton:hover {{
-                            background: {self.palette['accent_soft']};
-                            border-color: {self.palette['accent']};
-                            color: {self.palette['accent']};
-                        }}
-                    """)
                 p_btn.clicked.connect(lambda _chk=False, dk=duration_key: self._set_period_duration(dk))
                 self.period_buttons.append(p_btn)
+                self._period_button_map[duration_key] = (p_btn, btn_w)
                 period_row_layout.addWidget(p_btn)
+
+            self.start_date.dateChanged.connect(self._on_date_changed_check_period)
+            self.end_date.dateChanged.connect(self._on_date_changed_check_period)
+            self._update_period_button_styles(self._detect_matching_period_key() or "1d")
 
             period_row_layout.addStretch(1)
 
@@ -1998,6 +1966,97 @@ class EntryDialog(QDialog):
         self._syncing_interval = False
         self._refresh_repeat_details()
 
+    def _detect_matching_period_key(self) -> str | None:
+        if not hasattr(self, "start_date") or not hasattr(self, "end_date"):
+            return None
+        import calendar
+        start_q = self.start_date.date()
+        end_q = self.end_date.date()
+        s = date(start_q.year(), start_q.month(), start_q.day())
+        e = date(end_q.year(), end_q.month(), end_q.day())
+        if s == e:
+            return "1d"
+        if e == date(2099, 12, 31):
+            return "forever"
+        if e == s + timedelta(days=7):
+            return "1w"
+
+        y1 = s.year + (s.month + 1 - 1) // 12
+        m1 = (s.month + 1 - 1) % 12 + 1
+        if e == date(y1, m1, min(s.day, calendar.monthrange(y1, m1)[1])):
+            return "1m"
+
+        y3 = s.year + (s.month + 3 - 1) // 12
+        m3 = (s.month + 3 - 1) % 12 + 1
+        if e == date(y3, m3, min(s.day, calendar.monthrange(y3, m3)[1])):
+            return "3m"
+
+        y6 = s.year + (s.month + 6 - 1) // 12
+        m6 = (s.month + 6 - 1) % 12 + 1
+        if e == date(y6, m6, min(s.day, calendar.monthrange(y6, m6)[1])):
+            return "6m"
+
+        y_1y = s.year + 1
+        if e == date(y_1y, s.month, min(s.day, calendar.monthrange(y_1y, s.month)[1])):
+            return "1y"
+
+        y_10y = s.year + 10
+        if e == date(y_10y, s.month, min(s.day, calendar.monthrange(y_10y, s.month)[1])):
+            return "10y"
+
+        return None
+
+    def _update_period_button_styles(self, selected_key: str | None = None) -> None:
+        self._active_period_key = selected_key
+        if not hasattr(self, "_period_button_map"):
+            return
+        for dk, (btn, btn_w) in self._period_button_map.items():
+            is_active = (dk == selected_key)
+            if is_active:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        min-width: {btn_w}px;
+                        max-width: {btn_w}px;
+                        font-size: 11px;
+                        font-weight: bold;
+                        padding: 2px 2px;
+                        background: {self.palette['accent_soft']};
+                        color: {self.palette['accent']};
+                        border: 1px solid {self.palette['accent']};
+                        border-radius: 4px;
+                    }}
+                    QPushButton:hover {{
+                        background: {self.palette['accent_soft']};
+                        border-color: {self.palette['accent']};
+                        color: {self.palette['accent']};
+                    }}
+                """)
+            else:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        min-width: {btn_w}px;
+                        max-width: {btn_w}px;
+                        font-size: 11px;
+                        font-weight: 500;
+                        padding: 2px 2px;
+                        background: {self.palette['panel_alt']};
+                        color: {self.palette['text']};
+                        border: 1px solid {self.palette['line']};
+                        border-radius: 4px;
+                    }}
+                    QPushButton:hover {{
+                        background: {self.palette['accent_soft']};
+                        border-color: {self.palette['accent']};
+                        color: {self.palette['accent']};
+                    }}
+                """)
+
+    def _on_date_changed_check_period(self) -> None:
+        if getattr(self, "_setting_period", False):
+            return
+        matched = self._detect_matching_period_key()
+        self._update_period_button_styles(matched)
+
     def _set_period_duration(self, duration_key: str) -> None:
         import calendar
         start_q = self.start_date.date()
@@ -2035,7 +2094,12 @@ class EntryDialog(QDialog):
         else:
             return
 
-        self.end_date.setDate(QDate(end.year, end.month, end.day))
+        self._setting_period = True
+        try:
+            self.end_date.setDate(QDate(end.year, end.month, end.day))
+        finally:
+            self._setting_period = False
+        self._update_period_button_styles(duration_key)
 
     def _refresh_repeat_details(self) -> None:
         q_d = self.start_date.date()
