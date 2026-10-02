@@ -3275,25 +3275,6 @@ class WorkManagerDialog(QDialog):
             }}
         """
 
-        # 좌측: 불러오기 및 내보내기 도구 버튼
-        self.btn_import = QPushButton("불러오기")
-        self.btn_import.setFixedHeight(30)
-        self.btn_import.setAutoDefault(False)
-        self.btn_import.setDefault(False)
-        self.btn_import.setToolTip("폴더 또는 파일을 업무로 불러오기")
-        self.btn_import.setStyleSheet(self._top_btn_style())
-        self.btn_import.clicked.connect(self._on_import_menu)
-        top_layout.addWidget(self.btn_import)
-
-        self.btn_export = QPushButton("내보내기")
-        self.btn_export.setFixedHeight(30)
-        self.btn_export.setAutoDefault(False)
-        self.btn_export.setDefault(False)
-        self.btn_export.setToolTip("업무 문서 및 첨부파일 내보내기 (HWPX / PDF)")
-        self.btn_export.setStyleSheet(self._top_btn_style())
-        self.btn_export.clicked.connect(self._on_export_wizard)
-        top_layout.addWidget(self.btn_export)
-
         top_layout.addStretch(1)
 
         # 검색 입력창 (가로길이 2배 = 480px, 단정한 테두리)
@@ -3358,6 +3339,10 @@ class WorkManagerDialog(QDialog):
         self.top_bar_spacer = QWidget()
         self.top_bar_spacer.setFixedHeight(6)
         main_layout.addWidget(self.top_bar_spacer)
+
+        # 초기 시작 시 검색창 숨김 (요청 반영: 탭 바 [🔍 검색] 클릭 시 노출)
+        self.top_bar.hide()
+        self.top_bar_spacer.hide()
 
         # =========================================================================
         # 2. 탭 바: 검색창 바로 아래, 본문(스플리터) 상단에 딱 붙여 배치
@@ -3599,7 +3584,32 @@ class WorkManagerDialog(QDialog):
         self.category_tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self.category_tree.orderChanged.connect(self._on_tree_order_changed)
         self.category_tree.filesDropped.connect(self._on_tree_files_dropped)
-        left_layout.addWidget(self.category_tree)
+        left_layout.addWidget(self.category_tree, 1)
+
+        # 업무 분류 하단: [불러오기] [내보내기] 버튼 2개 배치
+        left_btn_row = QHBoxLayout()
+        left_btn_row.setContentsMargins(0, 4, 0, 0)
+        left_btn_row.setSpacing(6)
+
+        self.btn_import = QPushButton("불러오기")
+        self.btn_import.setFixedHeight(24)
+        self.btn_import.setAutoDefault(False)
+        self.btn_import.setDefault(False)
+        self.btn_import.setToolTip("폴더 또는 파일을 업무로 불러오기")
+        self.btn_import.setStyleSheet(self._sub_btn_style())
+        self.btn_import.clicked.connect(self._on_import_menu)
+        left_btn_row.addWidget(self.btn_import, 1)
+
+        self.btn_export = QPushButton("내보내기")
+        self.btn_export.setFixedHeight(24)
+        self.btn_export.setAutoDefault(False)
+        self.btn_export.setDefault(False)
+        self.btn_export.setToolTip("업무 문서 및 첨부파일 내보내기 (HWPX / PDF)")
+        self.btn_export.setStyleSheet(self._sub_btn_style())
+        self.btn_export.clicked.connect(self._on_export_wizard)
+        left_btn_row.addWidget(self.btn_export, 1)
+
+        left_layout.addLayout(left_btn_row)
         left_h_layout.addWidget(left_main_widget, 1)
 
         # 좌측 패널 우측 경계면 - 위아래 중간에 위치한 [◀] 버튼 거터
