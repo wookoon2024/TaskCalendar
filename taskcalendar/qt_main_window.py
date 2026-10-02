@@ -4448,7 +4448,15 @@ class MainWindow(QMainWindow):
                 available_schedule_slots += 1
             on_reorder = lambda s_id, s_day, t_day, t_id, b: self._move_calendar_entry(s_id, s_day, t_day, t_id, b)
             for entry in schedule_entries[:available_schedule_slots]:
-                edit_entry = lambda e=entry: self._edit_entry(e.entry_type, e)
+                has_work_link = bool(getattr(entry, "linked_work_id", None)) or (bool(entry.title) and entry.title.startswith("[업무]"))
+                if has_work_link:
+                    edit_entry = lambda e=entry: self.open_linked_work(
+                        e.linked_work_id,
+                        getattr(e, "linked_work_type", "work") or "work",
+                        title=e.title or "",
+                    )
+                else:
+                    edit_entry = lambda e=entry: self._edit_entry(e.entry_type, e)
                 completed_on_day = self._is_entry_completed_on_day(entry, current_day)
                 chip = DraggableCalendarEntryChip(
                     cell,
@@ -4554,6 +4562,13 @@ class MainWindow(QMainWindow):
         title_lbl.setText(headline_html)
         title_lbl.setStyleSheet(f"color: {self.palette['text']}; background: transparent; border: none; font-size: 13px; font-weight: 600;")
         title_lbl.clicked.connect(lambda e=entry: self._open_search_result(e))
+        has_work_link = bool(getattr(entry, "linked_work_id", None)) or (bool(entry.title) and entry.title.startswith("[업무]"))
+        if has_work_link:
+            title_lbl.doubleClicked.connect(lambda e=entry: self.open_linked_work(
+                e.linked_work_id,
+                getattr(e, "linked_work_type", "work") or "work",
+                title=e.title or "",
+            ))
         row_layout.addWidget(title_lbl)
 
         if entry.description:
@@ -4611,7 +4626,15 @@ class MainWindow(QMainWindow):
                 card.clicked.connect(lambda _id, e=entry: self._open_entry_view(e))
                 card.reordered.connect(self._on_memo_card_reordered)
             else:
-                card._on_double_click = lambda e=entry: self._edit_entry(e.entry_type, e)
+                has_work_link = bool(getattr(entry, "linked_work_id", None)) or (bool(entry.title) and entry.title.startswith("[업무]"))
+                if has_work_link:
+                    card._on_double_click = lambda e=entry: self.open_linked_work(
+                        e.linked_work_id,
+                        getattr(e, "linked_work_type", "work") or "work",
+                        title=e.title or "",
+                    )
+                else:
+                    card._on_double_click = lambda e=entry: self._edit_entry(e.entry_type, e)
                 card._on_context_menu = lambda pos, e=entry: self._show_schedule_context_menu(e, pos)
                 card.reordered.connect(
                     lambda s_id, t_id, before: self._move_calendar_entry(
@@ -4690,7 +4713,15 @@ class MainWindow(QMainWindow):
             else:
                 left_text = "  ".join([part for part in [lead, *details] if part]).strip()
             left_label = ClickableLabel(left_text)
-            left_label.clicked.connect(lambda e=entry: self._open_entry_view(e))
+            has_work_link = bool(getattr(entry, "linked_work_id", None)) or (bool(entry.title) and entry.title.startswith("[업무]"))
+            if has_work_link:
+                left_label.doubleClicked.connect(lambda e=entry: self.open_linked_work(
+                    e.linked_work_id,
+                    getattr(e, "linked_work_type", "work") or "work",
+                    title=e.title or "",
+                ))
+            else:
+                left_label.clicked.connect(lambda e=entry: self._open_entry_view(e))
             left_label.setObjectName("muted" if not hide_cal_body else "")
             left_label.setStyleSheet(
                 f"color: {self.palette['text'] if hide_cal_body else self.palette['muted']}; "
@@ -4793,7 +4824,15 @@ class MainWindow(QMainWindow):
             if entry.entry_type == EntryType.MEMO:
                 desc.doubleClicked.connect(lambda e=entry: self._open_entry_view(e))
             else:
-                desc.clicked.connect(lambda e=entry: self._open_entry_view(e))
+                has_work_link = bool(getattr(entry, "linked_work_id", None)) or (bool(entry.title) and entry.title.startswith("[업무]"))
+                if has_work_link:
+                    desc.doubleClicked.connect(lambda e=entry: self.open_linked_work(
+                        e.linked_work_id,
+                        getattr(e, "linked_work_type", "work") or "work",
+                        title=e.title or "",
+                    ))
+                else:
+                    desc.clicked.connect(lambda e=entry: self._open_entry_view(e))
             layout.addWidget(desc)
 
         if entry.attachments and not hide_body:
@@ -6579,12 +6618,20 @@ class MainWindow(QMainWindow):
                 return
             entry_type = EntryType.SCHEDULE if view_entry.entry_type == EntryType.TASK else view_entry.entry_type
             logger.info(f"[_open_entry_view] Opening modal EntryViewDialog for {view_entry.entry_id}")
+            on_open_work = None
+            if getattr(view_entry, "linked_work_id", None) or (view_entry.title and view_entry.title.startswith("[업무]")):
+                on_open_work = lambda e: self.open_linked_work(
+                    e.linked_work_id,
+                    getattr(e, "linked_work_type", "work") or "work",
+                    title=e.title or "",
+                )
             dialog = EntryViewDialog(
                 self,
                 entry_type,
                 view_entry,
                 on_download_attachment=self._download_attachment,
                 on_edit_entry=lambda e: self._edit_entry(e.entry_type, e),
+                on_open_work=on_open_work,
             )
             dialog.exec()
         except Exception as exc:  # pragma: no cover

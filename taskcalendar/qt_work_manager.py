@@ -3445,6 +3445,7 @@ class WorkManagerDialog(QDialog):
             }}
         """)
         self.category_tree.itemClicked.connect(self._on_tree_item_clicked)
+        self.category_tree.itemDoubleClicked.connect(self._on_tree_item_clicked)
         self.category_tree.itemExpanded.connect(self._on_tree_item_expanded)
         self.category_tree.itemCollapsed.connect(self._on_tree_item_collapsed)
         self.category_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
