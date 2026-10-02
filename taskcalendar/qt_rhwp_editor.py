@@ -69,80 +69,6 @@ _PRETENDARD_DEFAULTS_JS = """
 })();
 """
 
-# 화면 배율 안정화 스니펫:
-# - 쪽맞춤(Fit Page) 계산 시 WebEngine 컨테이너 높이 초기 측정 오류로 인해
-#   10% 최소 배율로 축소 왜곡되는 치명적 버그를 원천 차단.
-# - 기본 배율 모드를 항상 '폭맞춤'(Fit Width)으로 설정하고,
-#   10% 등 비정상 배율(50% 미만) 감지 시 MutationObserver로 즉시 폭맞춤 또는 100%로 자동 복구한다.
-_ZOOM_STABILIZER_JS = """
-(function() {
-    try {
-        var raw = localStorage.getItem('rhwp-settings');
-        var data = raw ? JSON.parse(raw) : {};
-        if (!data.view) data.view = {};
-        if (data.view.zoomFitMode !== 'fitWidth') {
-            data.view.zoomFitMode = 'fitWidth';
-            localStorage.setItem('rhwp-settings', JSON.stringify(data));
-        }
-    } catch(e) {}
-
-    function doFitWidth() {
-        try {
-            var btn = document.getElementById('sb-zoom-fit-width');
-            if (btn) {
-                btn.click();
-            } else {
-                var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
-                var vm = deps && deps.getInputHandler && deps.getInputHandler()?.viewportManager;
-                if (vm && vm.setZoom) {
-                    vm.setZoom(1.0);
-                }
-            }
-        } catch(e) {}
-    }
-    window._rhwpRestoreFitWidth = doFitWidth;
-
-    if (!window._rhwpZoomGuardInstalled) {
-        window._rhwpZoomGuardInstalled = true;
-        var zoomValElem = document.getElementById('sb-zoom-val');
-        if (zoomValElem) {
-            var isFixing = false;
-            var obs = new MutationObserver(function() {
-                if (isFixing) return;
-                var txt = (zoomValElem.textContent || '').trim();
-                var m = txt.match(/(\\d+)%/);
-                if (m) {
-                    var pct = parseInt(m[1], 10);
-                    // 10% 등 비정상적으로 축소된 경우 폭맞춤(Fit to Width) 또는 100%로 즉각 자동 복구
-                    if (pct > 0 && pct < 50) {
-                        isFixing = true;
-                        console.warn('[RhwpZoomGuard] Detected abnormal zoom (' + pct + '%). Restoring fit-width...');
-                        setTimeout(function() {
-                            doFitWidth();
-                            setTimeout(function() {
-                                var curTxt = (zoomValElem.textContent || '').trim();
-                                var curM = curTxt.match(/(\\d+)%/);
-                                if (curM && parseInt(curM[1], 10) < 50) {
-                                    var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
-                                    var vm = deps && deps.getInputHandler && deps.getInputHandler()?.viewportManager;
-                                    if (vm && vm.setZoom) {
-                                        vm.setZoom(1.0);
-                                    }
-                                }
-                                isFixing = false;
-                            }, 100);
-                        }, 50);
-                    }
-                }
-            });
-            obs.observe(zoomValElem, { childList: true, characterData: true, subtree: true });
-        }
-    }
-
-    doFitWidth();
-})();
-"""
-
 try:
     from PySide6.QtWebEngineWidgets import QWebEngineView
     _HAS_WEBENGINE = True
@@ -472,12 +398,6 @@ class RhwpEditorWidget(QWidget):
             return
         self.web_view.page().runJavaScript(_PRETENDARD_DEFAULTS_JS)
 
-    def _apply_zoom_fix(self) -> None:
-        """비정상 축소(10% 등) 방지 및 폭맞춤 가드 설치"""
-        if not self.web_view:
-            return
-        self.web_view.page().runJavaScript(_ZOOM_STABILIZER_JS)
-
     def _on_load_finished(self, ok: bool) -> None:
         if not ok:
             logger.error("Failed to load rhwp-studio web view")
@@ -532,7 +452,6 @@ class RhwpEditorWidget(QWidget):
             self.stack_layout.setCurrentWidget(self.web_view)
             self._inject_change_hook()
             self._apply_default_font_and_size()
-            self._apply_zoom_fix()
 
         if self._pending_load is not None:
             title, text, hwpx_bytes = self._pending_load
@@ -574,14 +493,6 @@ class RhwpEditorWidget(QWidget):
                     }} catch(e) {{
                         console.error("Failed to load document via fetch:", e);
                     }}
-                    setTimeout(function() {{
-                        if (window._rhwpRestoreFitWidth) {{
-                            window._rhwpRestoreFitWidth();
-                        }} else {{
-                            var btn = document.getElementById('sb-zoom-fit-width');
-                            if (btn) btn.click();
-                        }}
-                    }}, 200);
                 }})();
                 """
             else:
@@ -599,14 +510,6 @@ class RhwpEditorWidget(QWidget):
                     if (deps && deps.loadDocument) {{
                         await deps.loadDocument(bytes, "{doc_filename}");
                     }}
-                    setTimeout(function() {{
-                        if (window._rhwpRestoreFitWidth) {{
-                            window._rhwpRestoreFitWidth();
-                        }} else {{
-                            var btn = document.getElementById('sb-zoom-fit-width');
-                            if (btn) btn.click();
-                        }}
-                    }}, 200);
                 }})();
                 """
         else:
@@ -673,19 +576,9 @@ class RhwpEditorWidget(QWidget):
                 if (fontSelect) fontSelect.value = 'Pretendard';
                 var sizeInput = document.getElementById('font-size');
                 if (sizeInput) sizeInput.value = '12.0';
-                setTimeout(function() {{
-                    if (window._rhwpRestoreFitWidth) {{
-                        window._rhwpRestoreFitWidth();
-                    }} else {{
-                        var btn = document.getElementById('sb-zoom-fit-width');
-                        if (btn) btn.click();
-                    }}
-                }}, 200);
             }})();
             """
         self.web_view.page().runJavaScript(js)
-        QTimer.singleShot(350, self.fit_width)
-        QTimer.singleShot(700, self.fit_width)
         QTimer.singleShot(500, self._inject_change_hook)
 
     def export_document_data(self, callback) -> None:
@@ -746,24 +639,12 @@ class RhwpEditorWidget(QWidget):
         self.web_view.page().runJavaScript(js, _on_js_result)
 
     def fit_page(self) -> None:
-        """웹에디터 화면을 '폭맞춤' (Fit to Width) 비율로 자동 전환 (10% 축소 버그 방지)"""
-        if not self.web_view:
-            return
-        js = """
-        (function() {
-            if (window._rhwpRestoreFitWidth) {
-                window._rhwpRestoreFitWidth();
-            } else {
-                var btn = document.getElementById('sb-zoom-fit-width');
-                if (btn) btn.click();
-            }
-        })();
-        """
-        self.web_view.page().runJavaScript(js)
+        """웹에디터 화면을 쪽맞춤 비율로 전환"""
+        pass
 
     def fit_width(self) -> None:
-        """웹에디터 화면을 '폭맞춤' (Fit to Width) 비율로 전환"""
-        self.fit_page()
+        """웹에디터 화면을 폭맞춤 비율로 전환"""
+        pass
 
     def set_html(self, html: str) -> None:
         self._html_content = html
@@ -775,21 +656,12 @@ class RhwpEditorWidget(QWidget):
             self._pending_html = html
             return
 
-        # rhwp-studio 내부 문서에 텍스트 또는 HTML 주입 시도 및 폭맞춤 유지
         escaped = html.replace("\\", "\\\\").replace("`", "\\`").replace("$", "\\$")
         js = f"""
         (function() {{
             if (window.rhwpStudio && window.rhwpStudio.loadDocument) {{
                 window.rhwpStudio.loadDocument(`{escaped}`);
             }}
-            setTimeout(function() {{
-                if (window._rhwpRestoreFitWidth) {{
-                    window._rhwpRestoreFitWidth();
-                }} else {{
-                    var btn = document.getElementById('sb-zoom-fit-width');
-                    if (btn) btn.click();
-                }}
-            }}, 200);
         }})();
         """
         self.web_view.page().runJavaScript(js)
