@@ -170,6 +170,21 @@ def scale_qss(qss: str) -> str:
         return qss
 
 
+def tooltip_qss() -> str:
+    """툴팁(QToolTip) 전용 QSS.
+
+    다이얼로그마다 자체 setStyleSheet 로 QToolTip 규칙이 덮어써지는 경우가 있어,
+    setStyleSheet 을 거칠 때마다 이 규칙을 뒤에 덧붙여 모든 툴팁이
+    선택된 UI 폰트를 쓰도록 보장한다.
+    """
+    return (
+        "QToolTip {"
+        f"font-family: {font_family_css()};"
+        f"font-size: {scale_px(12)}px;"
+        "}"
+    )
+
+
 def install_style_hook() -> None:
     """QWidget.setStyleSheet를 감싸 모든 인라인 스타일시트에 배율을 적용한다."""
     global _hook_installed, _original_set_style_sheet
@@ -183,7 +198,10 @@ def install_style_hook() -> None:
             setattr(widget, _RAW_QSS_ATTR, qss)
         except Exception:
             pass
-        return _original_set_style_sheet(widget, scale_qss(qss))
+        scaled = scale_qss(qss) if qss else ""
+        if scaled and "QToolTip" not in scaled:
+            scaled = f"{scaled}\n{tooltip_qss()}"
+        return _original_set_style_sheet(widget, scaled)
 
     QWidget.setStyleSheet = patched
     _hook_installed = True

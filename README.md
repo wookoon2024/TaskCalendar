@@ -25,7 +25,7 @@
 
 ## 💾 다운로드 (실행 프로그램)
 
-* 🚀 **[나라수첩_v1.9.51_20261004.zip 다운로드 (최신 버전)](https://github.com/wookoon2024/TaskCalendar/raw/main/나라수첩_v1.9.51_20261004.zip)**
+* 🚀 **[nara-notebook_v1.9.51_20261004.zip 다운로드 (최신 버전)](https://github.com/wookoon2024/TaskCalendar/releases/download/v1.9.51/nara-notebook_v1.9.51_20261004.zip)**
 
   **압축 풀면 아래 4종이 들어 있습니다:**
   | 항목 | 설명 |

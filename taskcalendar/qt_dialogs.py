@@ -6228,6 +6228,12 @@ class SettingsDialog(QDialog):
         self.ui_font_family_combo.setCurrentFont(QFont(ui_font_family))
         self.ui_font_family_combo.setEditable(False)
         self.ui_font_family_combo.setFixedWidth(280)
+        # 목록 항목이 각자의 실제 폰트로 보여야 글꼴을 미리 볼 수 있다.
+        # Qt 기본값(9.8pt 시스템 폰트) 대신 선택된 UI 폰트를 명시한다.
+        self.ui_font_family_combo.setFont(make_ui_font_like(10))
+        combo_view = self.ui_font_family_combo.view()
+        if combo_view is not None:
+            combo_view.setFont(make_ui_font_like(10))
         family_label = QLabel("글꼴")
         family_label.setObjectName("muted")
         font_layout.addRow(family_label, self.ui_font_family_combo)
