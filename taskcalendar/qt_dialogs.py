@@ -54,7 +54,7 @@ from PySide6.QtWidgets import (
 )
 
 from taskcalendar.rich_text_edit import RichTextEdit
-from taskcalendar.fonts import DEFAULT_FAMILY, DEFAULT_SCALE, SCALE_OPTIONS, make_ui_font_like, scale_px, ui_font_family
+from taskcalendar.fonts import DEFAULT_FAMILY, DEFAULT_SCALE, SCALE_OPTIONS, font_family_css, make_ui_font_like, scale_px, ui_font_family
 from taskcalendar.models import (
     ALERT_OPTIONS,
     COLOR_OPTIONS,
@@ -8796,6 +8796,62 @@ class CivilComplaintCalculatorDialog(QDialog):
         self.accept()
 
 
+class _IntroMenuItemDelegate(QStyledItemDelegate):
+    """기능 안내 좌측 목록 — 업무 분류 트리와 동일한 QLabel 렌더링으로 글꼴 깨짐 방지"""
+
+    def __init__(self, text_color: str, accent: str, parent=None) -> None:
+        super().__init__(parent)
+        self._lbl = QLabel()
+        self._lbl.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        self._lbl.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+        )
+        self._lbl.setContentsMargins(0, 0, 0, 0)
+        # 업무 분류 트리와 동일하게, 델리게이트가 픽셀 크기를 지정하므로
+        # 여기서는 전역 렌더링 설정(안티에일리어싱·힌팅)만 물려받은 폰트를 쓴다.
+        self._lbl.setFont(make_ui_font_like(9))
+        self._text_color = text_color
+        self._accent = accent
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        return QSize(size.width(), max(size.height(), 30))
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        view = opt.widget
+        is_sel = bool(
+            view and view.selectionModel() and view.selectionModel().isSelected(index)
+        )
+        is_hover = bool(opt.state & QStyle.State_MouseOver)
+
+        text = opt.text or ""
+        if is_sel:
+            color = self._accent
+            weight = "bold"
+        elif is_hover:
+            color = self._text_color
+            weight = "bold"
+        else:
+            color = self._text_color
+            weight = "normal"
+
+        self._lbl.setText(text)
+        self._lbl.setStyleSheet(
+            f"font-weight: {weight}; font-size: 13px; color: {color};"
+            "border: none; background: transparent;"
+        )
+
+        r = opt.rect.adjusted(10, 2, -8, -2)
+        self._lbl.resize(r.width(), r.height())
+
+        painter.save()
+        painter.translate(r.topLeft())
+        self._lbl.render(painter, QPoint(0, 0))
+        painter.restore()
+
+
 class WelcomeFeatureIntroDialog(QDialog):
     """기능 안내 — 5개 분류를 하나씩 살펴보는 페이지형 안내 창"""
 
@@ -8824,7 +8880,13 @@ class WelcomeFeatureIntroDialog(QDialog):
 
 <b>□ 음력 · 24절기 · 공휴일</b>
   · 음력 날짜와 24절기를 캘린더에 표시합니다. (표시 주기 6종 중 선택)
-  · 대한민국의 공휴일과 대체공휴일을 매년 계산해 표시합니다.""",
+  · 대한민국의 공휴일과 대체공휴일을 매년 계산해 표시합니다.
+
+<b>□ 다른 기능과 함께 쓰기</b>
+  · 날짜 계산기에서 계산한 마감일을 이 캘린더에 바로 등록할 수 있습니다.
+  · 업무 관리에서 만든 일정이 캘린더에 표시되고,
+    다시 일정을 누르면 원래 업무로 바로 돌아갈 수 있습니다.
+  · 일정 옆에 표시되는 💼 업무연동 배지를 누르면 관련 업무가 열립니다.""",
         ),
         (
             "📝 메모 관리",
@@ -8870,7 +8932,21 @@ class WelcomeFeatureIntroDialog(QDialog):
   · [공문 본문 나열형] — 공문에 그대로 붙여 쓸 수 있는 나열형
   · [공문 붙임 표 형식] — 원하는 열을 골라 만드는 표
   · [표준 업무관리대장] — 8개 고정 열로 된 표준 대장
-  · 미리보기와 클립보드 복사(한글·엑셀에 바로 붙여넣기)를 지원합니다.""",
+  · 미리보기와 클립보드 복사(한글·엑셀에 바로 붙여넣기)를 지원합니다.
+
+<b>□ 크롬 브라우저 연동  [환경설정 → 📄 문서]</b>
+  · 웹에서 문서나 기사 텍스트를 드래그한 뒤 마우스 우클릭하면
+    나라수첩으로 바로 보낼 수 있습니다.
+  · 전용 단축키는 Ctrl + Shift + K 입니다.
+  · 설치는 [크롬 브라우저 실행] → [개발자 모드 켜기] →
+    [확장프로그램 폴더 열기]로 압축을 풀어 드래그하면 끝납니다.
+  · 웹에서 가져온 내용을 문서로 등록하면 출처 URL도 함께 남습니다.
+
+<b>□ 다른 기능과 함께 쓰기</b>
+  · 업무 관리의 [문서] 탭에서 이 문서를 특정 업무에 연결할 수 있습니다.
+  · 연결하면 이 문서가 어느 업무에 쓰이는지 한눈에 보여,
+    나중에 같은 문서를 다시 찾거나 반려를 줄일 수 있습니다.
+  · 처리상태를 완료로 바꾸면 캘린더에도 완료로 표시됩니다.""",
         ),
         (
             "📑 업무 관리",
@@ -8900,7 +8976,11 @@ class WelcomeFeatureIntroDialog(QDialog):
 
 <b>□ 다른 기능과의 연결</b>
   · 이 업무와 관련된 일정을 등록하면 [일정] 탭에서 바로 확인·수정할 수 있습니다.
-  · 관련 문서를 여러 개 연결하고 문서 관리 화면으로 이동할 수 있습니다.""",
+  · 관련 문서를 여러 개 연결하고 문서 관리 화면으로 이동할 수 있습니다.
+  · 등록한 일정은 캘린더에도 함께 표시되고,
+    일정 카드의 [업무연동] 표시를 누르면 이 업무로 바로 돌아옵니다.
+  · 이 화면에서 만든 업무와 일정은 서로를 가리키는 관계로 연결되어,
+    나중에 담당자가 바뀌어도 맥락이 그대로 남아 있습니다.""",
         ),
         (
             "⚙️ 환경설정",
@@ -8966,6 +9046,26 @@ class WelcomeFeatureIntroDialog(QDialog):
 
         self.list_menu = QListWidget(self)
         self.list_menu.setFixedWidth(190)
+        # 업무 분류 트리와 동일하게 폰트를 명시한다 (한글 글꼴 깨짐 방지)
+        self.list_menu.setFont(make_ui_font_like(9))
+        self.list_menu.setItemDelegate(_IntroMenuItemDelegate(
+            text_color=self.palette.get("text", "#1E293B"),
+            accent=self.palette.get("accent", "#2563EB"),
+            parent=self.list_menu,
+        ))
+        self.list_menu.setStyleSheet(
+            f"QListWidget {{"
+            f"  font-family: {font_family_css()};"
+            f"  font-size: 13px;"
+            f"  background-color: {self.palette.get('panel_alt', '#F8FAFC')};"
+            f"  border: 1px solid {self.palette.get('line', '#CBD5E1')};"
+            f"  border-radius: 6px; padding: 4px;"
+            f"}}"
+            f"QListWidget::item {{ border-radius: 4px; margin: 1px 0; }}"
+            f"QListWidget::item:selected {{"
+            f"  background-color: {self.palette.get('accent', '#2563EB')}22;"
+            f"}}"
+        )
         self.list_menu.currentRowChanged.connect(self._on_page_selected)
         for name, _brief, _detail in self.PAGES:
             self.list_menu.addItem(name)
@@ -8974,7 +9074,7 @@ class WelcomeFeatureIntroDialog(QDialog):
         detail_panel = QWidget(self)
         detail_layout = QVBoxLayout(detail_panel)
         detail_layout.setContentsMargins(0, 0, 0, 0)
-        detail_layout.setSpacing(6)
+        detail_layout.setSpacing(10)
 
         self.lbl_page_title = QLabel(self)
         self.lbl_page_title.setObjectName("itemTitle")
@@ -8988,11 +9088,29 @@ class WelcomeFeatureIntroDialog(QDialog):
         self.scroll = QScrollArea(self)
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # 본문은 여백을 둔 카드로 표시해 줄글이 붙지 않게 한다
+        self.scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            f"QScrollArea > QWidget > QLabel {{ background: {self.palette.get('panel', '#FFFFFF')}; }}"
+        )
         self.lbl_page_detail = QLabel(self)
         self.lbl_page_detail.setObjectName("itemDesc")
         self.lbl_page_detail.setWordWrap(True)
-        self.lbl_page_detail.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.lbl_page_detail.setAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
+        )
         self.lbl_page_detail.setTextFormat(Qt.TextFormat.RichText)
+        # 여백 + 줄 간격
+        self.lbl_page_detail.setStyleSheet(
+            f"QLabel {{"
+            f"  background-color: {self.palette.get('panel', '#FFFFFF')};"
+            f"  color: {self.palette.get('text', '#1E293B')};"
+            f"  border: 1px solid {self.palette.get('line', '#CBD5E1')};"
+            f"  border-radius: 8px;"
+            f"  padding: 14px 16px;"
+            f"  line-height: 170%;"
+            f"}}"
+        )
         self.scroll.setWidget(self.lbl_page_detail)
         detail_layout.addWidget(self.scroll, 1)
 
@@ -9031,7 +9149,7 @@ class WelcomeFeatureIntroDialog(QDialog):
         settings_btn.clicked.connect(self._on_open_settings)
         footer.addWidget(settings_btn)
 
-        confirm_btn = QPushButton("시작하기 →")
+        confirm_btn = QPushButton("시작하기")
         confirm_btn.setObjectName("primaryBtn")
         confirm_btn.clicked.connect(self.accept)
         footer.addWidget(confirm_btn)
@@ -9048,7 +9166,8 @@ class WelcomeFeatureIntroDialog(QDialog):
 
         self.lbl_page_title.setText(name)
         self.lbl_page_brief.setText(brief)
-        self.lbl_page_detail.setText(detail)
+        # RichText 모드에서는 '\n' 이 줄바꿈으로 인식되지 않으므로 <br> 로 변환
+        self.lbl_page_detail.setText(detail.replace("\n", "<br>"))
         self.lbl_page_indicator.setText(f"{self._page_index + 1} / {total}")
 
         if self.list_menu.currentRow() != self._page_index:

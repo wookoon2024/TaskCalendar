@@ -551,6 +551,7 @@ class TaskEditDialog(QDialog):
         self.task = task
         self.known_authors = known_authors or []
         self.known_depts = known_depts or []
+        self._linked_work_ids: list[int] = []
 
         is_new = (task is None or task.entry_id is None)
         self.setWindowTitle("새 문서 등록" if is_new else "문서 정보 수정")
@@ -818,6 +819,42 @@ class TaskEditDialog(QDialog):
         self.url_input.setStyleSheet(input_style)
         grid.addWidget(self.url_input, 5, 1, 1, 3)
 
+        # 7. 관련 업무 (6,0~6,3) — 업무 관리의 문서와 1:1 로 연결
+        lbl_work = QLabel("관련 업무:")
+        lbl_work.setStyleSheet(lbl_style)
+        lbl_work.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        grid.addWidget(lbl_work, 6, 0)
+
+        work_row = QHBoxLayout()
+        work_row.setSpacing(6)
+
+        self.lbl_linked_works = QLabel("(연결된 업무 없음)")
+        self.lbl_linked_works.setStyleSheet(
+            f"color: {self.palette.get('muted', '#64748B')}; font-size: 11px;"
+        )
+        self.lbl_linked_works.setWordWrap(True)
+        work_row.addWidget(self.lbl_linked_works, 1)
+
+        self.btn_select_work = QPushButton("업무 선택...")
+        self.btn_select_work.setFixedHeight(26)
+        self.btn_select_work.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_select_work.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 4px;
+                padding: 0 10px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt};
+            }}
+        """)
+        self.btn_select_work.clicked.connect(self._open_work_link_dialog)
+        work_row.addWidget(self.btn_select_work)
+        grid.addLayout(work_row, 6, 1, 1, 3)
+
         layout.addLayout(grid, 1)
 
         # 하단 확인 / 취소 버튼
@@ -901,6 +938,48 @@ class TaskEditDialog(QDialog):
         if curr and curr in statuses:
             self.status_combo.setCurrentText(curr)
 
+    def _open_work_link_dialog(self) -> None:
+        """관련 업무 선택 다이얼로그를 열고 선택 결과를 반영한다."""
+        from taskcalendar.work_link_dialog import WorkLinkSelectDialog
+
+        dlg = WorkLinkSelectDialog(
+            self,
+            self.repository,
+            initial_work_ids=list(self._linked_work_ids),
+            palette=self.palette,
+            title="문서와 연결할 업무 선택",
+        )
+        if dlg.exec() == QDialog.Accepted:
+            self._linked_work_ids = list(dlg.selected_work_ids)
+            self._update_linked_works_summary()
+
+    def _update_linked_works_summary(self) -> None:
+        """연결된 업무 목록을 라벨에 요약 표시한다."""
+        work_ids = list(self._linked_work_ids)
+        if not work_ids:
+            self.lbl_linked_works.setText("(연결된 업무 없음)")
+            return
+
+        titles: list[str] = []
+        try:
+            for wid in work_ids:
+                row = self.repository.connection.execute(
+                    "SELECT title FROM work_items WHERE id = ?", (int(wid),)
+                ).fetchone()
+                if row and row["title"]:
+                    titles.append(str(row["title"]))
+        except Exception:
+            titles = [f"업무 #{wid}" for wid in work_ids]
+
+        if not titles:
+            self.lbl_linked_works.setText("(연결된 업무 없음)")
+        elif len(titles) <= 2:
+            self.lbl_linked_works.setText(f"{len(titles)}개 연결됨: {', '.join(titles)}")
+        else:
+            self.lbl_linked_works.setText(
+                f"{len(titles)}개 연결됨: {titles[0]}, {titles[1]} 외 {len(titles) - 2}개"
+            )
+
     def _open_category_manager(self) -> None:
         cats = get_task_categories(self.repository)
         dlg = SimpleListManagerDialog(
@@ -936,6 +1015,7 @@ class TaskEditDialog(QDialog):
         if not self.task:
             self.category_combo.setCurrentText("일반")
             self.status_combo.setCurrentText("등록")
+            self._update_linked_works_summary()
             return
 
         load_date = self.task.day or self.task.start_date or (self.task.created_at.date() if self.task.created_at else date.today())
@@ -978,6 +1058,16 @@ class TaskEditDialog(QDialog):
 
         self.desc_input.setPlainText(desc)
         self.url_input.setText(url)
+
+        # 연결된 업무 목록 로드
+        if self.task.entry_id:
+            try:
+                self._linked_work_ids = list(
+                    self.repository.list_linked_works_for_entry(self.task.entry_id)
+                )
+            except Exception:
+                self._linked_work_ids = []
+        self._update_linked_works_summary()
 
     def _on_save(self) -> None:
         title = self.title_input.text().strip()
@@ -1029,6 +1119,16 @@ class TaskEditDialog(QDialog):
             self.task.updated_at = now
 
         self.repository.upsert_entry(self.task)
+
+        # 연결된 업무 반영 (문서 → 업무)
+        if self.task.entry_id:
+            try:
+                self.repository.set_entry_work_links(
+                    self.task.entry_id, list(self._linked_work_ids)
+                )
+            except Exception:
+                logger.warning("Failed to save work links", exc_info=True)
+
         self.repository.save()
         self.accept()
 
@@ -2762,6 +2862,10 @@ class TaskManagerDialog(QDialog):
             act_edit = menu.addAction("✏️ 상세 수정 창 열기")
             menu.addSeparator()
 
+            # 관련 업무 연결 (문서 ↔ 업무 양방향)
+            act_link_work = menu.addAction("🔗 관련 업무 연결...")
+            menu.addSeparator()
+
             # 단일 항목 분류 변경 서브메뉴
             cats = get_task_categories(self.repository)
             menu_cat = menu.addMenu("📁 분류 변경")
@@ -2796,6 +2900,8 @@ class TaskManagerDialog(QDialog):
             action = menu.exec(global_pos)
             if action == act_edit:
                 self._edit_task(task)
+            elif action == act_link_work:
+                self._link_task_to_work(task)
             elif action in actions_cat:
                 self._change_tasks_category([task], actions_cat[action])
             elif action in actions_stat:
@@ -2830,15 +2936,82 @@ class TaskManagerDialog(QDialog):
                 actions_stat[act] = s
 
             menu.addSeparator()
+
+            act_link_work = menu.addAction(f"🔗 관련 업무 일괄 연결 ({count}개)...")
+            menu.addSeparator()
             act_del = menu.addAction(f"🗑️ 선택한 업무 일괄 삭제 ({count}개)")
 
             action = menu.exec(global_pos)
-            if action in actions_cat:
+            if action == act_link_work:
+                self._link_tasks_to_work(tasks)
+            elif action in actions_cat:
                 self._change_tasks_category(tasks, actions_cat[action])
             elif action in actions_stat:
                 self._change_tasks_status(tasks, actions_stat[action])
             elif action == act_del:
                 self._delete_tasks(tasks)
+
+    def _link_task_to_work(self, task: CalendarEntry) -> None:
+        """단일 문서의 관련 업무를 선택해 연결한다."""
+        if not task or not task.entry_id:
+            return
+        self._open_work_link_for_entry(task.entry_id)
+
+    def _link_tasks_to_work(self, tasks: list[CalendarEntry]) -> None:
+        """선택한 여러 문서에 동일한 업무를 한 번에 연결한다."""
+        ids = [t.entry_id for t in tasks if t.entry_id]
+        if not ids:
+            return
+        self._open_work_link_for_entry(ids[0], extra_entry_ids=ids[1:])
+
+    def _open_work_link_for_entry(
+        self,
+        entry_id: int,
+        extra_entry_ids: list[int] | None = None,
+    ) -> None:
+        """업무 선택 다이얼로그로 연결하고 저장, 업무 관리 쪽 목록도 갱신한다."""
+        from taskcalendar.work_link_dialog import WorkLinkSelectDialog
+
+        try:
+            initial = list(self.repository.list_linked_works_for_entry(entry_id))
+        except Exception:
+            initial = []
+
+        dlg = WorkLinkSelectDialog(
+            self,
+            self.repository,
+            initial_work_ids=initial,
+            palette=self.palette,
+            title=(
+                f"{len(extra_entry_ids) + 1}개 문서에 업무 연결"
+                if extra_entry_ids else "문서와 연결할 업무 선택"
+            ),
+        )
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        work_ids = list(dlg.selected_work_ids)
+        targets = [entry_id] + list(extra_entry_ids or [])
+        for eid in targets:
+            try:
+                self.repository.set_entry_work_links(eid, work_ids)
+            except Exception:
+                logger.warning("Failed to link entry to works", exc_info=True)
+        self.repository.save()
+
+        # 업무 관리 창이 열려 있으면 연결된 문서 목록을 갱신한다.
+        try:
+            mw = self.main_window
+            wm_dialog = getattr(mw, "_work_manager_dialog", None) if mw else None
+            if wm_dialog is not None and wm_dialog.isVisible():
+                for sheet in getattr(wm_dialog, "_all_sheets", []):
+                    if sheet.db_id in work_ids:
+                        wm_dialog._refresh_work_documents_list(sheet)
+        except Exception:
+            logger.debug("Failed to refresh work manager documents", exc_info=True)
+
+        if getattr(self, "main_window", None) is not None:
+            self.main_window.refresh()
 
     def _change_tasks_category(self, tasks: list[CalendarEntry], new_cat: str) -> None:
         """선택된 업무들의 분류를 일괄 변경 및 저장"""

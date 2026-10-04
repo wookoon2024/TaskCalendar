@@ -29,6 +29,7 @@ Thumbs.db
 
 # Release bundle
 TaskCalendar_*.zip
+나라수첩_*.zip
 chrome_extension.zip
 *.zip
 *.whl
