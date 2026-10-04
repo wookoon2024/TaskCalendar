@@ -51,6 +51,7 @@ from PySide6.QtGui import (
     QTextTableFormat,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QButtonGroup,
     QCheckBox,
@@ -82,6 +83,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTabBar,
+    QToolTip,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -89,12 +91,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taskcalendar.fonts import font_family_css, scale_px, ui_font_family
+from taskcalendar.fonts import font_family_css, make_ui_font_like, scale_px, ui_font_family
 from taskcalendar.paths import asset_path
 from taskcalendar.qt_styles import _shade, resolve_palette
 from taskcalendar.qt_rhwp_editor import RhwpEditorWidget
 from taskcalendar.rich_text_edit import RichTextEdit
-from taskcalendar.models import CalendarEntry
+from taskcalendar.models import CalendarEntry, EntryType, RecurrenceType
 from taskcalendar.storage import EncryptedRepository
 
 logger = logging.getLogger(__name__)
@@ -188,18 +190,32 @@ class FloatingToastOverlay(QFrame):
         QTimer.singleShot(duration_ms, self._start_fade_out)
 
     def _reposition(self) -> None:
-        if self.parent():
-            parent_rect = self.parent().rect()
-            x = (parent_rect.width() - self.width()) // 2
-            y = (parent_rect.height() - self.height()) // 2
-            self.move(x, y)
+        try:
+            p = self.parent()
+            if p and p.isWidgetType():
+                parent_rect = p.rect()
+                x = (parent_rect.width() - self.width()) // 2
+                y = (parent_rect.height() - self.height()) // 2
+                self.move(x, y)
+        except Exception:
+            pass
 
     def _start_fade_out(self) -> None:
-        self._anim.start()
+        try:
+            self._anim.start()
+        except Exception:
+            pass
 
 
 class CompactCategoryItemDelegate(QStyledItemDelegate):
-    """트리 항목(폴더 및 문서)의 텍스트 렌더링 델리게이트 (상단 '업무 분류' 헤더와 완벽히 동일한 Bold 12px Pretendard 적용)"""
+    """트리 항목(폴더 및 문서)의 텍스트 렌더링 델리게이트 (상단 '업무 분류' 헤더와 100% 동일한 QLabel 렌더링 적용)"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._lbl = QLabel()
+        self._lbl.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        self._lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        self._lbl.setContentsMargins(0, 0, 0, 0)
 
     def sizeHint(self, option, index):
         size = super().sizeHint(option, index)
@@ -210,21 +226,29 @@ class CompactCategoryItemDelegate(QStyledItemDelegate):
         self.initStyleOption(opt, index)
         view = opt.widget
         is_sel = bool(view and view.selectionModel() and view.selectionModel().isSelected(index))
+        is_hover = bool(opt.state & QStyle.State_MouseOver)
+        is_parent = not index.parent().isValid()
+        text = opt.text or ""
 
-        # 상단 '📁 업무 분류' 헤더와 완전히 동일한 Bold Pretendard 12px로 통일
-        opt.font.setFamily(ui_font_family())
-        opt.font.setPixelSize(12)
-        opt.font.setBold(True)
-
+        # 상단 '📁 업무 분류' 헤더(left_title)와 100% 동일한 QLabel 스타일 및 렌더링
+        weight = "bold" if is_parent else "normal"
         if is_sel:
-            opt.palette.setColor(QPalette.ColorRole.Text, QColor('#0284C7'))
-            opt.palette.setColor(QPalette.ColorRole.HighlightedText, QColor('#0284C7'))
-        elif opt.state & QStyle.State_MouseOver:
-            opt.palette.setColor(QPalette.ColorRole.Text, QColor('#0F172A'))
+            color = "#0284C7"
+        elif is_hover:
+            color = "#0F172A"
         else:
-            opt.palette.setColor(QPalette.ColorRole.Text, QColor('#1F2328'))
+            color = "#1F2328"
 
-        super().paint(painter, opt, index)
+        self._lbl.setText(text)
+        self._lbl.setStyleSheet(f"font-weight: {weight}; font-size: 12px; color: {color}; border: none; background: transparent;")
+
+        r = opt.rect.adjusted(2, 0, -2, 0)
+        self._lbl.resize(r.width(), r.height())
+
+        painter.save()
+        painter.translate(r.topLeft())
+        self._lbl.render(painter, QPoint(0, 0))
+        painter.restore()
 
 
 class CompactCategoryTree(QTreeWidget):
@@ -346,18 +370,20 @@ class CompactCategoryTree(QTreeWidget):
         drag.exec(Qt.DropAction.MoveAction)
 
     def dragEnterEvent(self, event):
-        super().dragEnterEvent(event)
         if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-taskcalendar-cat-internal"):
             event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
-        super().dragMoveEvent(event)
-        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
-        self._drop_target_item = self.itemAt(pos)
-        self._drop_pos = self.dropIndicatorPosition()
-        self.viewport().update()
         if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-taskcalendar-cat-internal"):
             event.acceptProposedAction()
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            self._drop_target_item = self.itemAt(pos)
+            self._drop_pos = self.dropIndicatorPosition()
+            self.viewport().update()
+        else:
+            super().dragMoveEvent(event)
 
     def dragLeaveEvent(self, event):
         self._drop_target_item = None
@@ -530,6 +556,27 @@ class CompactCategoryTree(QTreeWidget):
             self.blockSignals(False)
 
         self.orderChanged.emit()
+
+
+class WorkCategoryTreeContainer(QWidget):
+    """트리와 하단 탭을 완벽한 엑셀 시트형 일체감으로 결합하는 복합 컨테이너"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("workCategoryTreeContainer")
+        self.setStyleSheet("#workCategoryTreeContainer { background: transparent; border: none; }")
+        self.category_tree: QTreeWidget | None = None
+        self.cat_tab_scroll: QWidget | None = None
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        w = self.width()
+        h = self.height()
+        tab_h = 24
+        if self.category_tree and self.cat_tab_scroll:
+            self.category_tree.setGeometry(0, 0, w, max(10, h - tab_h + 1))
+            self.cat_tab_scroll.setGeometry(0, max(0, h - tab_h), w, tab_h)
+            self.cat_tab_scroll.raise_()
 
 
 class CompactAttachmentItemDelegate(QStyledItemDelegate):
@@ -938,10 +985,37 @@ def extract_document_content(file_path: Path | str) -> tuple[str, bytes | None]:
             return "", None
 
     # 4. 일반 텍스트 및 코드/데이터 파일 (.txt, .md, .csv, .json, .log, .py, .xml, .html 등)
+    if ext in (".html", ".htm"):
+        # 단일 번들 웹앱(수 MB 이상)인 경우 raw script/css/base64가 텍스트에 포함되지 않도록 정제
+        file_size = path.stat().st_size
+        if file_size > 500 * 1024: # 500KB 초과 대용량 HTML은 웹 애플리케이션으로 간주
+            return (
+                f"[웹 애플리케이션 / 대용량 HTML 파일: {path.name} ({file_size // 1024} KB)]\n"
+                f"본 파일은 대용량 웹 번들 파일로, 원본은 첨부파일 보관함에 안전하게 유지됩니다.",
+                None,
+            )
+        try:
+            from bs4 import BeautifulSoup
+            for enc in ("utf-8-sig", "utf-8", "cp949", "euc-kr"):
+                try:
+                    raw_html = path.read_text(encoding=enc)
+                    soup = BeautifulSoup(raw_html, "html.parser")
+                    for s in soup(["script", "style", "svg", "noscript"]):
+                        s.decompose()
+                    clean_text = soup.get_text(separator="\n", strip=True)
+                    return clean_text[:50000], None
+                except UnicodeDecodeError:
+                    continue
+        except Exception:
+            pass
+
     encodings = ("utf-8-sig", "utf-8", "cp949", "euc-kr", "utf-16")
     for enc in encodings:
         try:
             text = path.read_text(encoding=enc)
+            # 최대 100KB까지만 텍스트로 로드 (초대용량 덤프/로그 방어)
+            if len(text) > 100 * 1024:
+                text = text[:100 * 1024] + f"\n... [대용량 텍스트 파일: {len(text) // 1024}KB 중 100KB 미리보기 표시]"
             return text, None
         except UnicodeDecodeError:
             continue
@@ -1155,7 +1229,7 @@ class WorkDrmWarningDialog(QDialog):
         guide_layout.setContentsMargins(12, 10, 12, 10)
         guide_layout.setSpacing(6)
 
-        g_title = QLabel("💡 한글 프로그램에서는 열리는데 왜 K캘린더에서는 안 열리나요?")
+        g_title = QLabel("💡 한글 프로그램에서는 열리는데 왜 나라수첩에서는 안 열리나요?")
         g_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #92400E;")
         guide_layout.addWidget(g_title)
 
@@ -1180,7 +1254,7 @@ class WorkDrmWarningDialog(QDialog):
         sol_desc = QLabel(
             "1. <b>한글 프로그램</b>에서 해당 문서를 엽니다.<br>"
             "2. 본문 전체 선택(<b>Ctrl + A</b>) ➔ 복사(<b>Ctrl + C</b>)합니다.<br>"
-            "3. K캘린더 업무 편집기에 붙여넣기(<b>Ctrl + V</b>)하시면 표와 서식이 그대로 즉시 등록됩니다!<br>"
+            "3. 나라수첩 업무 편집기에 붙여넣기(<b>Ctrl + V</b>)하시면 표와 서식이 그대로 즉시 등록됩니다!<br>"
             "<span style='color: #B45309;'>(또는 사내 결재 시스템에서 '보안 해제(반출)' 승인 후 등록해 주세요.)</span>"
         )
         sol_desc.setTextFormat(Qt.TextFormat.RichText)
@@ -3005,6 +3079,185 @@ class WorkExportWizardDialog(QDialog):
                 pass
 
 
+class WorkDocSelectDialog(QDialog):
+    """현재 업무에 연결할 문서(Task)를 검색하고 다중 선택하는 대화상자"""
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        repository: EncryptedRepository,
+        initial_entry_ids: list[int] | None = None,
+        palette: dict[str, str] | None = None,
+        title: str = "연결할 관련 문서 선택",
+    ) -> None:
+        super().__init__(parent)
+        self.repository = repository
+        self.palette = palette or {}
+        self.selected_entry_ids: list[int] = list(initial_entry_ids or [])
+        self.setWindowTitle(title)
+        self.resize(520, 560)
+        self.setMinimumSize(420, 420)
+        bg = self.palette.get("bg", "#F8FAFC")
+        text = self.palette.get("text", "#1F2328")
+        self.setStyleSheet(f"QDialog {{ background-color: {bg}; color: {text}; font-family: {font_family_css()}; }}")
+
+        self._init_ui()
+        self._populate_task_list()
+
+    def _init_ui(self) -> None:
+        panel = self.palette.get("panel", "#FFFFFF")
+        panel_alt = self.palette.get("panel_alt", "#F1F5F9")
+        text = self.palette.get("text", "#1F2328")
+        line = self.palette.get("line", "#CBD5E1")
+        accent = self.palette.get("accent", "#2563EB")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        # 상단 검색창
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("🔍  문서 제목, 분류, 기안자, 내용 검색...")
+        self.search_input.setFixedHeight(30)
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-size: 12px;
+            }}
+            QLineEdit:focus {{
+                border-color: {accent};
+            }}
+        """)
+        self.search_input.textChanged.connect(self._filter_list)
+        layout.addWidget(self.search_input)
+
+        # 문서 목록 리스트 위젯 (체크박스)
+        self.doc_list = QListWidget()
+        self.doc_list.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 4px;
+                font-size: 12px;
+                outline: none;
+            }}
+            QListWidget::item {{
+                height: 30px;
+                padding: 2px 6px;
+                border-radius: 4px;
+            }}
+            QListWidget::item:hover {{
+                background-color: {panel_alt};
+            }}
+            QListWidget::item:selected {{
+                background-color: {panel_alt};
+                color: {text};
+            }}
+        """)
+        layout.addWidget(self.doc_list, 1)
+
+        # 빠른 선택 및 하단 액션 버튼
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(8)
+
+        btn_all = QPushButton("전체 선택")
+        btn_all.setFixedHeight(28)
+        btn_all.setStyleSheet(f"background-color: {panel_alt}; color: {text}; border: 1px solid {line}; border-radius: 6px; padding: 0 10px; font-size: 11px;")
+        btn_all.clicked.connect(lambda: self._set_all_checks(True))
+        bottom_row.addWidget(btn_all)
+
+        btn_none = QPushButton("선택 해제")
+        btn_none.setFixedHeight(28)
+        btn_none.setStyleSheet(f"background-color: {panel_alt}; color: {text}; border: 1px solid {line}; border-radius: 6px; padding: 0 10px; font-size: 11px;")
+        btn_none.clicked.connect(lambda: self._set_all_checks(False))
+        bottom_row.addWidget(btn_none)
+
+        bottom_row.addStretch(1)
+
+        btn_cancel = QPushButton("취소")
+        btn_cancel.setFixedHeight(28)
+        btn_cancel.setStyleSheet(f"background-color: {panel}; color: {text}; border: 1px solid {line}; border-radius: 6px; padding: 0 14px; font-size: 12px;")
+        btn_cancel.clicked.connect(self.reject)
+        bottom_row.addWidget(btn_cancel)
+
+        btn_ok = QPushButton("연결 확인")
+        btn_ok.setFixedHeight(28)
+        btn_ok.setStyleSheet(f"background-color: {accent}; color: #FFFFFF; border: 1px solid {accent}; border-radius: 6px; padding: 0 16px; font-size: 12px; font-weight: bold;")
+        btn_ok.clicked.connect(self._on_accept)
+        bottom_row.addWidget(btn_ok)
+
+        layout.addLayout(bottom_row)
+
+    def _populate_task_list(self) -> None:
+        self.doc_list.clear()
+        if not self.repository:
+            return
+        from taskcalendar.models import EntryType
+        all_entries = self.repository.list_all_entries()
+        tasks = [e for e in all_entries if e.entry_type == EntryType.TASK]
+        # 최신 생성순 또는 날짜순 정렬
+        tasks.sort(key=lambda t: (t.day or t.start_date or (t.created_at.date() if t.created_at else date.min)), reverse=True)
+
+        for task in tasks:
+            cat = task.memo_group or "일반"
+            author = f" [{task.assignee}]" if task.assignee else ""
+            d_str = ""
+            if task.day or task.start_date:
+                tgt_d = task.day or task.start_date
+                d_str = f" ({tgt_d.strftime('%m.%d')})"
+
+            display_txt = f"[{cat}] {task.title}{author}{d_str}"
+            item = QListWidgetItem(f"📄 {display_txt}")
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable)
+            is_checked = task.entry_id in self.selected_entry_ids
+            item.setCheckState(Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, task.entry_id)
+            item.setData(Qt.ItemDataRole.UserRole + 1, task)
+            tip = f"제목: {task.title}\n분류: {cat}\n기안자: {task.assignee or '-'}\n일자: {task.day or task.start_date or '-'}\n내용: {task.description or '(없음)'}"
+            item.setToolTip(tip)
+            self.doc_list.addItem(item)
+
+    def _filter_list(self, text: str) -> None:
+        q = text.strip().lower()
+        for i in range(self.doc_list.count()):
+            item = self.doc_list.item(i)
+            task = item.data(Qt.ItemDataRole.UserRole + 1)
+            if not task:
+                continue
+            matched = (
+                not q
+                or (q in (task.title or "").lower())
+                or (q in (task.description or "").lower())
+                or (q in (task.assignee or "").lower())
+                or (q in (task.memo_group or "").lower())
+            )
+            item.setHidden(not matched)
+
+    def _set_all_checks(self, checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        for i in range(self.doc_list.count()):
+            item = self.doc_list.item(i)
+            if not item.isHidden():
+                item.setCheckState(state)
+
+    def _on_accept(self) -> None:
+        self.selected_entry_ids = []
+        for i in range(self.doc_list.count()):
+            item = self.doc_list.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                eid = item.data(Qt.ItemDataRole.UserRole)
+                if eid is not None:
+                    self.selected_entry_ids.append(int(eid))
+        self.accept()
+
+
 class _CleanTreeProxyStyle(QProxyStyle):
     """트리 뷰의 OS 기본 포커스 사각 테두리 및 인디케이터 잔상을 깔끔하게 제거하고 드롭 인디케이터를 세련되게 렌더링하는 프록시 스타일"""
 
@@ -3129,7 +3382,7 @@ class WorkManagerDialog(QDialog):
 
         self.setWindowTitle("업무 관리 및 인수인계 편람")
         self.setWindowFlags(Qt.Window | Qt.WindowMinMaxButtonsHint | Qt.WindowCloseButtonHint)
-        self.resize(1180, 740)
+        self.resize(1260, 780)
         self.setMinimumSize(880, 540)
         self.setAttribute(Qt.WA_StyledBackground, True)
 
@@ -3145,6 +3398,13 @@ class WorkManagerDialog(QDialog):
         self._expanded_attachment_folders: set[str] = set()
         self._collapsed_attachment_folders: set[str] = set()
 
+        # 업무 분류 하단 탭 관련
+        self._category_tabs: list[dict] = []
+        self._active_category_tab_id: int = 1
+        self.cat_tab_scroll = None
+        self.cat_tab_container = None
+        self.cat_tab_layout = None
+
         self._load_data_from_db()
         self._init_ui()
         # 처음에 문서를 아무것도 띄우지 않음 (빈 상태 초기화)
@@ -3157,6 +3417,47 @@ class WorkManagerDialog(QDialog):
         """외부 및 하위 호환용: 현재 열려있는 시트 목록 반환"""
         return self._open_sheets
 
+    def _load_category_tabs(self) -> None:
+        """업무 분류 하단 탭 목록 및 활성 탭 로드"""
+        self._category_tabs = []
+        if self.repository:
+            import json
+            raw_tabs = self.repository.get_setting("work_category_tabs", "")
+            if raw_tabs:
+                try:
+                    tabs_data = json.loads(raw_tabs)
+                    if isinstance(tabs_data, list) and tabs_data:
+                        self._category_tabs = [
+                            {"id": int(t.get("id", 1)), "name": str(t.get("name", "1"))}
+                            for t in tabs_data if isinstance(t, dict) and "id" in t
+                        ]
+                except Exception as e:
+                    logger.warning(f"Failed to parse work_category_tabs: {e}")
+
+            raw_active = self.repository.get_setting("work_active_category_tab_id", "1")
+            try:
+                self._active_category_tab_id = int(raw_active)
+            except Exception:
+                self._active_category_tab_id = 1
+
+        if not self._category_tabs:
+            self._category_tabs = [{"id": 1, "name": "1"}]
+            self._active_category_tab_id = 1
+
+        tab_ids = [t["id"] for t in self._category_tabs]
+        if self._active_category_tab_id not in tab_ids:
+            self._active_category_tab_id = tab_ids[0]
+
+    def _save_category_tabs(self) -> None:
+        """업무 분류 하단 탭 목록 및 활성 탭 저장"""
+        if self.repository:
+            import json
+            try:
+                self.repository.set_setting("work_category_tabs", json.dumps(self._category_tabs, ensure_ascii=False))
+                self.repository.set_setting("work_active_category_tab_id", str(self._active_category_tab_id))
+            except Exception as e:
+                logger.warning(f"Failed to save work_category_tabs: {e}")
+
     def _load_categories_from_db(self) -> None:
         """카테고리 목록(계층 정보 포함) 동기화"""
         if self.repository:
@@ -3168,6 +3469,7 @@ class WorkManagerDialog(QDialog):
 
     def _load_data_from_db(self) -> None:
         """SQLite DB에서 업무 분류 및 시트 데이터 로드"""
+        self._load_category_tabs()
         if not self.repository:
             self._load_categories_from_db()
             self._all_sheets = []
@@ -3206,6 +3508,36 @@ class WorkManagerDialog(QDialog):
             )
             self._all_sheets.append(sheet)
 
+    def _tooltip_css(self) -> str:
+        is_dark = self.palette.get("bg", "").lower() in ("#0a0c10", "#171b22") or self.palette.get("text", "").lower() == "#f3f6fb"
+        tip_bg = "#1E293B" if is_dark else "#FFFFFF"
+        tip_fg = "#F8FAFC" if is_dark else "#0F172A"
+        tip_border = "#475569" if is_dark else "#CBD5E1"
+        return f"""
+            QToolTip {{
+                background-color: {tip_bg};
+                color: {tip_fg};
+                border: 1px solid {tip_border};
+                border-radius: 6px;
+                padding: 5px 9px;
+                font-family: {font_family_css()};
+                font-size: 12px;
+                font-weight: 500;
+            }}
+        """
+
+    def _apply_tooltip_palette(self) -> None:
+        palette = QToolTip.palette()
+        is_dark = self.palette.get("bg", "").lower() in ("#0a0c10", "#171b22") or self.palette.get("text", "").lower() == "#f3f6fb"
+        bg_col = QColor("#1E293B" if is_dark else "#FFFFFF")
+        text_col = QColor("#F8FAFC" if is_dark else "#0F172A")
+        for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+            palette.setColor(group, QPalette.ToolTipBase, bg_col)
+            palette.setColor(group, QPalette.ToolTipText, text_col)
+            palette.setColor(group, QPalette.Window, bg_col)
+            palette.setColor(group, QPalette.WindowText, text_col)
+        QToolTip.setPalette(palette)
+
     def _init_sample_data(self) -> None:
         """기본 샘플 업무 시트 구성 (빈 상태 유지)"""
         self._all_sheets = []
@@ -3219,6 +3551,11 @@ class WorkManagerDialog(QDialog):
         accent_soft = self.palette.get("accent_soft", "#EFF6FF")
         btn_text = self.palette.get("button_text", "#FFFFFF")
         muted = self.palette.get("text_muted", "#64748B")
+
+        is_dark = self.palette.get("bg", "").lower() in ("#0a0c10", "#171b22") or self.palette.get("text", "").lower() == "#f3f6fb"
+        tip_bg = "#1E293B" if is_dark else "#FFFFFF"
+        tip_fg = "#F8FAFC" if is_dark else "#0F172A"
+        tip_border = "#475569" if is_dark else "#CBD5E1"
 
         self.setStyleSheet(f"""
             QDialog {{
@@ -3234,11 +3571,23 @@ class WorkManagerDialog(QDialog):
                 background-color: {accent};
                 width: 3px;
             }}
+            QToolTip {{
+                background-color: {tip_bg};
+                color: {tip_fg};
+                border: 1px solid {tip_border};
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-family: {font_family_css()};
+                font-size: 12px;
+                font-weight: 500;
+            }}
         """)
+        self._apply_tooltip_palette()
 
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(12, 10, 12, 8)
-        main_layout.setSpacing(0)
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(12, 10, 12, 8)
+        self.main_layout.setSpacing(0)
+        main_layout = self.main_layout
 
         # =========================================================================
         # 2. 탭 바: 검색창 바로 아래, 본문(스플리터) 상단에 딱 붙여 배치
@@ -3330,26 +3679,68 @@ class WorkManagerDialog(QDialog):
         self.sheet_tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.sheet_tab_bar.customContextMenuRequested.connect(self._on_tab_context_menu)
         bottom_layout.addWidget(self.sheet_tab_bar, 0, alignment=Qt.AlignmentFlag.AlignBottom)
+
+        # 탭 영역과 우측 도구 영역 사이에 여백을 두고, [전체화면][템플릿] 묶음을
+        # 좌측으로 당긴 뒤 [저장(S)] 을 창 우측 끝에 붙인다.
         bottom_layout.addStretch(1)
 
-        # 탭 우측 끝 도구: [업무 템플릿] [저장]
-        self.btn_template = QPushButton("업무 템플릿")
-        self.btn_template.setFixedHeight(26)
+        # [전체화면][템플릿] 만 묶어서 왼쪽으로 당겨, 좌측 시작점을 우측 첨부파일
+        # 카드 내부 시작점(테두리 1px + 여백 8px = x=9)에 맞춘다.
+        # [저장(S)] 은 원래 우측 끝 위치를 유지한다.
+        self._right_tools_group = QWidget()
+        self._right_tools_group.setObjectName("wmRightToolsGroup")
+        self._right_tools_group.setFixedHeight(32)
+        self._right_tools_group.setStyleSheet(
+            "#wmRightToolsGroup { background: transparent; border: none; }")
+        _rtg = QHBoxLayout(self._right_tools_group)
+        _rtg.setContentsMargins(0, 0, 0, 0)
+        _rtg.setSpacing(6)
+
+        # 탭 우측 끝 도구: [전체화면] [이미지 템플릿] [업무 템플릿] [저장(S)] (세로 크기 및 글꼴 크기 통일)
+        self.btn_fullscreen = QPushButton("전체화면")
+        self.btn_fullscreen.setFixedHeight(30)
+        self.btn_fullscreen.setAutoDefault(False)
+        self.btn_fullscreen.setDefault(False)
+        self.btn_fullscreen.setToolTip("에디터 전체화면 토글 (단축키: Ctrl+Enter, F12)")
+        self.btn_fullscreen.setStyleSheet(self._toolbar_sub_btn_style())
+        self.btn_fullscreen.clicked.connect(self._toggle_editor_fullscreen)
+        _rtg.addWidget(self.btn_fullscreen, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        self.btn_template = QPushButton("템플릿")
+        self.btn_template.setFixedHeight(30)
         self.btn_template.setAutoDefault(False)
         self.btn_template.setDefault(False)
-        self.btn_template.setToolTip("공무원 필수 업무 서식 및 템플릿 불러오기")
-        self.btn_template.setStyleSheet(self._sub_btn_style())
-        self.btn_template.clicked.connect(self._show_template_menu)
-        bottom_layout.addWidget(self.btn_template, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+        self.btn_template.setToolTip("템플릿 (이미지 템플릿, 업무 템플릿)")
+        self.btn_template.setStyleSheet(self._toolbar_sub_btn_style())
+        self.btn_template.clicked.connect(self._show_template_dropdown_menu)
+        _rtg.addWidget(self.btn_template, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
 
-        self.btn_save_work = QPushButton("저장")
-        self.btn_save_work.setFixedHeight(26)
+        # [전체화면][템플릿] 묶음만 왼쪽으로 당겨 좌측 시작점을
+        # 우측 첨부파일 카드 내부 시작점(테두리 1px + 여백 8px = x=9)에 맞춘다.
+        # [저장(S)] 은 뒤쪽에서 원래 우측 끝 위치를 그대로 유지한다.
+        bottom_layout.addWidget(self._right_tools_group, 0,
+                                alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        # [전체화면][템플릿] 묶음과 [저장(S)] 사이의 고정 여백.
+        # 이 여백 덕분에 [저장(S)] 은 우측 끝에 붙어 원래 자리를 유지하고,
+        # 앞쪽 [전체화면][템플릿] 만 77px 왼쪽으로 당겨진다.
+        self._right_tools_mid_spacer = QWidget()
+        self._right_tools_mid_spacer.setFixedWidth(77)
+        self._right_tools_mid_spacer.setFixedHeight(32)
+        self._right_tools_mid_spacer.setStyleSheet("background: transparent; border: none;")
+        bottom_layout.addWidget(self._right_tools_mid_spacer, 0,
+                                alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        self.btn_save_work = QPushButton("저장(S)")
+        self.btn_save_work.setFixedHeight(30)
         self.btn_save_work.setAutoDefault(False)
         self.btn_save_work.setDefault(False)
         self.btn_save_work.setToolTip("현재 업무 문서 및 변경사항 저장 (Ctrl+S)")
         self.btn_save_work.setShortcut(QKeySequence("Ctrl+S"))
         self.btn_save_work.setStyleSheet(self._primary_btn_style())
         self.btn_save_work.clicked.connect(self._on_save_button_clicked)
+        self._shortcut_save_alt = QShortcut(QKeySequence("Alt+S"), self)
+        self._shortcut_save_alt.activated.connect(self._on_save_button_clicked)
         bottom_layout.addWidget(self.btn_save_work, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
 
         main_layout.addWidget(self.bottom_bar)
@@ -3358,18 +3749,31 @@ class WorkManagerDialog(QDialog):
         self._shortcut_search = QShortcut(QKeySequence("Ctrl+F"), self)
         self._shortcut_search.activated.connect(self._open_search_bar)
 
+        # 에디터 전체화면 단축키 (Ctrl+Enter, F12)
+        self._shortcut_fullscreen_return = QShortcut(QKeySequence("Ctrl+Return"), self)
+        self._shortcut_fullscreen_return.setContext(Qt.ShortcutContext.WindowShortcut)
+        self._shortcut_fullscreen_return.activated.connect(self._toggle_editor_fullscreen)
+
+        self._shortcut_fullscreen_enter = QShortcut(QKeySequence("Ctrl+Enter"), self)
+        self._shortcut_fullscreen_enter.setContext(Qt.ShortcutContext.WindowShortcut)
+        self._shortcut_fullscreen_enter.activated.connect(self._toggle_editor_fullscreen)
+
+        self._shortcut_fullscreen_f12 = QShortcut(QKeySequence("F12"), self)
+        self._shortcut_fullscreen_f12.setContext(Qt.ShortcutContext.WindowShortcut)
+        self._shortcut_fullscreen_f12.activated.connect(self._toggle_editor_fullscreen)
+
         # =========================================================================
-        # 3. 중간: 좌 / 중 / 우 3분할 스플리터
+        # 3. 중간: 좌 / 중 / 우 3분할 스플리터 (초슬림 밀착형)
         # =========================================================================
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
-        self.splitter.setHandleWidth(4)
+        self.splitter.setHandleWidth(2)
 
         # -------------------------------------------------------------------------
         # [중간 - 좌측 컨테이너]: 업무 분류 트리 (열림) + 슬림 바 (닫힘)
         # -------------------------------------------------------------------------
         self._left_expanded = True
-        self._last_left_width = 220
+        self._last_left_width = 320
 
         self.left_container = QWidget()
         self.left_container.setMinimumWidth(130)
@@ -3377,28 +3781,30 @@ class WorkManagerDialog(QDialog):
         left_container_layout.setContentsMargins(0, 0, 0, 0)
         left_container_layout.setSpacing(0)
 
-        # 1) 좌측 패널 (펼침 상태)
-        self.left_panel = QFrame()
-        self.left_panel.setStyleSheet(f"""
+        # 1) 좌측 패널 (펼침 상태) - 카드 박스와 슬림 접기 버튼 밀착 배치
+        self.left_panel = QWidget()
+        self.left_panel.setObjectName("wmLeftPanel")
+        self.left_panel.setStyleSheet("#wmLeftPanel { background: transparent; border: none; }")
+        left_h_layout = QHBoxLayout(self.left_panel)
+        left_h_layout.setContentsMargins(0, 0, 0, 0)
+        left_h_layout.setSpacing(1)
+
+        # 좌측 패널 본체 카드 박스
+        self.left_card = QFrame()
+        self.left_card.setStyleSheet(f"""
             QFrame {{
                 background-color: {panel};
                 border: 1px solid {line};
                 border-radius: 8px;
             }}
         """)
-        left_h_layout = QHBoxLayout(self.left_panel)
-        left_h_layout.setContentsMargins(4, 6, 2, 6)
-        left_h_layout.setSpacing(2)
-
-        # 좌측 패널 본체
-        left_main_widget = QWidget()
-        left_layout = QVBoxLayout(left_main_widget)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout = QVBoxLayout(self.left_card)
+        left_layout.setContentsMargins(6, 6, 6, 6)
         left_layout.setSpacing(4)
 
         left_header = QHBoxLayout()
         left_header.setContentsMargins(2, 0, 2, 0)
-        left_title = QLabel("📁 업무 분류")
+        left_title = QLabel("업무 분류")
         left_title.setStyleSheet(f"font-weight: bold; font-size: 12px; color: {text}; border: none;")
         left_header.addWidget(left_title)
         left_header.addStretch(1)
@@ -3418,7 +3824,7 @@ class WorkManagerDialog(QDialog):
         self.btn_add_cat.clicked.connect(self._on_add_category)
         left_header.addWidget(self.btn_add_cat)
 
-        self.btn_reg_cal = QPushButton("📅 일정등록")
+        self.btn_reg_cal = QPushButton("일정등록")
         self.btn_reg_cal.setFixedHeight(22)
         self.btn_reg_cal.setStyleSheet(self._sub_btn_style())
         self.btn_reg_cal.setToolTip("선택한 업무 또는 폴더를 캘린더에 일정으로 등록합니다.")
@@ -3467,8 +3873,13 @@ class WorkManagerDialog(QDialog):
 
         left_layout.addLayout(search_layout)
 
-        self.category_tree = CompactCategoryTree()
-        self.category_tree.setFont(QFont(ui_font_family(), 9))
+        # 트리와 하단 탭을 간격 없이 하나의 복합 유닛으로 묶는 컨테이너 (엑셀 시트 탭 일체형 디자인)
+        tree_tab_container = WorkCategoryTreeContainer()
+
+        self.category_tree = CompactCategoryTree(tree_tab_container)
+        # 델리게이트가 픽셀사이즈/굵기를 직접 지정하므로, 여기서는
+        # 전역 렌더링 설정(안티에일리어싱·힌팅)만 물려받은 폰트를 쓴다.
+        self.category_tree.setFont(make_ui_font_like(9))
         self.category_tree.setItemDelegate(CompactCategoryItemDelegate(self.category_tree))
         self.category_tree.setHeaderHidden(True)
         self.category_tree.setIndentation(14)
@@ -3480,7 +3891,7 @@ class WorkManagerDialog(QDialog):
                 font-family: {font_family_css()};
                 font-size: 12px;
                 border: 1px solid {line};
-                border-radius: 4px;
+                border-radius: 6px;
                 background-color: {panel_alt};
                 color: {text};
                 padding: 2px 2px;
@@ -3488,6 +3899,7 @@ class WorkManagerDialog(QDialog):
             }}
             QTreeWidget::item {{
                 font-family: {font_family_css()};
+                font-size: 12px;
                 height: 24px;
                 padding: 0px 4px;
                 margin: 1px 1px;
@@ -3502,6 +3914,7 @@ class WorkManagerDialog(QDialog):
                 height: 2px;
                 border: none;
             }}
+            {self._tooltip_css()}
         """)
         self.category_tree.itemClicked.connect(self._on_tree_item_clicked)
         self.category_tree.itemDoubleClicked.connect(self._on_tree_item_double_clicked)
@@ -3511,7 +3924,24 @@ class WorkManagerDialog(QDialog):
         self.category_tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self.category_tree.orderChanged.connect(self._on_tree_order_changed)
         self.category_tree.filesDropped.connect(self._on_tree_files_dropped)
-        left_layout.addWidget(self.category_tree, 1)
+
+        # 업무 분류 하단 탭 바 (1 | 2 | +) - 트리 하단선에 직결되는 엑셀 시트 탭 바
+        self.cat_tab_scroll = QWidget(tree_tab_container)
+        self.cat_tab_scroll.setObjectName("wmCatTabScroll")
+        self.cat_tab_scroll.setFixedHeight(24)
+        self.cat_tab_scroll.setStyleSheet("#wmCatTabScroll { background: transparent; border: none; }")
+
+        self.cat_tab_layout = QHBoxLayout(self.cat_tab_scroll)
+        self.cat_tab_layout.setContentsMargins(10, 0, 10, 0)
+        self.cat_tab_layout.setSpacing(3)
+        self.cat_tab_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+
+        tree_tab_container.category_tree = self.category_tree
+        tree_tab_container.cat_tab_scroll = self.cat_tab_scroll
+
+        left_layout.addWidget(tree_tab_container, 1)
+
+        self._render_category_tab_bar()
 
         # 업무 분류 하단: [불러오기] [내보내기] 버튼 2개 배치
         left_btn_row = QHBoxLayout()
@@ -3537,7 +3967,7 @@ class WorkManagerDialog(QDialog):
         left_btn_row.addWidget(self.btn_export, 1)
 
         left_layout.addLayout(left_btn_row)
-        left_h_layout.addWidget(left_main_widget, 1)
+        left_h_layout.addWidget(self.left_card, 1)
 
         # 좌측 패널 우측 경계면 - 위아래 중간에 위치한 [◀] 버튼 거터
         left_gutter = QWidget()
@@ -3548,7 +3978,7 @@ class WorkManagerDialog(QDialog):
 
         self.btn_collapse_left = QPushButton("◀")
         self.btn_collapse_left.setToolTip("업무 분류 패널 접기 (◀)")
-        self.btn_collapse_left.setFixedSize(16, 44)
+        self.btn_collapse_left.setFixedSize(11, 36)
         self.btn_collapse_left.setStyleSheet(self._gutter_arrow_style())
         self.btn_collapse_left.clicked.connect(self._collapse_left_panel)
         left_gutter_layout.addWidget(self.btn_collapse_left)
@@ -3560,14 +3990,14 @@ class WorkManagerDialog(QDialog):
 
         # 2) 좌측 슬림 바 (접힘 상태) - 위아래 중간에 위치한 [▶] 버튼
         self.left_collapsed_bar = QFrame()
-        self.left_collapsed_bar.setFixedWidth(24)
+        self.left_collapsed_bar.setFixedWidth(14)
         self.left_collapsed_bar.setCursor(Qt.CursorShape.PointingHandCursor)
         self.left_collapsed_bar.setToolTip("클릭하여 업무 분류 패널 펼치기 (▶)")
         self.left_collapsed_bar.setStyleSheet(f"""
             QFrame {{
                 background-color: {panel};
                 border: 1px solid {line};
-                border-radius: 6px;
+                border-radius: 4px;
             }}
             QFrame:hover {{
                 border-color: {accent};
@@ -3575,13 +4005,13 @@ class WorkManagerDialog(QDialog):
             }}
         """)
         left_col_layout = QVBoxLayout(self.left_collapsed_bar)
-        left_col_layout.setContentsMargins(3, 8, 3, 8)
+        left_col_layout.setContentsMargins(1, 4, 1, 4)
         left_col_layout.setSpacing(0)
         left_col_layout.addStretch(1)
 
         btn_expand_left = QPushButton("▶")
         btn_expand_left.setToolTip("업무 분류 패널 펼치기 (▶)")
-        btn_expand_left.setFixedSize(16, 44)
+        btn_expand_left.setFixedSize(11, 36)
         btn_expand_left.setStyleSheet(self._gutter_arrow_style())
         btn_expand_left.clicked.connect(self._expand_left_panel)
         left_col_layout.addWidget(btn_expand_left, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -3674,7 +4104,7 @@ class WorkManagerDialog(QDialog):
         # [중간 - 우측 컨테이너]: 첨부파일 관리 (열림) + 슬림 바 (닫힘)
         # -------------------------------------------------------------------------
         self._right_expanded = True
-        self._last_right_width = 220
+        self._last_right_width = 320
 
         self.right_container = QWidget()
         self.right_container.setMinimumWidth(130)
@@ -3684,14 +4114,14 @@ class WorkManagerDialog(QDialog):
 
         # 1) 우측 슬림 바 (접힘 상태) - 위아래 중간에 위치한 [◀] 버튼
         self.right_collapsed_bar = QFrame()
-        self.right_collapsed_bar.setFixedWidth(24)
+        self.right_collapsed_bar.setFixedWidth(14)
         self.right_collapsed_bar.setCursor(Qt.CursorShape.PointingHandCursor)
         self.right_collapsed_bar.setToolTip("클릭하여 첨부파일 패널 펼치기 (◀)")
         self.right_collapsed_bar.setStyleSheet(f"""
             QFrame {{
                 background-color: {panel};
                 border: 1px solid {line};
-                border-radius: 6px;
+                border-radius: 4px;
             }}
             QFrame:hover {{
                 border-color: {accent};
@@ -3699,13 +4129,13 @@ class WorkManagerDialog(QDialog):
             }}
         """)
         right_col_layout = QVBoxLayout(self.right_collapsed_bar)
-        right_col_layout.setContentsMargins(3, 8, 3, 8)
+        right_col_layout.setContentsMargins(1, 4, 1, 4)
         right_col_layout.setSpacing(0)
         right_col_layout.addStretch(1)
 
         btn_expand_right = QPushButton("◀")
         btn_expand_right.setToolTip("첨부파일 패널 펼치기 (◀)")
-        btn_expand_right.setFixedSize(16, 44)
+        btn_expand_right.setFixedSize(11, 36)
         btn_expand_right.setStyleSheet(self._gutter_arrow_style())
         btn_expand_right.clicked.connect(self._expand_right_panel)
         right_col_layout.addWidget(btn_expand_right, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -3716,12 +4146,13 @@ class WorkManagerDialog(QDialog):
         self.right_collapsed_bar.hide()
         right_container_layout.addWidget(self.right_collapsed_bar)
 
-        # 2) 우측 패널 (펼침 상태) - 투명 컨테이너로 감싸 독립된 2개의 카드 박스가 시각적으로 분리되도록 구성
+        # 2) 우측 패널 (펼침 상태) - 카드 박스와 슬림 접기 버튼 밀착 배치
         self.right_panel = QWidget()
-        self.right_panel.setStyleSheet("background: transparent; border: none;")
+        self.right_panel.setObjectName("wmRightPanel")
+        self.right_panel.setStyleSheet("#wmRightPanel { background: transparent; border: none; }")
         right_h_layout = QHBoxLayout(self.right_panel)
-        right_h_layout.setContentsMargins(2, 0, 0, 0)
-        right_h_layout.setSpacing(4)
+        right_h_layout.setContentsMargins(0, 0, 0, 0)
+        right_h_layout.setSpacing(1)
 
         # 우측 패널 좌측 경계면 - 위아래 중간에 위치한 [▶] 버튼 거터
         right_gutter = QWidget()
@@ -3732,7 +4163,7 @@ class WorkManagerDialog(QDialog):
 
         self.btn_collapse_right = QPushButton("▶")
         self.btn_collapse_right.setToolTip("첨부파일 패널 접기 (▶)")
-        self.btn_collapse_right.setFixedSize(16, 44)
+        self.btn_collapse_right.setFixedSize(11, 36)
         self.btn_collapse_right.setStyleSheet(self._gutter_arrow_style())
         self.btn_collapse_right.clicked.connect(self._collapse_right_panel)
         right_gutter_layout.addWidget(self.btn_collapse_right)
@@ -3824,6 +4255,7 @@ class WorkManagerDialog(QDialog):
                 border: none;
                 outline: none;
             }}
+            {self._tooltip_css()}
         """)
         self.file_list.itemClicked.connect(self._on_attachment_item_clicked)
         self.file_list.itemDoubleClicked.connect(self._on_attachment_double_clicked)
@@ -3853,7 +4285,7 @@ class WorkManagerDialog(QDialog):
         self.right_v_splitter.addWidget(self.attach_card)
 
         # -------------------------------------------------------------
-        # 2) 하단: 관련 일정 독립 카드 박스
+        # 2) 하단: 관련 항목(일정 / 문서) 탭 카드 박스
         # -------------------------------------------------------------
         self.schedule_card = QFrame()
         self.schedule_card.setStyleSheet(f"""
@@ -3867,26 +4299,44 @@ class WorkManagerDialog(QDialog):
         schedule_layout.setContentsMargins(8, 8, 8, 8)
         schedule_layout.setSpacing(6)
 
+        # 상단 헤더: [📅 관련 일정 (0)] [📄 관련 문서 (0)] 탭 토글 + 우측 [+ 추가] 버튼
         sched_header = QHBoxLayout()
-        self.sched_title = QLabel("📅 관련 일정 (0)")
-        self.sched_title.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {text}; border: none;")
-        sched_header.addWidget(self.sched_title)
+        sched_header.setSpacing(4)
+
+        self._active_related_tab = 0  # 0: 일정, 1: 문서
+
+        self.btn_tab_related_sched = QPushButton("일정 (0)")
+        self.btn_tab_related_sched.setFixedHeight(22)
+        self.btn_tab_related_sched.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_tab_related_sched.clicked.connect(lambda: self._set_related_tab(0))
+        sched_header.addWidget(self.btn_tab_related_sched)
+
+        self.btn_tab_related_doc = QPushButton("문서 (0)")
+        self.btn_tab_related_doc.setFixedHeight(22)
+        self.btn_tab_related_doc.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_tab_related_doc.clicked.connect(lambda: self._set_related_tab(1))
+        sched_header.addWidget(self.btn_tab_related_doc)
+
         sched_header.addStretch(1)
 
-        self.btn_add_sched = QPushButton("+ 일정")
-        self.btn_add_sched.setFixedHeight(22)
-        self.btn_add_sched.setStyleSheet(self._sub_btn_style())
-        self.btn_add_sched.clicked.connect(self._on_add_work_schedule_clicked)
-        sched_header.addWidget(self.btn_add_sched)
+        # 동적 추가 버튼 (+ 일정 <-> + 문서)
+        self.btn_add_related = QPushButton("+ 일정")
+        self.btn_add_related.setFixedHeight(22)
+        self.btn_add_related.setStyleSheet(self._sub_btn_style())
+        self.btn_add_related.clicked.connect(self._on_add_related_clicked)
+        sched_header.addWidget(self.btn_add_related)
         schedule_layout.addLayout(sched_header)
 
-        # 1줄씩 목록식으로 표시하는 일정 목록 위젯
+        # QStackedWidget을 통해 관련 일정 리스트와 관련 문서 리스트 적재
+        self.related_stack = QStackedWidget()
+
+        # [페이지 0] 관련 일정 목록
         self.work_schedule_list = QListWidget()
         self.work_schedule_list.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.work_schedule_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.work_schedule_list.customContextMenuRequested.connect(self._on_schedule_context_menu)
         self.work_schedule_list.itemDoubleClicked.connect(self._on_schedule_item_double_clicked)
-        self.work_schedule_list.setStyleSheet(f"""
+        list_style = f"""
             QListWidget {{
                 border: 1px solid {line};
                 border-radius: 4px;
@@ -3914,32 +4364,46 @@ class WorkManagerDialog(QDialog):
                 border: none;
                 outline: none;
             }}
-        """)
-        schedule_layout.addWidget(self.work_schedule_list, 1)
+            {self._tooltip_css()}
+        """
+        self.work_schedule_list.setStyleSheet(list_style)
+        self.related_stack.addWidget(self.work_schedule_list)
 
-        # 일정 액션 버튼 (이동, 수정, 삭제)
+        # [페이지 1] 관련 문서 목록
+        self.work_doc_list = QListWidget()
+        self.work_doc_list.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.work_doc_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.work_doc_list.customContextMenuRequested.connect(self._on_doc_context_menu)
+        self.work_doc_list.itemDoubleClicked.connect(self._on_doc_item_double_clicked)
+        self.work_doc_list.setStyleSheet(list_style)
+        self.related_stack.addWidget(self.work_doc_list)
+
+        schedule_layout.addWidget(self.related_stack, 1)
+
+        # 하단 액션 버튼 (이동, 수정, 삭제 / 연결 해제)
         sched_btn_row = QHBoxLayout()
         sched_btn_row.setSpacing(6)
 
-        self.btn_goto_sched = QPushButton("이동")
-        self.btn_goto_sched.setFixedHeight(24)
-        self.btn_goto_sched.setStyleSheet(self._sub_btn_style())
-        self.btn_goto_sched.clicked.connect(self._on_goto_calendar_clicked)
-        sched_btn_row.addWidget(self.btn_goto_sched)
+        self.btn_goto_related = QPushButton("이동")
+        self.btn_goto_related.setFixedHeight(24)
+        self.btn_goto_related.setStyleSheet(self._sub_btn_style())
+        self.btn_goto_related.clicked.connect(self._on_goto_related_clicked)
+        sched_btn_row.addWidget(self.btn_goto_related)
 
-        self.btn_edit_sched = QPushButton("수정")
-        self.btn_edit_sched.setFixedHeight(24)
-        self.btn_edit_sched.setStyleSheet(self._sub_btn_style())
-        self.btn_edit_sched.clicked.connect(self._on_edit_work_schedule_clicked)
-        sched_btn_row.addWidget(self.btn_edit_sched)
+        self.btn_edit_related = QPushButton("수정")
+        self.btn_edit_related.setFixedHeight(24)
+        self.btn_edit_related.setStyleSheet(self._sub_btn_style())
+        self.btn_edit_related.clicked.connect(self._on_edit_related_clicked)
+        sched_btn_row.addWidget(self.btn_edit_related)
 
-        self.btn_delete_sched = QPushButton("삭제")
-        self.btn_delete_sched.setFixedHeight(24)
-        self.btn_delete_sched.setStyleSheet(self._danger_btn_style())
-        self.btn_delete_sched.clicked.connect(self._on_delete_work_schedule_clicked)
-        sched_btn_row.addWidget(self.btn_delete_sched)
+        self.btn_delete_related = QPushButton("삭제")
+        self.btn_delete_related.setFixedHeight(24)
+        self.btn_delete_related.setStyleSheet(self._danger_btn_style())
+        self.btn_delete_related.clicked.connect(self._on_delete_related_clicked)
+        sched_btn_row.addWidget(self.btn_delete_related)
 
         schedule_layout.addLayout(sched_btn_row)
+        self._update_related_tab_style()
         self.right_v_splitter.addWidget(self.schedule_card)
 
         self.right_v_splitter.setStretchFactor(0, 1)
@@ -3953,11 +4417,12 @@ class WorkManagerDialog(QDialog):
 
         self.splitter.addWidget(self.right_container)
 
-        # 스플리터 초기 비율 설정 (좌 220px : 중 잔여 : 우 220px 동일 대칭)
+        # 스플리터 초기 비율 설정 (좌 320px : 중 잔여 : 우 320px 대칭)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
         self.splitter.setStretchFactor(2, 0)
-        self.splitter.setSizes([220, 760, 220])
+        self.splitter.setSizes([320, 640, 320])
+        self.splitter.splitterMoved.connect(self._on_splitter_moved)
         main_layout.addWidget(self.splitter, 1)
 
 
@@ -3968,6 +4433,8 @@ class WorkManagerDialog(QDialog):
 
         # 편집 변경 감지 시그널 연결 (저장되지 않은 변경사항 추적)
         self.editor.contentChanged.connect(self._mark_active_sheet_dirty)
+        if hasattr(self.editor, "fullscreenToggleRequested"):
+            self.editor.fullscreenToggleRequested.connect(self._toggle_editor_fullscreen)
 
         # 모든 버튼의 autoDefault 및 default 비활성화 (검색창 등에서 엔터 시 의도치 않은 버튼 작동 원천 차단)
         for btn in self.findChildren(QPushButton):
@@ -3975,15 +4442,32 @@ class WorkManagerDialog(QDialog):
             btn.setDefault(False)
 
     def keyPressEvent(self, event):
-        """다이얼로그 기본 동작인 Enter 시 accept() 또는 기본 버튼 실행 차단"""
+        """다이얼로그 기본 동작인 Enter 시 accept() 차단 및 에디터 전체화면 단축키(Ctrl+Enter, F12) 지원"""
+        # 1. F12 키: 에디터 전체화면 토글
+        if event.key() == Qt.Key.Key_F12:
+            self._toggle_editor_fullscreen()
+            event.accept()
+            return
+
+        # 2. Ctrl + Enter / Return: 에디터 전체화면 토글
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self._toggle_editor_fullscreen()
+                event.accept()
+                return
             if hasattr(self, "search_input") and self.search_input.hasFocus():
                 self._on_search_text_changed(self.search_input.text())
                 event.accept()
                 return
             event.ignore()
             return
+
+        # 3. Escape: 전체화면 중이면 전체화면 해제, 검색창 포커스 시 검색어 지우기
         if event.key() == Qt.Key.Key_Escape:
+            if getattr(self, "_is_editor_fullscreen", False):
+                self._set_editor_fullscreen(False)
+                event.accept()
+                return
             if hasattr(self, "search_input") and self.search_input.hasFocus():
                 self.search_input.clear()
                 self.search_input.clearFocus()
@@ -4025,20 +4509,30 @@ class WorkManagerDialog(QDialog):
         accent = self.palette.get("accent", "#2563EB")
         return f"""
             QPushButton {{
-                background-color: {panel_alt};
+                background-color: transparent;
                 color: {text};
-                border: 1px solid {line};
-                border-radius: 3px;
+                border: 1px solid transparent;
+                border-radius: 2px;
                 font-weight: bold;
-                font-size: 10px;
+                font-size: 8px;
                 padding: 0;
             }}
             QPushButton:hover {{
-                border-color: {accent};
-                color: #FFFFFF;
-                background-color: {accent};
+                border-color: {line};
+                color: {accent};
+                background-color: {panel_alt};
             }}
+            {self._tooltip_css()}
         """
+
+    def _on_splitter_moved(self, pos: int, index: int) -> None:
+        """사용자가 스플리터 구분선을 직접 드래그하여 패널 너비를 조절할 때 실시간 크기 기억"""
+        sizes = self.splitter.sizes()
+        if len(sizes) == 3:
+            if self._left_expanded and sizes[0] > 60:
+                self._last_left_width = sizes[0]
+            if self._right_expanded and sizes[2] > 60:
+                self._last_right_width = sizes[2]
 
     def _collapse_left_panel(self) -> None:
         """좌측 업무 분류 패널 접기 (◀)"""
@@ -4064,7 +4558,7 @@ class WorkManagerDialog(QDialog):
         self.left_container.setMaximumWidth(16777215)
         self.left_collapsed_bar.hide()
         self.left_panel.show()
-        target_w = max(self._last_left_width, 220)
+        target_w = max(self._last_left_width, 320)
         current_sizes = self.splitter.sizes()
         diff = target_w - current_sizes[0]
         new_center = max(200, current_sizes[1] - diff)
@@ -4094,7 +4588,7 @@ class WorkManagerDialog(QDialog):
         self.right_container.setMaximumWidth(16777215)
         self.right_collapsed_bar.hide()
         self.right_panel.show()
-        target_w = max(self._last_right_width, 220)
+        target_w = max(self._last_right_width, 320)
         current_sizes = self.splitter.sizes()
         diff = target_w - current_sizes[2]
         new_center = max(200, current_sizes[1] - diff)
@@ -4111,6 +4605,97 @@ class WorkManagerDialog(QDialog):
             self._collapse_right_panel()
         else:
             self._expand_right_panel()
+
+    def _toggle_editor_fullscreen(self) -> None:
+        """웹에디터 창 전체화면 토글 (좌우 패널 숨김/복원)"""
+        self._set_editor_fullscreen(not getattr(self, "_is_editor_fullscreen", False))
+
+    def _set_editor_fullscreen(self, fullscreen: bool) -> None:
+        """웹에디터 창 전체화면 설정 / 해제 (여백 및 상단바 완전 제거)"""
+        if getattr(self, "_is_editor_fullscreen", False) == fullscreen:
+            return
+        self._is_editor_fullscreen = fullscreen
+        panel = self.palette.get("panel", "#FFFFFF")
+        line = self.palette.get("line", "#CBD5E0")
+
+        if fullscreen:
+            # 이전 상태 저장
+            self._pre_full_left_expanded = getattr(self, "_left_expanded", True)
+            self._pre_full_right_expanded = getattr(self, "_right_expanded", True)
+            sizes = self.splitter.sizes()
+            if sizes:
+                self._pre_full_splitter_sizes = sizes
+
+            # 1. 상단 탭 및 도구바(전체화면, 템플릿, 저장 버튼) 완전 숨김
+            if hasattr(self, "bottom_bar") and self.bottom_bar:
+                self.bottom_bar.hide()
+
+            # 2. 좌우 컨테이너 완전 숨김 (접힘 거터 바 포함)
+            self.left_container.hide()
+            self.right_container.hide()
+
+            # 3. 창 전체 여백 및 테두리 완전히 제거 (에디터만 창에 100% 꽉 차게)
+            if hasattr(self, "main_layout") and self.main_layout:
+                self.main_layout.setContentsMargins(0, 0, 0, 0)
+            if hasattr(self, "center_panel") and self.center_panel:
+                self.center_panel.setStyleSheet("QFrame { background-color: #FFFFFF; border: none; border-radius: 0px; }")
+            if hasattr(self, "splitter") and self.splitter:
+                self.splitter.setHandleWidth(0)
+
+            # 4. 안내 토스트 표시
+            self.show_floating_toast("전체화면 모드 (단축키: F12, Ctrl+Enter 로 해제)")
+
+            # 버튼 상태 업데이트
+            if hasattr(self, "btn_fullscreen"):
+                self.btn_fullscreen.setText("전체화면 해제")
+                self.btn_fullscreen.setToolTip("에디터 전체화면 해제 (단축키: Ctrl+Enter, F12)")
+                self.btn_fullscreen.setStyleSheet(self._primary_btn_style())
+        else:
+            # 1. 창 여백 및 중앙 패널 테두리 복원
+            if hasattr(self, "main_layout") and self.main_layout:
+                self.main_layout.setContentsMargins(12, 10, 12, 8)
+            if hasattr(self, "center_panel") and self.center_panel:
+                self.center_panel.setStyleSheet(f"""
+                    QFrame {{
+                        background-color: {panel};
+                        border: 1px solid {line};
+                        border-radius: 8px;
+                    }}
+                """)
+            if hasattr(self, "splitter") and self.splitter:
+                self.splitter.setHandleWidth(2)
+
+            # 2. 상단 탭 및 도구바 복원
+            if hasattr(self, "bottom_bar") and self.bottom_bar:
+                self.bottom_bar.show()
+
+            # 3. 좌우 컨테이너 표시
+            self.left_container.show()
+            self.right_container.show()
+
+            # 4. 이전 펼침/접힘 상태로 복원
+            if getattr(self, "_pre_full_left_expanded", True):
+                self._left_expanded = False
+                self._expand_left_panel()
+            else:
+                self._left_expanded = True
+                self._collapse_left_panel()
+
+            if getattr(self, "_pre_full_right_expanded", True):
+                self._right_expanded = False
+                self._expand_right_panel()
+            else:
+                self._right_expanded = True
+                self._collapse_right_panel()
+
+            if hasattr(self, "_pre_full_splitter_sizes") and self._pre_full_splitter_sizes:
+                self.splitter.setSizes(self._pre_full_splitter_sizes)
+
+            # 버튼 상태 복원
+            if hasattr(self, "btn_fullscreen"):
+                self.btn_fullscreen.setText("전체화면")
+                self.btn_fullscreen.setToolTip("에디터 전체화면 토글 (단축키: Ctrl+Enter, F12)")
+                self.btn_fullscreen.setStyleSheet(self._toolbar_sub_btn_style())
 
     def _get_tab_text(self, sheet: WorkSheetData) -> str:
         title = sheet.title or "새 업무"
@@ -4262,7 +4847,7 @@ class WorkManagerDialog(QDialog):
             self.right_container.setMaximumWidth(16777215)
             sizes = self.splitter.sizes()
             if len(sizes) == 3 and sizes[2] < 150:
-                target_w = max(self._last_right_width, 220)
+                target_w = max(self._last_right_width, 310)
                 diff = target_w - sizes[2]
                 new_center = max(200, sizes[1] - diff)
                 self.splitter.setSizes([sizes[0], new_center, target_w])
@@ -4372,19 +4957,36 @@ class WorkManagerDialog(QDialog):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, "_active_toast") and self._active_toast and self._active_toast.isVisible():
-            self._active_toast._reposition()
+        toast = getattr(self, "_active_toast", None)
+        if toast is not None:
+            try:
+                import shiboken6
+                if shiboken6.isValid(toast) and toast.isVisible():
+                    toast._reposition()
+                elif not shiboken6.isValid(toast):
+                    self._active_toast = None
+            except Exception:
+                self._active_toast = None
 
     def show_floating_toast(self, message: str) -> None:
         """업무 관리창 정중앙에 스킨 색상에 맞춰 떴다가 자동으로 사라지는 플로팅 알림 표시"""
-        if hasattr(self, "_active_toast") and self._active_toast:
+        old_toast = getattr(self, "_active_toast", None)
+        if old_toast is not None:
             try:
-                self._active_toast.close()
+                import shiboken6
+                if shiboken6.isValid(old_toast):
+                    old_toast.close()
             except Exception:
                 pass
-        self._active_toast = FloatingToastOverlay(self, message, self.palette, duration_ms=1200)
-        self._active_toast.show()
-        self._active_toast.raise_()
+            self._active_toast = None
+        new_toast = FloatingToastOverlay(self, message, self.palette, duration_ms=1200)
+        self._active_toast = new_toast
+        try:
+            new_toast.destroyed.connect(lambda *_: setattr(self, "_active_toast", None))
+        except Exception:
+            pass
+        new_toast.show()
+        new_toast.raise_()
 
     def _restore_window_state(self) -> None:
         """이전 종료 시점의 창 위치, 크기, 좌우 패널 상태 및 폴더 펼침 상태 복원"""
@@ -4452,9 +5054,14 @@ class WorkManagerDialog(QDialog):
                 pass
 
         if last_left_width is not None and last_left_width > 60:
-            self._last_left_width = max(last_left_width, 220)
+            self._last_left_width = last_left_width
+        else:
+            self._last_left_width = 320
+
         if last_right_width is not None and last_right_width > 60:
-            self._last_right_width = max(last_right_width, 220)
+            self._last_right_width = last_right_width
+        else:
+            self._last_right_width = 320
 
         if expanded_cat_ids is not None:
             self._expanded_category_ids = set(expanded_cat_ids)
@@ -4472,17 +5079,20 @@ class WorkManagerDialog(QDialog):
         elif right_expanded is True:
             self._expand_right_panel()
 
-        if splitter_sizes and len(splitter_sizes) == 3:
-            if self._left_expanded and self._right_expanded:
-                # 좌우 사이드바 가로 길이를 처음 또는 불균형 시 동일하게(최소 220px) 대칭 유지
-                if abs(splitter_sizes[0] - splitter_sizes[2]) > 30 or splitter_sizes[2] < 180 or splitter_sizes[0] < 180:
-                    sym_w = max(splitter_sizes[0], splitter_sizes[2], 220)
-                    total_w = sum(splitter_sizes)
-                    center_w = max(300, total_w - 2 * sym_w)
-                    splitter_sizes = [sym_w, center_w, sym_w]
-            self.splitter.setSizes(splitter_sizes)
+        if splitter_sizes and len(splitter_sizes) == 3 and sum(splitter_sizes) > 300:
+            # 사용자가 변경했던 사이즈를 그대로 정확히 복원
+            s0, s1, s2 = splitter_sizes
+            if self._left_expanded and s0 < 60:
+                s0 = self._last_left_width
+            if self._right_expanded and s2 < 60:
+                s2 = self._last_right_width
+            self.splitter.setSizes([s0, s1, s2])
         else:
-            self.splitter.setSizes([220, 740, 220])
+            # 처음 띄울 때 (저장된 설정이 없음):
+            # 모든 버튼들이 다 보이는 초기 권장 크기 (좌 320px, 중앙 잔여, 우 320px)
+            total_w = self.width() if self.width() > 800 else 1260
+            center_w = max(400, total_w - 640)
+            self.splitter.setSizes([320, center_w, 320])
 
     def _save_window_state(self) -> None:
         """창 위치, 크기, 좌우 패널 상태 및 폴더 펼침 상태 저장"""
@@ -4605,16 +5215,48 @@ class WorkManagerDialog(QDialog):
             return
         target = self._open_sheets[tab_idx]
         menu = QMenu(self)
-        act_reg_cal = menu.addAction("📅 캘린더에 일정 등록")
+        panel = self.palette.get("panel", "#FFFFFF")
+        text = self.palette.get("text", "#1F2328")
+        line = self.palette.get("line", "#CBD5E0")
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 16px 6px 12px;
+                border-radius: 4px;
+                font-size: 12px;
+            }}
+            QMenu::item:selected {{
+                background-color: #F1F5F9;
+                color: #0284C7;
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {line};
+                margin: 4px 6px;
+            }}
+        """)
+        act_save = menu.addAction("💾  저장")
         menu.addSeparator()
-        act_close = menu.addAction("✕ 탭 닫기")
-        act_rename = menu.addAction("✏️ 이름 바꾸기")
-        act_duplicate = menu.addAction("📋 시트 복제")
+        act_close = menu.addAction("❌  탭 닫기")
+        act_rename = menu.addAction("✏️  이름 바꾸기")
+        act_duplicate = menu.addAction("📋  시트 복제")
+        act_reg_cal = menu.addAction("📅  캘린더에 일정 등록")
         menu.addSeparator()
-        act_delete = menu.addAction("🗑️ 업무 삭제 (DB 영구 삭제)")
+        act_delete = menu.addAction("🗑️  업무 삭제 (DB 영구 삭제)")
 
         action = menu.exec(self.sheet_tab_bar.mapToGlobal(pos))
-        if action == act_reg_cal:
+        if action == act_save:
+            # 해당 탭으로 전환 후 저장 수행
+            if self._active_sheet_index != tab_idx:
+                self.open_sheet(target)
+            self._on_save_button_clicked()
+        elif action == act_reg_cal:
             self._register_sheet_to_calendar(target)
         elif action == act_close:
             self._on_sheet_tab_close(tab_idx)
@@ -4834,6 +5476,45 @@ class WorkManagerDialog(QDialog):
 
         self.editor.export_document_data(_after_export)
 
+    def _show_template_dropdown_menu(self) -> None:
+        """템플릿 통합 버튼 클릭 시 드롭다운 팝업 메뉴 표시 (이미지 템플릿, 업무 템플릿)"""
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #FFFFFF;
+                border: 1px solid #CBD5E0;
+                border-radius: 6px;
+                padding: 4px;
+                font-size: 12px;
+            }
+            QMenu::item {
+                padding: 6px 18px 6px 12px;
+                border-radius: 4px;
+                color: #1E293B;
+            }
+            QMenu::item:selected {
+                background-color: #F1F5F9;
+                color: #0284C7;
+                font-weight: bold;
+            }
+        """)
+
+        action_img = menu.addAction("🖼️ 이미지 템플릿")
+        action_img.setToolTip("공문서 직인·결재선·고무인 및 AI 서식 이미지 템플릿 불러오기")
+        action_img.triggered.connect(self._show_image_template_dialog)
+
+        action_work = menu.addAction("📑 업무 템플릿")
+        action_work.setToolTip("공무원 필수 업무 서식 및 템플릿 불러오기")
+        action_work.triggered.connect(self._show_template_menu)
+
+        try:
+            pos = self.btn_template.mapToGlobal(QPoint(0, self.btn_template.height() + 2))
+            menu.exec(pos)
+        except Exception:
+            logger.exception("Failed to show template dropdown menu")
+
     def _show_template_menu(self) -> None:
         """공무원 필수 업무 서식 및 템플릿 메뉴 팝업"""
         from PySide6.QtWidgets import QMenu
@@ -4901,6 +5582,14 @@ class WorkManagerDialog(QDialog):
         act_open_folder.triggered.connect(lambda: os.startfile(str(tpl_dir)))
 
         menu.exec(self.btn_template.mapToGlobal(QPoint(0, self.btn_template.height() + 2)))
+
+    def _show_image_template_dialog(self) -> None:
+        """공문서 직인·결재선·고무인 및 AI 서식 이미지 템플릿 대화상자 표시"""
+        from taskcalendar.image_template_dialog import ImageTemplateDialog
+
+        active_editor = self.editor if hasattr(self, "editor") else self
+        dlg = ImageTemplateDialog(parent_editor=active_editor, palette=self.palette)
+        dlg.exec()
 
     def _apply_template_file(self, file_path: Path) -> None:
         """선택된 템플릿을 현재 에디터에 삽입 또는 새 문서로 적용"""
@@ -5014,47 +5703,329 @@ class WorkManagerDialog(QDialog):
     # 좌측 카테고리 트리 & 우측 첨부파일 관리
     # =========================================================================
 
+    def _render_category_tab_bar(self) -> None:
+        """업무 분류 하단 탭 바 (1 | 2 | +) 렌더링"""
+        if not hasattr(self, "cat_tab_layout") or not self.cat_tab_layout:
+            return
+
+        # 기존 탭 위젯 모두 제거
+        while self.cat_tab_layout.count():
+            item = self.cat_tab_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        panel = self.palette.get("panel", "#FFFFFF")
+        panel_alt = self.palette.get("panel_alt", "#F8FAFC")
+        panel_alt_hover = _shade(panel_alt, -0.06)
+        line = self.palette.get("line", "#CBD5E1")
+        text = self.palette.get("text", "#1F2328")
+        muted = self.palette.get("muted", "#667085")
+        accent = self.palette.get("accent", "#1F7A67")
+
+        for tab_info in self._category_tabs:
+            tab_id = tab_info["id"]
+            tab_name = tab_info["name"]
+            is_active = (tab_id == self._active_category_tab_id)
+
+            btn = QPushButton(tab_name)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(f"탭 '{tab_name}' (우클릭: 이름 변경 / 삭제)")
+            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            btn.customContextMenuRequested.connect(
+                lambda pos, tid=tab_id, tname=tab_name, b=btn: self._show_category_tab_context_menu(pos, tid, tname, b)
+            )
+
+            # 클릭 여부와 관계없이 동일한 크기 유지 (크기 덜컥거림 완전 제거)
+            btn.setFixedHeight(22)
+
+            if is_active:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {panel_alt};
+                        color: {accent};
+                        font-weight: bold;
+                        font-size: 11px;
+                        border: 1px solid {line};
+                        border-top: none;
+                        border-bottom-left-radius: 5px;
+                        border-bottom-right-radius: 5px;
+                        border-top-left-radius: 0px;
+                        border-top-right-radius: 0px;
+                        padding: 0px 10px;
+                        min-width: 24px;
+                        margin-top: 0px;
+                        outline: none;
+                    }}
+                """)
+            else:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {panel_alt_hover};
+                        color: {muted};
+                        font-size: 11px;
+                        font-weight: normal;
+                        border: 1px solid {line};
+                        border-bottom-left-radius: 5px;
+                        border-bottom-right-radius: 5px;
+                        border-top-left-radius: 0px;
+                        border-top-right-radius: 0px;
+                        padding: 0px 10px;
+                        min-width: 24px;
+                        margin-top: 0px;
+                        outline: none;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {panel_alt};
+                        color: {text};
+                        border-color: {line};
+                    }}
+                """)
+
+            btn.clicked.connect(lambda checked=False, tid=tab_id: self._set_active_category_tab(tid))
+            self.cat_tab_layout.addWidget(btn)
+
+        # '+' 추가 버튼 (엑셀 시트 탭 '+' 모양)
+        btn_add = QPushButton("+")
+        btn_add.setFixedHeight(20)
+        btn_add.setFixedWidth(22)
+        btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_add.setToolTip("새 분류 탭 추가")
+        btn_add.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {muted};
+                font-size: 12px;
+                font-weight: bold;
+                border: 1px dashed {line};
+                border-bottom-left-radius: 5px;
+                border-bottom-right-radius: 5px;
+                border-top-left-radius: 0px;
+                border-top-right-radius: 0px;
+                padding: 0;
+                margin-top: 0px;
+                outline: none;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt_hover};
+                color: {accent};
+                border-color: {accent};
+            }}
+        """)
+        btn_add.clicked.connect(self._on_add_category_tab)
+        self.cat_tab_layout.addWidget(btn_add)
+        self.cat_tab_layout.addStretch(1)
+
+        if hasattr(self, "cat_tab_scroll") and self.cat_tab_scroll:
+            self.cat_tab_scroll.raise_()
+
+    def _set_active_category_tab(self, tab_id: int) -> None:
+        """업무 분류 탭 전환"""
+        if self._active_category_tab_id == tab_id:
+            return
+        self._active_category_tab_id = tab_id
+        self._save_category_tabs()
+        self._render_category_tab_bar()
+        self._refresh_category_combos()
+        self._refresh_category_tree()
+
+    def _on_add_category_tab(self) -> None:
+        """새 분류 탭 추가 (+ 누르면 번호가 계속 생성됨)"""
+        existing_ids = [t["id"] for t in self._category_tabs]
+        new_id = (max(existing_ids) + 1) if existing_ids else 1
+
+        existing_names = {t["name"] for t in self._category_tabs}
+        cand_num = 1
+        while str(cand_num) in existing_names:
+            cand_num += 1
+
+        new_tab_name = str(cand_num)
+        self._category_tabs.append({"id": new_id, "name": new_tab_name})
+        self._active_category_tab_id = new_id
+        self._save_category_tabs()
+        self._render_category_tab_bar()
+        self._refresh_category_combos()
+        self._refresh_category_tree()
+
+    def _show_category_tab_context_menu(self, pos: QPoint, tab_id: int, tab_name: str, btn: QPushButton) -> None:
+        """분류 탭 우클릭 컨텍스트 메뉴"""
+        menu = QMenu(self)
+        act_rename = menu.addAction("✏️ 이름 바꾸기")
+        act_delete = menu.addAction("🗑️ 탭 삭제")
+
+        action = menu.exec(btn.mapToGlobal(pos))
+        if action == act_rename:
+            new_name, ok = QInputDialog.getText(self, "탭 이름 변경", "새 탭 이름:", text=tab_name)
+            if ok and new_name.strip() and new_name.strip() != tab_name:
+                for t in self._category_tabs:
+                    if t["id"] == tab_id:
+                        t["name"] = new_name.strip()
+                        break
+                self._save_category_tabs()
+                self._render_category_tab_bar()
+        elif action == act_delete:
+            self._on_delete_category_tab(tab_id, tab_name)
+
+    def _on_delete_category_tab(self, tab_id: int, tab_name: str) -> None:
+        """분류 탭 삭제"""
+        if len(self._category_tabs) <= 1:
+            QMessageBox.warning(self, "안내", "최소 1개의 탭은 유지되어야 하므로 삭제할 수 없습니다.")
+            return
+
+        cats_in_tab = [c for c in self._category_rows if c.get("tab_id", 1) == tab_id and not c.get("parent_id")]
+        remaining_tabs = [t for t in self._category_tabs if t["id"] != tab_id]
+        target_tab = remaining_tabs[0]
+
+        if cats_in_tab:
+            reply = QMessageBox.question(
+                self,
+                "탭 삭제 확인",
+                f"'{tab_name}' 탭에 등록된 업무 분류가 {len(cats_in_tab)}개 있습니다.\n"
+                f"탭을 삭제하면 소속 분류는 '{target_tab['name']}' 탭으로 이동됩니다.\n\n"
+                f"삭제하시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            if self.repository:
+                for c in cats_in_tab:
+                    self.repository.update_work_category_tab(c["id"], target_tab["id"])
+        else:
+            reply = QMessageBox.question(
+                self,
+                "탭 삭제 확인",
+                f"'{tab_name}' 탭을 삭제하시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        self._category_tabs = remaining_tabs
+        if self._active_category_tab_id == tab_id:
+            self._active_category_tab_id = target_tab["id"]
+
+        self._save_category_tabs()
+        self._load_categories_from_db()
+        self._render_category_tab_bar()
+        self._refresh_category_combos()
+        self._refresh_category_tree()
+
+    def _move_category_to_tab(self, cat_id: int, cat_name: str, target_tab_id: int) -> None:
+        """카테고리를 다른 분류 탭으로 이동"""
+        if self.repository and cat_id:
+            self.repository.update_work_category_tab(cat_id, target_tab_id)
+        self._load_categories_from_db()
+        self._refresh_category_combos()
+        self._refresh_category_tree()
+
+    def _move_sheet_to_tab(self, sheet: WorkSheetData, target_tab_id: int) -> None:
+        """업무 문서를 다른 분류 탭으로 이동"""
+        if not self.repository or not sheet.db_id:
+            return
+
+        target_cats = [c for c in self._category_rows if c.get("tab_id", 1) == target_tab_id]
+        target_cat = next((c for c in target_cats if c["name"] == sheet.category), None)
+
+        if not target_cat:
+            cat_name_to_use = sheet.category if sheet.category else "일반 업무"
+            target_cat_id = self.repository.add_work_category(
+                name=cat_name_to_use,
+                sort_order=len(target_cats) + 1,
+                tab_id=target_tab_id,
+            )
+            target_cat_name = cat_name_to_use
+        else:
+            target_cat_id = target_cat["id"]
+            target_cat_name = target_cat["name"]
+
+        self.repository.update_work_item_category(sheet.db_id, target_cat_id)
+        sheet.category_id = target_cat_id
+        sheet.category = target_cat_name
+
+        self._load_categories_from_db()
+        self._refresh_category_combos()
+        self._refresh_category_tree()
+
+        if 0 <= self._active_sheet_index < len(self._open_sheets):
+            if self._open_sheets[self._active_sheet_index] == sheet:
+                self.meta_cat_combo.setCurrentText(sheet.category)
+
     def _refresh_category_combos(self) -> None:
         self.meta_cat_combo.blockSignals(True)
         self.meta_cat_combo.clear()
-        self.meta_cat_combo.addItems(self._categories)
+
+        # 현재 활성 탭에 속한 카테고리
+        active_cat_names = [c["name"] for c in self._category_rows if c.get("tab_id", 1) == self._active_category_tab_id]
+
+        current_sheet_cat = ""
+        if 0 <= self._active_sheet_index < len(self._open_sheets):
+            current_sheet_cat = self._open_sheets[self._active_sheet_index].category or ""
+
+        combo_items = list(active_cat_names)
+        if current_sheet_cat and current_sheet_cat not in combo_items:
+            combo_items.append(current_sheet_cat)
+
+        self.meta_cat_combo.addItems(combo_items if combo_items else self._categories)
         self.meta_cat_combo.blockSignals(False)
 
     def _refresh_category_tree(self) -> None:
-        """좌측 업무 분류 트리 재구성 (계층형 폴더 및 전체 문서 목록 표시, 펼침 상태 및 아이콘 보존)"""
+        """좌측 업무 분류 트리 재구성 (활성 탭에 속한 계층형 폴더 및 문서 목록 표시)"""
         self.category_tree.blockSignals(True)
         self.category_tree.clear()
 
         cat_items_map: dict[int, QTreeWidgetItem] = {}
         pending_subcats: list[dict] = []
 
+        # 1. 루트 카테고리 중 현재 활성 탭에 속한 것만 추가
         for cat in self._category_rows:
             cat_id = cat["id"]
             parent_id = cat.get("parent_id")
-            raw_name = cat["name"]
-            is_expanded = (cat_id in self._expanded_category_ids) if self._has_saved_expanded_ids else True
-            icon = "📂" if is_expanded else "📁"
-            item = QTreeWidgetItem([f"{icon} {raw_name}"])
-            item.setFlags(item.flags() | Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsDragEnabled)
-            item.setData(0, Qt.UserRole + 1, cat_id)
-            item.setData(0, Qt.UserRole + 2, raw_name)
-            cat_items_map[cat_id] = item
+            tab_id = cat.get("tab_id", 1)
 
             if not parent_id:
+                if tab_id != self._active_category_tab_id:
+                    continue
+                raw_name = cat["name"]
+                is_expanded = (cat_id in self._expanded_category_ids) if self._has_saved_expanded_ids else True
+                icon = "📂" if is_expanded else "📁"
+                item = QTreeWidgetItem([f"{icon} {raw_name}"])
+                item.setFlags(item.flags() | Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsDragEnabled)
+                item.setData(0, Qt.UserRole + 1, cat_id)
+                item.setData(0, Qt.UserRole + 2, raw_name)
+                cat_items_map[cat_id] = item
                 self.category_tree.addTopLevelItem(item)
             else:
                 pending_subcats.append(cat)
 
-        for cat in pending_subcats:
-            cat_id = cat["id"]
-            parent_id = cat.get("parent_id")
-            item = cat_items_map[cat_id]
-            parent_item = cat_items_map.get(parent_id)
-            if parent_item:
-                parent_item.addChild(item)
-            else:
-                self.category_tree.addTopLevelItem(item)
+        # 2. 하위 카테고리는 부모가 cat_items_map에 존재하는 경우에만 추가 (활성 탭에 귀속)
+        added = True
+        remaining = pending_subcats
+        while added and remaining:
+            added = False
+            next_rem = []
+            for cat in remaining:
+                cat_id = cat["id"]
+                parent_id = cat.get("parent_id")
+                parent_item = cat_items_map.get(parent_id)
+                if parent_item:
+                    raw_name = cat["name"]
+                    is_expanded = (cat_id in self._expanded_category_ids) if self._has_saved_expanded_ids else True
+                    icon = "📂" if is_expanded else "📁"
+                    item = QTreeWidgetItem([f"{icon} {raw_name}"])
+                    item.setFlags(item.flags() | Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsDragEnabled)
+                    item.setData(0, Qt.UserRole + 1, cat_id)
+                    item.setData(0, Qt.UserRole + 2, raw_name)
+                    cat_items_map[cat_id] = item
+                    parent_item.addChild(item)
+                    added = True
+                else:
+                    next_rem.append(cat)
+            remaining = next_rem
 
+        # 3. 문서 배치: 현재 활성 탭의 카테고리에 속한 문서만 트리에 추가
         seen_tree_sheets = set()
         for sheet in self._all_sheets:
             key = sheet.db_id if sheet.db_id else id(sheet)
@@ -5067,18 +6038,14 @@ class WorkManagerDialog(QDialog):
                 parent_item = cat_items_map[sheet.category_id]
             else:
                 for c in self._category_rows:
-                    if c["name"] == sheet.category:
+                    if c["name"] == sheet.category and c["id"] in cat_items_map:
                         parent_item = cat_items_map[c["id"]]
                         sheet.category_id = c["id"]
                         break
 
+            # 현재 탭에 속하지 않은 문서는 트리에 표시하지 않음
             if not parent_item:
-                if self.category_tree.topLevelItemCount() > 0:
-                    parent_item = self.category_tree.topLevelItem(0)
-                else:
-                    parent_item = QTreeWidgetItem(["📁 기본 분류"])
-                    parent_item.setData(0, Qt.UserRole + 2, "기본 분류")
-                    self.category_tree.addTopLevelItem(parent_item)
+                continue
 
             child = QTreeWidgetItem([f"📄 {sheet.title}"])
             # 중요: 문서 아이템은 자식을 받지 않도록 ItemIsDropEnabled 플래그를 제거!
@@ -5132,6 +6099,16 @@ class WorkManagerDialog(QDialog):
             act_open = menu.addAction("📄 열기")
             act_rename = menu.addAction("✏️ 이름 바꾸기")
             act_dup = menu.addAction("📋 복제")
+
+            # 다른 탭으로 이동 서브메뉴 (현재 활성 탭 외의 탭들이 있을 때)
+            other_tabs = [t for t in self._category_tabs if t["id"] != self._active_category_tab_id]
+            doc_tab_actions = {}
+            if other_tabs and sheet.db_id:
+                menu_move_tab = menu.addMenu("📑 다른 탭으로 이동")
+                for ot in other_tabs:
+                    act_m = menu_move_tab.addAction(f"'{ot['name']}' 탭으로 이동")
+                    doc_tab_actions[act_m] = ot["id"]
+
             menu.addSeparator()
             act_reg_cal = menu.addAction("📅 캘린더에 일정 등록")
             menu.addSeparator()
@@ -5139,7 +6116,9 @@ class WorkManagerDialog(QDialog):
             menu.addSeparator()
             act_add_doc = menu.addAction("➕ 새 업무 추가")
             action = menu.exec(self.category_tree.mapToGlobal(pos))
-            if action == act_open:
+            if action in doc_tab_actions:
+                self._move_sheet_to_tab(sheet, doc_tab_actions[action])
+            elif action == act_open:
                 self.open_sheet(sheet)
             elif action == act_reg_cal:
                 self._register_sheet_to_calendar(sheet)
@@ -5177,6 +6156,16 @@ class WorkManagerDialog(QDialog):
             act_add_doc = menu.addAction(f"➕ '{cat_name}'에 새 문서 추가")
             act_add_sub = menu.addAction("📁 하위 폴더(분류) 추가")
             act_rename = menu.addAction("✏️ 폴더 이름 변경")
+
+            # 다른 탭으로 이동 서브메뉴 (현재 활성 탭 외의 탭들이 있을 때)
+            other_tabs = [t for t in self._category_tabs if t["id"] != self._active_category_tab_id]
+            tab_actions = {}
+            if other_tabs and cat_id:
+                menu_move_tab = menu.addMenu("📑 다른 탭으로 이동")
+                for ot in other_tabs:
+                    act_m = menu_move_tab.addAction(f"'{ot['name']}' 탭으로 이동")
+                    tab_actions[act_m] = ot["id"]
+
             menu.addSeparator()
             act_reg_cal = menu.addAction("📅 캘린더에 일정 등록")
             menu.addSeparator()
@@ -5192,6 +6181,8 @@ class WorkManagerDialog(QDialog):
                 self._on_add_sub_category(cat_id, cat_name)
             elif action == act_rename:
                 self._on_rename_category(cat_name)
+            elif action in tab_actions:
+                self._move_category_to_tab(cat_id, cat_name, tab_actions[action])
             elif action == act_delete:
                 self._on_delete_category(cat_name)
             elif action == act_add_cat:
@@ -5340,7 +6331,7 @@ class WorkManagerDialog(QDialog):
         if ok and sub_name.strip():
             c = sub_name.strip()
             if self.repository:
-                self.repository.add_work_category(c, sort_order=100, parent_id=parent_id)
+                self.repository.add_work_category(c, sort_order=100, parent_id=parent_id, tab_id=self._active_category_tab_id)
             self._load_categories_from_db()
             self._refresh_category_combos()
             self._refresh_category_tree()
@@ -5587,7 +6578,7 @@ class WorkManagerDialog(QDialog):
         if ok and cat_name.strip():
             c = cat_name.strip()
             if self.repository:
-                self.repository.add_work_category(c, len(self._categories) + 1)
+                self.repository.add_work_category(c, len(self._categories) + 1, tab_id=self._active_category_tab_id)
             self._load_categories_from_db()
             self._refresh_category_combos()
             self._refresh_category_tree()
@@ -5682,21 +6673,94 @@ class WorkManagerDialog(QDialog):
                 return self._open_sheets[self._active_sheet_index]
         return None
 
+    def _update_related_tab_style(self) -> None:
+        """관련 일정/관련 문서 탭 버튼의 활성/비활성 스타일 및 텍스트 갱신"""
+        panel = self.palette.get("panel", "#FFFFFF")
+        panel_alt = self.palette.get("panel_alt", "#F1F5F9")
+        line = self.palette.get("line", "#CBD5E0")
+        accent = self.palette.get("accent", "#2563EB")
+        accent_soft = self.palette.get("accent_soft", "#EFF6FF")
+        text = self.palette.get("text", "#1F2328")
+        muted = self.palette.get("muted", "#64748B")
+
+        active_style = f"""
+            QPushButton {{
+                background-color: {accent_soft};
+                color: {accent};
+                font-weight: bold;
+                font-size: 11px;
+                border: 1px solid {accent};
+                border-radius: 4px;
+                padding: 1px 8px;
+            }}
+        """
+        inactive_style = f"""
+            QPushButton {{
+                background-color: {panel_alt};
+                color: {muted};
+                font-weight: normal;
+                font-size: 11px;
+                border: 1px solid {line};
+                border-radius: 4px;
+                padding: 1px 8px;
+            }}
+            QPushButton:hover {{
+                background-color: {panel};
+                color: {text};
+                border-color: {line};
+            }}
+        """
+
+        if self._active_related_tab == 0:
+            self.btn_tab_related_sched.setStyleSheet(active_style)
+            self.btn_tab_related_doc.setStyleSheet(inactive_style)
+            self.btn_add_related.setText("+ 일정")
+            self.btn_add_related.setToolTip("현재 업무와 연결된 캘린더 일정 등록")
+            self.btn_goto_related.setText("이동")
+            self.btn_goto_related.setToolTip("선택한 일정 날짜의 캘린더로 이동")
+            self.btn_edit_related.setText("수정")
+            self.btn_edit_related.setToolTip("선택한 일정 수정")
+            self.btn_delete_related.setText("삭제")
+            self.btn_delete_related.setToolTip("선택한 일정 삭제")
+            self.btn_delete_related.setStyleSheet(self._danger_btn_style())
+        else:
+            self.btn_tab_related_sched.setStyleSheet(inactive_style)
+            self.btn_tab_related_doc.setStyleSheet(active_style)
+            self.btn_add_related.setText("+ 문서")
+            self.btn_add_related.setToolTip("현재 업무와 연결할 관련 문서(업무) 추가")
+            self.btn_goto_related.setText("이동")
+            self.btn_goto_related.setToolTip("선택한 문서를 문서 관리 대시보드에서 열기")
+            self.btn_edit_related.setText("수정")
+            self.btn_edit_related.setToolTip("선택한 문서 내용/정보 수정")
+            self.btn_delete_related.setText("연결 해제")
+            self.btn_delete_related.setToolTip("현재 업무와 해당 문서의 연결 해제")
+            self.btn_delete_related.setStyleSheet(self._sub_btn_style())
+
+    def _set_related_tab(self, tab_index: int) -> None:
+        """우측 하단 관련 항목 탭 전환 (0: 일정, 1: 문서)"""
+        self._active_related_tab = tab_index
+        self.related_stack.setCurrentIndex(tab_index)
+        self._update_related_tab_style()
+
     def _refresh_work_schedules_list(self, sheet: WorkSheetData | None = None) -> None:
-        """현재 시트와 연결된 캘린더 일정 목록을 갱신하여 1줄씩 표시"""
+        """현재 시트와 연결된 캘린더 일정 및 문서 목록을 갱신하여 1줄씩 표시"""
         if not hasattr(self, "work_schedule_list") or not self.work_schedule_list:
             return
         self.work_schedule_list.clear()
         if sheet is None:
             sheet = self._get_current_sheet()
+
+        # 관련 문서 목록도 함께 갱신
+        self._refresh_work_documents_list(sheet)
+
         if not sheet or not self.repository:
-            if hasattr(self, "sched_title"):
-                self.sched_title.setText("📅 관련 일정 (0)")
+            if hasattr(self, "btn_tab_related_sched"):
+                self.btn_tab_related_sched.setText("일정 (0)")
             return
 
         entries = self.repository.list_entries_for_work(work_id=sheet.db_id, work_title=sheet.title)
-        if hasattr(self, "sched_title"):
-            self.sched_title.setText(f"📅 관련 일정 ({len(entries)})")
+        if hasattr(self, "btn_tab_related_sched"):
+            self.btn_tab_related_sched.setText(f"일정 ({len(entries)})")
 
         if not entries:
             empty_item = QListWidgetItem("(등록된 일정 없음)")
@@ -5706,23 +6770,35 @@ class WorkManagerDialog(QDialog):
             return
 
         weekdays = ["월", "화", "수", "목", "금", "토", "일"]
-        # 기간 일정을 일단위(1일 1줄)로 전개
+        # 기간 일정을 일단위(1일 1줄)로 전개 (반복 일정은 _occurs_on으로 실제 발생일만 전개)
         schedule_rows: list[tuple[date, CalendarEntry]] = []
         for entry in entries:
             s_d = entry.start_date or entry.day or date.today()
             e_d = entry.end_date or entry.day or s_d
             if s_d > e_d:
                 s_d, e_d = e_d, s_d
-            cur = s_d
-            while cur <= e_d:
-                schedule_rows.append((cur, entry))
-                cur += timedelta(days=1)
+
+            # 1) 반복 일정: 반복 규칙에 부합하는 실제 발생 일자만 추가
+            if entry.recurrence_enabled and entry.recurrence_type != RecurrenceType.NONE:
+                max_end = s_d + timedelta(days=366)
+                actual_end = min(e_d, max_end) if entry.end_date else max_end
+                cur = s_d
+                while cur <= actual_end:
+                    if hasattr(self.repository, "_occurs_on") and self.repository._occurs_on(entry, cur):
+                        schedule_rows.append((cur, entry))
+                    cur += timedelta(days=1)
+            # 2) 일반 일정(단일일 또는 연속 기간 일정):
+            else:
+                cur = s_d
+                while cur <= e_d:
+                    schedule_rows.append((cur, entry))
+                    cur += timedelta(days=1)
 
         # 날짜순, 시작시간순, ID순 정렬
         schedule_rows.sort(key=lambda x: (x[0], x[1].start_time or "00:00", x[1].entry_id or 0))
 
-        if hasattr(self, "sched_title"):
-            self.sched_title.setText(f"📅 관련 일정 ({len(schedule_rows)})")
+        if hasattr(self, "btn_tab_related_sched"):
+            self.btn_tab_related_sched.setText(f"일정 ({len(schedule_rows)})")
 
         if not schedule_rows:
             empty_item = QListWidgetItem("(등록된 일정 없음)")
@@ -5736,7 +6812,7 @@ class WorkManagerDialog(QDialog):
             date_txt = f"{cur_date.strftime('%m.%d')}({w})"
             time_txt = f" {entry.start_time}" if (not entry.all_day and entry.start_time) else ""
             display_title = entry.title or sheet.title or "일정"
-            line_txt = f"📌 {date_txt}{time_txt}  {display_title}"
+            line_txt = f"{date_txt}{time_txt}  {display_title}"
 
             item = QListWidgetItem(line_txt)
             item.setData(Qt.UserRole, entry.entry_id)
@@ -5744,6 +6820,268 @@ class WorkManagerDialog(QDialog):
             item.setData(Qt.UserRole + 2, cur_date)
             item.setToolTip(f"제목: {entry.title}\n일시: {date_txt}{time_txt}\n설명: {entry.description or '(없음)'}\n(더블클릭 시 해당 일자 캘린더로 이동 / 우클릭 메뉴)")
             self.work_schedule_list.addItem(item)
+
+        # 오늘 날짜와 가장 가까운 일정으로 자동 스크롤
+        today = date.today()
+        target_item = None
+        # 1) 오늘 이후(오늘 포함) 중 가장 빠른 일정 우선 선택
+        for i in range(self.work_schedule_list.count()):
+            it = self.work_schedule_list.item(i)
+            c_date = it.data(Qt.UserRole + 2)
+            if c_date and isinstance(c_date, date) and c_date >= today:
+                target_item = it
+                break
+
+        # 2) 만약 모든 일정이 오늘보다 과거라면, 가장 최근 과거 일정(마지막 항목) 선택
+        if not target_item and self.work_schedule_list.count() > 0:
+            target_item = self.work_schedule_list.item(self.work_schedule_list.count() - 1)
+
+        if target_item:
+            self.work_schedule_list.scrollToItem(target_item, QAbstractItemView.ScrollHint.PositionAtTop)
+            self.work_schedule_list.setCurrentItem(target_item)
+
+    def _refresh_work_documents_list(self, sheet: WorkSheetData | None = None) -> None:
+        """현재 시트와 연결된 문서(task) 목록 갱신"""
+        if not hasattr(self, "work_doc_list") or not self.work_doc_list:
+            return
+        self.work_doc_list.clear()
+        if sheet is None:
+            sheet = self._get_current_sheet()
+        if not sheet or not self.repository or not sheet.db_id:
+            if hasattr(self, "btn_tab_related_doc"):
+                self.btn_tab_related_doc.setText("문서 (0)")
+            return
+
+        tasks = self.repository.list_linked_entries_for_work(work_id=sheet.db_id, entry_type="task")
+        if hasattr(self, "btn_tab_related_doc"):
+            self.btn_tab_related_doc.setText(f"문서 ({len(tasks)})")
+
+        if not tasks:
+            empty_item = QListWidgetItem("(연결된 문서 없음)")
+            empty_item.setFlags(Qt.ItemFlag.NoItemFlags)
+            empty_item.setForeground(QColor(self.palette.get("muted", "#94A3B8")))
+            self.work_doc_list.addItem(empty_item)
+            return
+
+        for t in tasks:
+            cat = t.memo_group or "일반"
+            author = f" [{t.assignee}]" if t.assignee else ""
+            d_str = ""
+            if t.day or t.start_date:
+                tgt_d = t.day or t.start_date
+                d_str = f" ({tgt_d.strftime('%m.%d')})"
+
+            display_txt = f"[{cat}] {t.title}{author}{d_str}"
+            item = QListWidgetItem(display_txt)
+            item.setData(Qt.ItemDataRole.UserRole, t.entry_id)
+            item.setData(Qt.ItemDataRole.UserRole + 1, t)
+            item.setData(Qt.ItemDataRole.UserRole + 2, t.day or t.start_date)
+            tip = f"제목: {t.title}\n분류: {cat}\n기안자: {t.assignee or '-'}\n일자: {t.day or t.start_date or '-'}\n설명: {t.description or '(없음)'}\n(더블클릭 시 문서 관리에서 보기 / 우클릭 메뉴)"
+            item.setToolTip(tip)
+            self.work_doc_list.addItem(item)
+
+        # 오늘 날짜와 가장 가까운 문서로 자동 스크롤 및 포커스
+        today = date.today()
+        target_doc_item = None
+        min_diff = None
+
+        for i in range(self.work_doc_list.count()):
+            it = self.work_doc_list.item(i)
+            doc_date = it.data(Qt.ItemDataRole.UserRole + 2)
+            if doc_date and isinstance(doc_date, date):
+                diff = abs((doc_date - today).days)
+                if min_diff is None or diff < min_diff:
+                    min_diff = diff
+                    target_doc_item = it
+
+        # 날짜 정보가 있는 항목이 없으면 맨 위 첫 번째 항목 선택
+        if not target_doc_item and self.work_doc_list.count() > 0:
+            target_doc_item = self.work_doc_list.item(0)
+
+        if target_doc_item:
+            self.work_doc_list.scrollToItem(target_doc_item, QAbstractItemView.ScrollHint.PositionAtTop)
+            self.work_doc_list.setCurrentItem(target_doc_item)
+
+    def _on_add_related_clicked(self) -> None:
+        """상단 '+ 추가' 버튼 클릭 시 현재 활성 탭에 맞춰 일정 또는 문서 추가"""
+        if self._active_related_tab == 0:
+            self._on_add_work_schedule_clicked()
+        else:
+            self._on_add_work_document_clicked()
+
+    def _on_goto_related_clicked(self) -> None:
+        """하단 '이동' 버튼 클릭 시 현재 활성 탭에 맞춰 캘린더 이동 또는 문서 관리 이동"""
+        if self._active_related_tab == 0:
+            self._on_goto_calendar_clicked()
+        else:
+            self._on_goto_document_clicked()
+
+    def _on_edit_related_clicked(self) -> None:
+        """하단 '수정' 버튼 클릭 시 현재 활성 탭에 맞춰 일정 또는 문서 수정"""
+        if self._active_related_tab == 0:
+            self._on_edit_work_schedule_clicked()
+        else:
+            self._on_edit_work_document_clicked()
+
+    def _on_delete_related_clicked(self) -> None:
+        """하단 삭제/연결해제 버튼 클릭 시 현재 활성 탭에 맞춰 일정 삭제 또는 문서 연결 해제"""
+        if self._active_related_tab == 0:
+            self._on_delete_work_schedule_clicked()
+        else:
+            self._on_unlink_work_document_clicked()
+
+    def _on_add_work_document_clicked(self) -> None:
+        """현재 업무에 연결할 문서 선택 창 띄우기"""
+        sheet = self._get_current_sheet()
+        if not sheet or not sheet.db_id:
+            self.show_floating_toast("선택된 업무가 없습니다.")
+            return
+
+        linked_tasks = self.repository.list_linked_entries_for_work(work_id=sheet.db_id, entry_type="task")
+        initial_eids = [t.entry_id for t in linked_tasks if t.entry_id]
+
+        dlg = WorkDocSelectDialog(
+            self,
+            self.repository,
+            initial_entry_ids=initial_eids,
+            palette=self.palette,
+            title=f"'{sheet.title}' 관련 문서 연결",
+        )
+        if dlg.exec() == QDialog.Accepted:
+            new_eids = dlg.selected_entry_ids
+            # 기존 연결 해제된 항목 및 신규 연결 항목 반영
+            to_remove = set(initial_eids) - set(new_eids)
+            for eid in to_remove:
+                self.repository.unlink_entry_from_work(sheet.db_id, eid)
+            if new_eids:
+                self.repository.link_entries_to_works([sheet.db_id], new_eids)
+            self.repository.save()
+            self._refresh_work_documents_list(sheet)
+            self.show_floating_toast(f"관련 문서 {len(new_eids)}개가 연결되었습니다.")
+
+    def _on_goto_document_clicked(self) -> None:
+        """선택한 문서를 TaskManagerDialog에서 열고 포커스"""
+        item = self.work_doc_list.currentItem()
+        if not item:
+            self.show_floating_toast("이동할 문서를 선택하세요.")
+            return
+        entry = item.data(Qt.ItemDataRole.UserRole + 1)
+        if not isinstance(entry, CalendarEntry):
+            return
+
+        try:
+            from taskcalendar.qt_task_manager import TaskManagerDialog
+            tm = getattr(self.main_window, "_task_manager_dialog", None) if self.main_window else None
+            # 캘린더 창이 함께 뜨지 않도록 parent=None 독립 윈도우로 생성/보장
+            if tm is None or not tm.isVisible() or tm.parent() is not None:
+                if tm is not None and tm.parent() is not None:
+                    try:
+                        tm.close()
+                    except Exception:
+                        pass
+                tm = TaskManagerDialog(None, self.repository, self.main_window)
+                if self.main_window:
+                    self.main_window._task_manager_dialog = tm
+            tm.apply_palette(self.palette)
+            tm.reload_tasks()
+            tm.show()
+            tm.raise_()
+            tm.activateWindow()
+            if entry.entry_id:
+                tm._select_and_highlight_task(entry.entry_id)
+        except Exception as e:
+            logger.exception("Failed to jump to task manager: %s", e)
+
+    def _on_doc_item_double_clicked(self, item: QListWidgetItem) -> None:
+        """문서 더블클릭 시 문서 관리 창으로 이동"""
+        self._on_goto_document_clicked()
+
+    def _on_edit_work_document_clicked(self) -> None:
+        """선택한 문서 수정 다이얼로그 호출"""
+        item = self.work_doc_list.currentItem()
+        if not item:
+            self.show_floating_toast("수정할 문서를 선택하세요.")
+            return
+        entry = item.data(Qt.ItemDataRole.UserRole + 1)
+        if not isinstance(entry, CalendarEntry):
+            return
+
+        try:
+            from taskcalendar.qt_task_manager import TaskEditDialog
+            dlg = TaskEditDialog(self, self.repository, task=entry, palette=self.palette)
+            if dlg.exec() == QDialog.Accepted:
+                saved_task = dlg.get_task()
+                self.repository.upsert_entry(saved_task)
+                self.repository.save()
+                if self.main_window and hasattr(self.main_window, "refresh"):
+                    self.main_window.refresh()
+                self._refresh_work_documents_list()
+                self.show_floating_toast("문서 정보가 수정되었습니다.")
+        except Exception as e:
+            logger.exception("Failed to edit task: %s", e)
+
+    def _on_unlink_work_document_clicked(self) -> None:
+        """선택한 문서와 현재 업무의 연결 해제"""
+        sheet = self._get_current_sheet()
+        if not sheet or not sheet.db_id:
+            return
+        item = self.work_doc_list.currentItem()
+        if not item:
+            self.show_floating_toast("연결 해제할 문서를 선택하세요.")
+            return
+        entry = item.data(Qt.ItemDataRole.UserRole + 1)
+        if not isinstance(entry, CalendarEntry) or not entry.entry_id:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "연결 해제",
+            f"'{entry.title}' 문서와의 연결을 해제하시겠습니까?\n\n(문서 자체가 삭제되지는 않고 이 업무와의 연결만 해제됩니다.)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.repository.unlink_entry_from_work(sheet.db_id, entry.entry_id)
+            self.repository.save()
+            self._refresh_work_documents_list(sheet)
+            self.show_floating_toast("문서 연결이 해제되었습니다.")
+
+    def _on_doc_context_menu(self, pos: QPoint) -> None:
+        item = self.work_doc_list.itemAt(pos)
+        if not item:
+            return
+        entry = item.data(Qt.ItemDataRole.UserRole + 1)
+        if not isinstance(entry, CalendarEntry):
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {self.palette.get('panel', '#FFFFFF')};
+                color: {self.palette.get('text', '#1F2328')};
+                border: 1px solid {self.palette.get('line', '#CBD5E0')};
+                border-radius: 6px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 14px;
+                border-radius: 4px;
+                font-size: 11px;
+            }}
+            QMenu::item:selected {{
+                background-color: #F1F5F9;
+                color: #0284C7;
+            }}
+        """)
+        act_jump = menu.addAction("문서 관리에서 보기")
+        act_jump.triggered.connect(self._on_goto_document_clicked)
+        act_edit = menu.addAction("문서 수정")
+        act_edit.triggered.connect(self._on_edit_work_document_clicked)
+        menu.addSeparator()
+        act_del = menu.addAction("연결 해제")
+        act_del.triggered.connect(self._on_unlink_work_document_clicked)
+
+        menu.exec(self.work_doc_list.mapToGlobal(pos))
 
     def _on_add_work_schedule_clicked(self) -> None:
         """우측 패널 '+ 일정' 버튼 클릭 시 현재 업무의 캘린더 일정 등록 다이얼로그 호출"""
@@ -6524,11 +7862,12 @@ class WorkManagerDialog(QDialog):
             QMessageBox.warning(self, "파일 오류", f"선택한 파일을 찾을 수 없습니다:\n{file_path}")
             return
 
-        cat_name = target_cat_name or (self._categories[0] if self._categories else "일반 업무")
+        active_cat_names = [c["name"] for c in self._category_rows if c.get("tab_id", 1) == self._active_category_tab_id]
+        cat_name = target_cat_name or (active_cat_names[0] if active_cat_names else "일반 업무")
         dlg = WorkDocumentImportDialog(
             parent=self,
             file_path=p,
-            categories=self._categories,
+            categories=active_cat_names if active_cat_names else ["일반 업무"],
             default_category=cat_name,
             palette=self.palette,
         )
@@ -6618,11 +7957,11 @@ class WorkManagerDialog(QDialog):
         # 3. 카테고리 준비
         chosen_cat_id = None
         for cat in self._category_rows:
-            if cat["name"] == chosen_cat:
+            if cat["name"] == chosen_cat and cat.get("tab_id", 1) == self._active_category_tab_id:
                 chosen_cat_id = cat["id"]
                 break
         if not chosen_cat_id and self.repository:
-            chosen_cat_id = self.repository.add_work_category(chosen_cat, sort_order=len(self._categories) + 1)
+            chosen_cat_id = self.repository.add_work_category(chosen_cat, sort_order=len(self._categories) + 1, tab_id=self._active_category_tab_id)
             self._load_categories_from_db()
             self._refresh_category_combos()
 
@@ -6815,7 +8154,7 @@ class WorkManagerDialog(QDialog):
 
         root_cat_id = None
         if self.repository:
-            root_cat_id = self.repository.add_work_category(root_name, sort_order=len(self._categories) + 1, parent_id=None)
+            root_cat_id = self.repository.add_work_category(root_name, sort_order=len(self._categories) + 1, parent_id=None, tab_id=self._active_category_tab_id)
 
         dir_to_cat: dict[Path, tuple[str, int | None]] = {root_dir: (root_name, root_cat_id)}
         imported_sheets: list[WorkSheetData] = []
@@ -6839,7 +8178,7 @@ class WorkManagerDialog(QDialog):
                     if curr_p not in dir_to_cat:
                         new_id = None
                         if self.repository:
-                            new_id = self.repository.add_work_category(sub, sort_order=100, parent_id=cur_cat_id)
+                            new_id = self.repository.add_work_category(sub, sort_order=100, parent_id=cur_cat_id, tab_id=self._active_category_tab_id)
                         dir_to_cat[curr_p] = (sub, new_id)
                         cur_cat_id = new_id
                         cur_cat_name = sub
@@ -7195,13 +8534,15 @@ class WorkManagerDialog(QDialog):
 
         # 좌측 카테고리 트리 필터링만 수행
         def matches(sheet: WorkSheetData) -> bool:
+            # 대용량 본문 검색 시 메모리 할당/프리징 방지를 위해 상한선 설정
+            content_sample = sheet.content_text[:50000].lower() if sheet.content_text else ""
             return bool(
                 (sheet.db_id and sheet.db_id in rag_matched_ids)
                 or query in sheet.title.lower()
                 or query in sheet.category.lower()
                 or query in sheet.assignee.lower()
-                or query in sheet.content_text.lower()
-                or query in sheet.content_html.lower()
+                or query in content_sample
+                or query in sheet.content_html[:50000].lower()
                 or any(query in att.get("name", "").lower() for att in sheet.attachments)
             )
 
@@ -7384,6 +8725,7 @@ class WorkManagerDialog(QDialog):
             QPushButton:pressed {{
                 background-color: {accent_soft};
             }}
+            {self._tooltip_css()}
         """
 
     def _primary_btn_style(self) -> str:
@@ -7410,6 +8752,7 @@ class WorkManagerDialog(QDialog):
             QPushButton:pressed {{
                 background-color: {pressed_bg};
             }}
+            {self._tooltip_css()}
         """
 
     def _sub_btn_style(self) -> str:
@@ -7438,6 +8781,36 @@ class WorkManagerDialog(QDialog):
             QPushButton:pressed {{
                 background-color: {panel};
             }}
+            {self._tooltip_css()}
+        """
+
+    def _toolbar_sub_btn_style(self) -> str:
+        panel = self.palette.get("panel", "#FFFFFF")
+        panel_alt = self.palette.get("panel_alt", "#F8FAFC")
+        text = self.palette.get("text", "#1F2328")
+        line = self.palette.get("line", "#CBD5E0")
+        accent = self.palette.get("accent", "#2563EB")
+        accent_soft = self.palette.get("accent_soft", "#EFF6FF")
+
+        return f"""
+            QPushButton {{
+                background-color: {panel_alt};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 4px 14px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {accent_soft};
+                border-color: {accent};
+                color: {accent};
+            }}
+            QPushButton:pressed {{
+                background-color: {panel};
+            }}
+            {self._tooltip_css()}
         """
 
     def _danger_btn_style(self) -> str:
@@ -7464,6 +8837,7 @@ class WorkManagerDialog(QDialog):
             QPushButton:pressed {{
                 background-color: #FEE2E2;
             }}
+            {self._tooltip_css()}
         """
 
     def _create_format_btn(self, label: str, tooltip: str, checkable: bool, callback) -> QToolButton:
@@ -7487,6 +8861,7 @@ class WorkManagerDialog(QDialog):
                 color: #1D4ED8;
                 border-color: #93C5FD;
             }}
+            {self._tooltip_css()}
         """)
         btn.clicked.connect(callback)
         return btn
@@ -7547,6 +8922,11 @@ class WorkManagerDialog(QDialog):
         accent = self.palette.get("accent", "#2563EB")
         accent_soft = self.palette.get("accent_soft", "#EFF6FF")
 
+        is_dark = self.palette.get("bg", "").lower() in ("#0a0c10", "#171b22") or self.palette.get("text", "").lower() == "#f3f6fb"
+        tip_bg = "#1E293B" if is_dark else "#FFFFFF"
+        tip_fg = "#F8FAFC" if is_dark else "#0F172A"
+        tip_border = "#475569" if is_dark else "#CBD5E1"
+
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: {self.palette.get("bg", "#F1F5F9")};
@@ -7560,16 +8940,33 @@ class WorkManagerDialog(QDialog):
                 background-color: {accent};
                 width: 3px;
             }}
+            QToolTip {{
+                background-color: {tip_bg};
+                color: {tip_fg};
+                border: 1px solid {tip_border};
+                border-radius: 6px;
+                padding: 6px 10px;
+                font-family: {font_family_css()};
+                font-size: 12px;
+                font-weight: 500;
+            }}
         """)
 
         for btn in (
             getattr(self, "btn_import", None),
             getattr(self, "btn_export", None),
             getattr(self, "btn_new_work", None),
-            getattr(self, "btn_template", None),
         ):
             if btn:
                 btn.setStyleSheet(self._sub_btn_style())
+
+        for btn in (
+            getattr(self, "btn_template", None),
+            getattr(self, "btn_img_template", None),
+            getattr(self, "btn_fullscreen", None),
+        ):
+            if btn:
+                btn.setStyleSheet(self._toolbar_sub_btn_style())
 
         if hasattr(self, "btn_save_work") and self.btn_save_work:
             self.btn_save_work.setStyleSheet(self._primary_btn_style())
@@ -7621,7 +9018,11 @@ class WorkManagerDialog(QDialog):
             """)
 
         if hasattr(self, "left_panel") and self.left_panel:
-            self.left_panel.setStyleSheet(f"""
+            self.left_panel.setObjectName("wmLeftPanel")
+            self.left_panel.setStyleSheet("#wmLeftPanel { background: transparent; border: none; }")
+
+        if hasattr(self, "left_card") and self.left_card:
+            self.left_card.setStyleSheet(f"""
                 QFrame {{
                     background-color: {panel};
                     border: 1px solid {line};
@@ -7630,13 +9031,13 @@ class WorkManagerDialog(QDialog):
             """)
 
         if hasattr(self, "category_tree") and self.category_tree:
-            self.category_tree.setFont(QFont(ui_font_family(), 9))
+            self.category_tree.setFont(make_ui_font_like(9))
             self.category_tree.setStyleSheet(f"""
                 QTreeWidget {{
                     font-family: {font_family_css()};
                     font-size: 12px;
                     border: 1px solid {line};
-                    border-radius: 4px;
+                    border-radius: 6px 6px 0px 0px;
                     background-color: {panel_alt};
                     color: {text};
                     padding: 2px 2px;
@@ -7660,6 +9061,7 @@ class WorkManagerDialog(QDialog):
                     font-weight: bold;
                     border-radius: 3px;
                 }}
+                {self._tooltip_css()}
             """)
 
         if hasattr(self, "center_panel") and self.center_panel:
@@ -7672,7 +9074,8 @@ class WorkManagerDialog(QDialog):
             """)
 
         if hasattr(self, "right_panel") and self.right_panel:
-            self.right_panel.setStyleSheet("background: transparent; border: none;")
+            self.right_panel.setObjectName("wmRightPanel")
+            self.right_panel.setStyleSheet("#wmRightPanel { background: transparent; border: none; }")
 
         if hasattr(self, "attach_card") and self.attach_card:
             self.attach_card.setStyleSheet(f"""
@@ -7719,6 +9122,7 @@ class WorkManagerDialog(QDialog):
                     color: #FFFFFF;
                     font-weight: 600;
                 }}
+                {self._tooltip_css()}
             """)
 
         if hasattr(self, "work_schedule_list") and self.work_schedule_list:
@@ -7748,7 +9152,13 @@ class WorkManagerDialog(QDialog):
                     color: #FFFFFF;
                     font-weight: 600;
                 }}
+                {self._tooltip_css()}
             """)
+
+        if hasattr(self, "work_doc_list") and self.work_doc_list and hasattr(self, "work_schedule_list") and self.work_schedule_list:
+            self.work_doc_list.setStyleSheet(self.work_schedule_list.styleSheet())
+
+        self._apply_tooltip_palette()
 
         if hasattr(self, "bottom_bar") and self.bottom_bar:
             self.bottom_bar.setStyleSheet("""
@@ -7829,5 +9239,6 @@ class WorkManagerDialog(QDialog):
         self.palette = palette
         self._apply_theme_styles()
         self._refresh_category_tree()
+        self._render_category_tab_bar()
         self._refresh_sheet_tabs()
         self.update()

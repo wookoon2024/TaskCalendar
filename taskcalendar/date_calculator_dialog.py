@@ -67,7 +67,7 @@ def _calc_ymd_diff(start_dt: date, end_dt: date) -> tuple[int, int, int]:
 
 
 class DateCalculatorDialog(QDialog):
-    """K캘린더 다기능 날짜 계산기 다이얼로그.
+    """나라수첩 다기능 날짜 계산기 다이얼로그.
 
     - 탭 1: 일수 / D-Day 계산 (두 날짜 간격, D-Day, 주/개월/년 환산)
     - 탭 2: 기념일 계산 (100일~1000일, 주년 프리셋, N일/주/월/년 전·후 계산, 음력 병기)
@@ -88,7 +88,7 @@ class DateCalculatorDialog(QDialog):
         super().__init__(parent)
         self.palette = resolve_palette(parent)
         self.setWindowModality(Qt.WindowModality.WindowModal)
-        self.setWindowTitle("K캘린더 날짜 계산기")
+        self.setWindowTitle("나라수첩 날짜 계산기")
         self.resize(620, 600)
         self.setMinimumSize(560, 520)
 

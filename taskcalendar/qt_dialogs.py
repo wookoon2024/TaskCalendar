@@ -11,7 +11,7 @@ from uuid import uuid4
 logger = logging.getLogger(__name__)
 
 from PySide6.QtCore import QDate, QTime, Qt, QTimer, QRect, QPoint, QSize, QUrl, QEvent, Signal, QMimeData
-from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QTextCursor, QPainter, QPen, QColor, QDesktopServices, QCursor, QPixmap, QFont, QTextCharFormat, QDrag
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QTextCursor, QPainter, QPen, QColor, QDesktopServices, QCursor, QPixmap, QFont, QTextCharFormat, QDrag, QPalette
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QApplication,
@@ -48,11 +48,13 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QStyle,
     QStyleOption,
+    QStyleOptionViewItem,
     QStylePainter,
+    QStyledItemDelegate,
 )
 
 from taskcalendar.rich_text_edit import RichTextEdit
-from taskcalendar.fonts import DEFAULT_FAMILY, DEFAULT_SCALE, SCALE_OPTIONS, scale_px, ui_font_family
+from taskcalendar.fonts import DEFAULT_FAMILY, DEFAULT_SCALE, SCALE_OPTIONS, make_ui_font_like, scale_px, ui_font_family
 from taskcalendar.models import (
     ALERT_OPTIONS,
     COLOR_OPTIONS,
@@ -1324,7 +1326,11 @@ class EntryDialog(QDialog):
                     self.attachment_bar.hide()
 
             # Apply initial default font size
-            def_font_size = int(repo.get_setting("memo_default_font_size", "11") if repo else 11)
+            try:
+                raw_size = int(repo.get_setting("memo_default_font_size", "11") if repo else 11)
+                def_font_size = max(8, raw_size)
+            except Exception:
+                def_font_size = 11
             self._current_memo_font_size = def_font_size
             desc_font = self.description_input.font()
             desc_font.setPointSize(def_font_size)
@@ -2942,7 +2948,7 @@ class EntryDialog(QDialog):
         self.btn_italic = QPushButton("I")
         self.btn_italic.setProperty("class", "editorBtn")
         self.btn_italic.setCheckable(True)
-        font_i = QFont(ui_font_family(), scale_px(10))
+        font_i = make_ui_font_like(10)
         font_i.setItalic(True)
         self.btn_italic.setFont(font_i)
         self.btn_italic.setToolTip("기울임 (Ctrl+I)")
@@ -2952,7 +2958,7 @@ class EntryDialog(QDialog):
         self.btn_underline = QPushButton("U")
         self.btn_underline.setProperty("class", "editorBtn")
         self.btn_underline.setCheckable(True)
-        font_u = QFont(ui_font_family(), scale_px(10))
+        font_u = make_ui_font_like(10)
         font_u.setUnderline(True)
         self.btn_underline.setFont(font_u)
         self.btn_underline.setToolTip("밑줄 (Ctrl+U)")
@@ -2962,7 +2968,7 @@ class EntryDialog(QDialog):
         self.btn_strike = QPushButton("S")
         self.btn_strike.setProperty("class", "editorBtn")
         self.btn_strike.setCheckable(True)
-        font_s = QFont(ui_font_family(), scale_px(10))
+        font_s = make_ui_font_like(10)
         font_s.setStrikeOut(True)
         self.btn_strike.setFont(font_s)
         self.btn_strike.setToolTip("취소선")
@@ -5828,6 +5834,40 @@ class EntryViewDialog(QDialog):
             if hasattr(self, "_drag_position"):
                 delattr(self, "_drag_position")
         super().mouseReleaseEvent(event)
+
+
+class SettingsNavDelegate(QStyledItemDelegate):
+    """설정 좌측 메뉴 탭 항목 텍스트 렌더링 델리게이트 (업무분류 트리와 동일한 네이티브 ClearType 렌더링)"""
+
+    def __init__(self, parent=None, palette=None):
+        super().__init__(parent)
+        self.palette = palette or {}
+
+    def sizeHint(self, option, index):
+        return QSize(150, 38)
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        view = opt.widget
+        is_sel = bool(view and view.selectionModel() and view.selectionModel().isSelected(index))
+
+        opt.font.setFamily(ui_font_family())
+        opt.font.setPixelSize(13)
+        opt.font.setBold(True)
+
+        text_color = self.palette.get("text", "#1F2328")
+        if is_sel:
+            opt.palette.setColor(QPalette.ColorRole.Text, QColor(text_color))
+            opt.palette.setColor(QPalette.ColorRole.HighlightedText, QColor(text_color))
+        elif opt.state & QStyle.State_MouseOver:
+            opt.palette.setColor(QPalette.ColorRole.Text, QColor(text_color))
+        else:
+            opt.palette.setColor(QPalette.ColorRole.Text, QColor(text_color))
+
+        super().paint(painter, opt, index)
+
+
 class SettingsDialog(QDialog):
     def __init__(
         self,
@@ -5865,11 +5905,14 @@ class SettingsDialog(QDialog):
         work_copy_attachments_default: bool = True,
         work_delete_attachments_default: bool = True,
         work_default_cycle: str = "수시",
+        current_doc_shortcut: str = "F5",
         current_work_shortcut: str = "F6",
+        task_strikeout_completed: bool = True,
     ) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
         self._db_path = db_path
+        self._task_strikeout_completed = task_strikeout_completed
         self._work_enable_context_menu = work_enable_context_menu
         self._work_copy_attachments_default = work_copy_attachments_default
         self._work_delete_attachments_default = work_delete_attachments_default
@@ -5883,17 +5926,19 @@ class SettingsDialog(QDialog):
         self.result: dict[str, object] | None = None
         self._current_shortcut = normalize_shortcut(current_shortcut)
         self._current_memo_shortcut = normalize_shortcut(current_memo_shortcut)
+        self._current_doc_shortcut = normalize_shortcut(current_doc_shortcut)
         self._current_work_shortcut = normalize_shortcut(current_work_shortcut)
         shortcut_modifiers, shortcut_key = self._shortcut_parts(current_shortcut)
         memo_modifiers, memo_key = self._shortcut_parts(current_memo_shortcut)
+        doc_modifiers, doc_key = self._shortcut_parts(current_doc_shortcut)
         work_modifiers, work_key = self._shortcut_parts(current_work_shortcut)
         
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint)
         self.setWindowTitle("환경설정")
         self.setWindowIcon(_dialog_icon())
-        self.resize(720, 530)
-        self.setFixedWidth(720)
+        self.resize(730, 530)
+        self.setFixedWidth(730)
         self.setStyleSheet(dialog_stylesheet(self.palette))
 
         root = QVBoxLayout(self)
@@ -5921,15 +5966,11 @@ class SettingsDialog(QDialog):
 
         self.nav_list = QListWidget()
         self.nav_list.setObjectName("navSidebar")
-        self.nav_list.setFixedWidth(145)
+        self.nav_list.setFixedWidth(160)
         self.nav_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.nav_list.setSpacing(4)
-        
-        nav_font = QFont(ui_font_family)
-        nav_font.setPointSizeF(max(1.0, scale_px(14) * 72.0 / 96.0))
-        nav_font.setWeight(QFont.Weight.DemiBold)
-        self.nav_list.setFont(nav_font)
+        self.nav_list.setItemDelegate(SettingsNavDelegate(self.nav_list, self.palette))
         
         items = [
             ("⚙️ 기본", 0),
@@ -5944,8 +5985,7 @@ class SettingsDialog(QDialog):
         for label, idx in items:
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, idx)
-            item.setFont(nav_font)
-            item.setSizeHint(QSize(125, 40))
+            item.setSizeHint(QSize(150, 38))
             self.nav_list.addItem(item)
             
         body_layout.addWidget(self.nav_list)
@@ -6038,7 +6078,7 @@ class SettingsDialog(QDialog):
 
         self.show_task_count_on_calendar_check = QCheckBox("캘린더에 업무내역 표시하기")
         self.show_task_count_on_calendar_check.setChecked(show_task_count_on_calendar)
-        self.show_task_count_on_calendar_check.setToolTip("체크 시 캘린더 날짜 칸에 설정된 처리상태의 업무를 '업무 N건' 형태로 요약 표시합니다.")
+        self.show_task_count_on_calendar_check.setToolTip("체크 시 캘린더 날짜 칸에 설정된 처리상태의 업무를 '문서 N건' 형태로 요약 표시합니다.")
         cal_view_layout.addWidget(self.show_task_count_on_calendar_check)
 
         self.task_status_container = QWidget()
@@ -6373,13 +6413,14 @@ class SettingsDialog(QDialog):
         page_shortcuts = QWidget()
         pg_sc_layout = QVBoxLayout(page_shortcuts)
         pg_sc_layout.setContentsMargins(0, 0, 0, 0)
-        pg_sc_layout.setSpacing(10)
+        pg_sc_layout.setSpacing(6)
 
+        # 1. 캘린더 단축키 카드 (기본 F3)
         sc_cal_card = QFrame()
-        sc_cal_card.setObjectName("card")
+        sc_cal_card.setObjectName("shortcutCard")
         sc_cal_layout = QVBoxLayout(sc_cal_card)
-        sc_cal_layout.setContentsMargins(14, 12, 14, 12)
-        sc_cal_layout.setSpacing(8)
+        sc_cal_layout.setContentsMargins(12, 6, 12, 6)
+        sc_cal_layout.setSpacing(4)
         self.cal_shortcut_title = QLabel(f"캘린더 단축키 설정 (현재: {self._current_shortcut})")
         self.cal_shortcut_title.setObjectName("sectionTitle")
         sc_cal_layout.addWidget(self.cal_shortcut_title)
@@ -6429,11 +6470,12 @@ class SettingsDialog(QDialog):
         sc_cal_layout.addWidget(self.shortcut_status_label)
         pg_sc_layout.addWidget(sc_cal_card)
 
+        # 2. 메모 단축키 카드 (기본 F4)
         sc_memo_card = QFrame()
-        sc_memo_card.setObjectName("card")
+        sc_memo_card.setObjectName("shortcutCard")
         sc_memo_layout = QVBoxLayout(sc_memo_card)
-        sc_memo_layout.setContentsMargins(14, 12, 14, 12)
-        sc_memo_layout.setSpacing(8)
+        sc_memo_layout.setContentsMargins(12, 6, 12, 6)
+        sc_memo_layout.setSpacing(4)
         self.memo_shortcut_title = QLabel(f"메모 단축키 설정 (현재: {self._current_memo_shortcut})")
         self.memo_shortcut_title.setObjectName("sectionTitle")
         sc_memo_layout.addWidget(self.memo_shortcut_title)
@@ -6483,12 +6525,67 @@ class SettingsDialog(QDialog):
         sc_memo_layout.addWidget(self.memo_shortcut_status_label)
         pg_sc_layout.addWidget(sc_memo_card)
 
-        # 3. 업무 관리 단축키 카드 (기본 F6)
+        # 3. 문서 관리 단축키 카드 (기본 F5)
+        sc_doc_card = QFrame()
+        sc_doc_card.setObjectName("shortcutCard")
+        sc_doc_layout = QVBoxLayout(sc_doc_card)
+        sc_doc_layout.setContentsMargins(12, 6, 12, 6)
+        sc_doc_layout.setSpacing(4)
+        self.doc_shortcut_title = QLabel(f"문서 단축키 설정 (현재: {self._current_doc_shortcut})")
+        self.doc_shortcut_title.setObjectName("sectionTitle")
+        sc_doc_layout.addWidget(self.doc_shortcut_title)
+
+        doc_row = QHBoxLayout()
+        doc_row.setContentsMargins(0, 0, 0, 0)
+        doc_row.setSpacing(8)
+        doc_lbl = QLabel("토글")
+        doc_lbl.setObjectName("muted")
+        doc_row.addWidget(doc_lbl)
+
+        self.doc_shortcut_ctrl_check = QCheckBox("Ctrl")
+        self.doc_shortcut_ctrl_check.setChecked("Ctrl" in doc_modifiers)
+        doc_row.addWidget(self.doc_shortcut_ctrl_check)
+
+        self.doc_shortcut_shift_check = QCheckBox("Shift")
+        self.doc_shortcut_shift_check.setChecked("Shift" in doc_modifiers)
+        doc_row.addWidget(self.doc_shortcut_shift_check)
+
+        self.doc_shortcut_alt_check = QCheckBox("Alt")
+        self.doc_shortcut_alt_check.setChecked("Alt" in doc_modifiers)
+        doc_row.addWidget(self.doc_shortcut_alt_check)
+
+        plus_label_doc = QLabel("+")
+        plus_label_doc.setObjectName("muted")
+        doc_row.addWidget(plus_label_doc)
+
+        self.doc_shortcut_key_combo = QComboBox()
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            self.doc_shortcut_key_combo.addItem(letter, letter)
+        for num in range(1, 13):
+            token = f"F{num}"
+            self.doc_shortcut_key_combo.addItem(token, token)
+        self.doc_shortcut_key_combo.setCurrentIndex(max(0, self.doc_shortcut_key_combo.findData(doc_key)))
+        self.doc_shortcut_key_combo.setMinimumWidth(72)
+        self.doc_shortcut_key_combo.setMaximumWidth(88)
+        doc_row.addWidget(self.doc_shortcut_key_combo)
+        self.doc_default_btn = QPushButton("기본값(F5)")
+        self.doc_default_btn.setToolTip("문서 토글 단축키를 기본값인 F5로 설정합니다.")
+        self.doc_default_btn.clicked.connect(self._set_doc_default)
+        doc_row.addWidget(self.doc_default_btn)
+        doc_row.addStretch(1)
+        sc_doc_layout.addLayout(doc_row)
+
+        self.doc_shortcut_status_label = QLabel("")
+        self.doc_shortcut_status_label.setObjectName("subtitle")
+        sc_doc_layout.addWidget(self.doc_shortcut_status_label)
+        pg_sc_layout.addWidget(sc_doc_card)
+
+        # 4. 업무 관리 단축키 카드 (기본 F6)
         sc_work_card = QFrame()
-        sc_work_card.setObjectName("card")
+        sc_work_card.setObjectName("shortcutCard")
         sc_work_layout = QVBoxLayout(sc_work_card)
-        sc_work_layout.setContentsMargins(14, 12, 14, 12)
-        sc_work_layout.setSpacing(8)
+        sc_work_layout.setContentsMargins(12, 6, 12, 6)
+        sc_work_layout.setSpacing(4)
         self.work_shortcut_title = QLabel(f"업무 단축키 설정 (현재: {self._current_work_shortcut})")
         self.work_shortcut_title.setObjectName("sectionTitle")
         sc_work_layout.addWidget(self.work_shortcut_title)
@@ -6548,14 +6645,19 @@ class SettingsDialog(QDialog):
         self.memo_shortcut_alt_check.toggled.connect(self._on_memo_shortcut_changed)
         self.memo_shortcut_key_combo.currentIndexChanged.connect(self._on_memo_shortcut_changed)
 
+        self.doc_shortcut_ctrl_check.toggled.connect(self._on_doc_shortcut_changed)
+        self.doc_shortcut_shift_check.toggled.connect(self._on_doc_shortcut_changed)
+        self.doc_shortcut_alt_check.toggled.connect(self._on_doc_shortcut_changed)
+        self.doc_shortcut_key_combo.currentIndexChanged.connect(self._on_doc_shortcut_changed)
+
         self.work_shortcut_ctrl_check.toggled.connect(self._on_work_shortcut_changed)
         self.work_shortcut_shift_check.toggled.connect(self._on_work_shortcut_changed)
         self.work_shortcut_alt_check.toggled.connect(self._on_work_shortcut_changed)
         self.work_shortcut_key_combo.currentIndexChanged.connect(self._on_work_shortcut_changed)
 
         reset_all_row = QHBoxLayout()
-        reset_all_btn = QPushButton("단축키 기본값 초기화 (캘린더: F3, 메모: F4, 업무: F6)")
-        reset_all_btn.setToolTip("캘린더(F3), 메모(F4), 업무(F6) 단축키를 기본값으로 일괄 재설정합니다.")
+        reset_all_btn = QPushButton("단축키 기본값 초기화 (캘린더: F3, 메모: F4, 문서: F5, 업무: F6)")
+        reset_all_btn.setToolTip("캘린더(F3), 메모(F4), 문서(F5), 업무(F6) 단축키를 기본값으로 일괄 재설정합니다.")
         reset_all_btn.clicked.connect(self._reset_all_shortcuts_default)
         reset_all_row.addWidget(reset_all_btn)
         reset_all_row.addStretch(1)
@@ -6581,13 +6683,13 @@ class SettingsDialog(QDialog):
         self.auto_backup_check = QCheckBox("앱 시작 시 자동 백업 활성화")
         self.auto_backup_check.setChecked(auto_backup_enabled)
         backup_row1.addWidget(self.auto_backup_check)
-
-        backup_note = QLabel("(※ 첨부파일은 백업에 포함되지 않습니다.)")
-        backup_note.setObjectName("subtitle")
-        backup_note.setStyleSheet(f"color: {self.palette['danger']}; font-weight: 600;")
-        backup_row1.addWidget(backup_note)
         backup_row1.addStretch(1)
         backup_layout.addLayout(backup_row1)
+
+        backup_note = QLabel("• 첨부파일은 PC 폴더에 안전하게 보관되므로 DB 및 설정만 초경량(수 MB 이내)으로 백업됩니다.")
+        backup_note.setObjectName("subtitle")
+        backup_note.setStyleSheet(f"color: {self.palette['muted']}; font-size: 11px; margin-left: 20px; margin-top: -4px;")
+        backup_layout.addWidget(backup_note)
 
         backup_row2 = QHBoxLayout()
         interval_label = QLabel("백업 주기:")
@@ -6650,10 +6752,10 @@ class SettingsDialog(QDialog):
         data_layout = QVBoxLayout(data_card)
         data_layout.setContentsMargins(14, 12, 14, 12)
         data_layout.setSpacing(6)
-        data_title = QLabel("데이터 관리")
+        data_title = QLabel("데이터 백업 및 내보내기")
         data_title.setObjectName("sectionTitle")
         data_layout.addWidget(data_title)
-        data_hint = QLabel("전체 데이터를 내보내거나 가져옵니다. 공휴일 설정 파일을 열어 직접 편집할 수도 있습니다.")
+        data_hint = QLabel("캘린더, 메모, 문서, 업무관리(분류/본문/서식 일체) 등 전체 데이터를 안전하게 백업·복원하거나 엑셀 표로 내보냅니다.")
         data_hint.setObjectName("subtitle")
         data_hint.setWordWrap(True)
         data_layout.addWidget(data_hint)
@@ -6692,20 +6794,45 @@ class SettingsDialog(QDialog):
         pg_doc_layout.setContentsMargins(0, 0, 0, 0)
         pg_doc_layout.setSpacing(10)
 
-        # 1. 크롬 확장프로그램 (Chrome Extension) 연동 카드
+        # 1. 문서 관리 표시 설정 카드
+        doc_display_card = QFrame()
+        doc_display_card.setObjectName("card")
+        doc_display_layout = QVBoxLayout(doc_display_card)
+        doc_display_layout.setContentsMargins(14, 12, 14, 12)
+        doc_display_layout.setSpacing(8)
+
+        doc_display_title = QLabel("문서 관리 표시 설정")
+        doc_display_title.setObjectName("sectionTitle")
+        doc_display_layout.addWidget(doc_display_title)
+
+        self.task_strikeout_completed_check = QCheckBox("완료된 문서 항목에 취소선(가운데 줄) 긋기")
+        self.task_strikeout_completed_check.setChecked(self._task_strikeout_completed)
+        doc_display_layout.addWidget(self.task_strikeout_completed_check)
+
+        doc_display_desc = QLabel(
+            "문서 관리 대시보드 리스트 및 엑셀 저장 시 완료 상태인 문서의 글자에 취소선(가운데 줄)을 표시합니다.\n"
+            "체크를 해제하면 취소선 없이 글씨 색상만 흐리게 표시됩니다."
+        )
+        doc_display_desc.setObjectName("subtitle")
+        doc_display_desc.setWordWrap(True)
+        doc_display_layout.addWidget(doc_display_desc)
+
+        pg_doc_layout.addWidget(doc_display_card)
+
+        # 2. 크롬 확장프로그램 (Chrome Extension) 연동 카드
         chrome_card = QFrame()
         chrome_card.setObjectName("card")
         chrome_layout = QVBoxLayout(chrome_card)
         chrome_layout.setContentsMargins(14, 12, 14, 12)
         chrome_layout.setSpacing(10)
 
-        chrome_title = QLabel("크롬 확장프로그램 연동 (K캘린더로 보내기)")
+        chrome_title = QLabel("크롬 확장프로그램 연동 (나라수첩로 보내기)")
         chrome_title.setObjectName("sectionTitle")
         chrome_layout.addWidget(chrome_title)
 
         chrome_desc = QLabel(
             "인터넷 서핑 또는 웹 업무 화면에서 드래그한 텍스트나 기사, 현재 웹페이지를\n"
-            "K캘린더의 일정 / 업무 / 메모로 마우스 우클릭 한 번으로 즉시 전송할 수 있는 전용 확장 프로그램입니다.\n"
+            "나라수첩의 일정 / 업무 / 메모로 마우스 우클릭 한 번으로 즉시 전송할 수 있는 전용 확장 프로그램입니다.\n"
             "(전용 단축키: Ctrl + Shift + K)"
         )
         chrome_desc.setObjectName("subtitle")
@@ -6970,6 +7097,27 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, "단축키 오류", f"메모 단축키 오류: {memo_message}")
             return
 
+        doc_modifiers: list[str] = []
+        if self.doc_shortcut_ctrl_check.isChecked():
+            doc_modifiers.append("Ctrl")
+        if self.doc_shortcut_shift_check.isChecked():
+            doc_modifiers.append("Shift")
+        if self.doc_shortcut_alt_check.isChecked():
+            doc_modifiers.append("Alt")
+        doc_key_token = str(self.doc_shortcut_key_combo.currentData())
+        if not doc_modifiers and not (doc_key_token.startswith("F") and doc_key_token[1:].isdigit()):
+            QMessageBox.warning(self, "입력 오류", "문서 단독 키는 F1~F12만 설정할 수 있습니다.")
+            self.nav_list.setCurrentRow(6)
+            return
+        doc_shortcut = "+".join(doc_modifiers + [doc_key_token]) if doc_modifiers else doc_key_token
+        doc_available, doc_message = self._check_shortcut_availability(doc_shortcut, target="doc")
+        if not doc_available:
+            self.doc_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
+            self.doc_shortcut_status_label.setText(doc_message)
+            self.nav_list.setCurrentRow(6)
+            QMessageBox.warning(self, "단축키 오류", f"문서 단축키 오류: {doc_message}")
+            return
+
         work_modifiers: list[str] = []
         if self.work_shortcut_ctrl_check.isChecked():
             work_modifiers.append("Ctrl")
@@ -6994,10 +7142,11 @@ class SettingsDialog(QDialog):
         shortcuts_set = {
             normalize_shortcut(cal_shortcut),
             normalize_shortcut(memo_shortcut),
+            normalize_shortcut(doc_shortcut),
             normalize_shortcut(work_shortcut),
         }
-        if len(shortcuts_set) < 3:
-            QMessageBox.warning(self, "단축키 중복", "캘린더, 메모, 업무 단축키는 서로 달라야 합니다.")
+        if len(shortcuts_set) < 4:
+            QMessageBox.warning(self, "단축키 중복", "캘린더, 메모, 문서, 업무 단축키는 서로 달라야 합니다.")
             self.nav_list.setCurrentRow(6)
             return
 
@@ -7009,6 +7158,7 @@ class SettingsDialog(QDialog):
             "theme": str(self.theme_combo.currentData()),
             "shortcut": cal_shortcut,
             "memo_shortcut": memo_shortcut,
+            "doc_shortcut": doc_shortcut,
             "work_shortcut": work_shortcut,
             "auto_start": self.auto_start_check.isChecked(),
             "calendar_sidebar_title_only": self.calendar_sidebar_title_only_check.isChecked(),
@@ -7037,6 +7187,7 @@ class SettingsDialog(QDialog):
             "work_copy_attachments_default": self.work_copy_attachments_check.isChecked(),
             "work_delete_attachments_default": self.work_delete_attachments_check.isChecked(),
             "work_default_cycle": getattr(self, "_work_default_cycle", "수시"),
+            "task_strikeout_completed": self.task_strikeout_completed_check.isChecked(),
         }
         self.accept()
 
@@ -7128,6 +7279,17 @@ class SettingsDialog(QDialog):
         key_token = str(self.memo_shortcut_key_combo.currentData())
         return "+".join(modifiers + [key_token]) if modifiers else key_token
 
+    def _get_current_doc_shortcut_from_ui(self) -> str:
+        modifiers: list[str] = []
+        if self.doc_shortcut_ctrl_check.isChecked():
+            modifiers.append("Ctrl")
+        if self.doc_shortcut_shift_check.isChecked():
+            modifiers.append("Shift")
+        if self.doc_shortcut_alt_check.isChecked():
+            modifiers.append("Alt")
+        key_token = str(self.doc_shortcut_key_combo.currentData())
+        return "+".join(modifiers + [key_token]) if modifiers else key_token
+
     def _get_current_work_shortcut_from_ui(self) -> str:
         modifiers: list[str] = []
         if self.work_shortcut_ctrl_check.isChecked():
@@ -7142,16 +7304,25 @@ class SettingsDialog(QDialog):
     def _on_cal_shortcut_changed(self) -> None:
         self._refresh_shortcut_status()
         self._refresh_memo_shortcut_status()
+        self._refresh_doc_shortcut_status()
         self._refresh_work_shortcut_status()
 
     def _on_memo_shortcut_changed(self) -> None:
         self._refresh_shortcut_status()
         self._refresh_memo_shortcut_status()
+        self._refresh_doc_shortcut_status()
+        self._refresh_work_shortcut_status()
+
+    def _on_doc_shortcut_changed(self) -> None:
+        self._refresh_shortcut_status()
+        self._refresh_memo_shortcut_status()
+        self._refresh_doc_shortcut_status()
         self._refresh_work_shortcut_status()
 
     def _on_work_shortcut_changed(self) -> None:
         self._refresh_shortcut_status()
         self._refresh_memo_shortcut_status()
+        self._refresh_doc_shortcut_status()
         self._refresh_work_shortcut_status()
 
     def _set_cal_default(self) -> None:
@@ -7171,6 +7342,15 @@ class SettingsDialog(QDialog):
         if idx >= 0:
             self.memo_shortcut_key_combo.setCurrentIndex(idx)
         self._on_memo_shortcut_changed()
+
+    def _set_doc_default(self) -> None:
+        self.doc_shortcut_ctrl_check.setChecked(False)
+        self.doc_shortcut_shift_check.setChecked(False)
+        self.doc_shortcut_alt_check.setChecked(False)
+        idx = self.doc_shortcut_key_combo.findData("F5")
+        if idx >= 0:
+            self.doc_shortcut_key_combo.setCurrentIndex(idx)
+        self._on_doc_shortcut_changed()
 
     def _set_work_default(self) -> None:
         self.work_shortcut_ctrl_check.setChecked(False)
@@ -7196,6 +7376,13 @@ class SettingsDialog(QDialog):
         if idx_memo >= 0:
             self.memo_shortcut_key_combo.setCurrentIndex(idx_memo)
 
+        self.doc_shortcut_ctrl_check.setChecked(False)
+        self.doc_shortcut_shift_check.setChecked(False)
+        self.doc_shortcut_alt_check.setChecked(False)
+        idx_doc = self.doc_shortcut_key_combo.findData("F5")
+        if idx_doc >= 0:
+            self.doc_shortcut_key_combo.setCurrentIndex(idx_doc)
+
         self.work_shortcut_ctrl_check.setChecked(False)
         self.work_shortcut_shift_check.setChecked(False)
         self.work_shortcut_alt_check.setChecked(False)
@@ -7205,6 +7392,7 @@ class SettingsDialog(QDialog):
 
         self._refresh_shortcut_status()
         self._refresh_memo_shortcut_status()
+        self._refresh_doc_shortcut_status()
         self._refresh_work_shortcut_status()
 
     def _refresh_shortcut_status(self) -> None:
@@ -7220,6 +7408,12 @@ class SettingsDialog(QDialog):
         if normalize_shortcut(shortcut) == normalize_shortcut(memo_shortcut):
             self.shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
             self.shortcut_status_label.setText("메모 단축키와 중복됩니다.")
+            return
+
+        doc_shortcut = self._get_current_doc_shortcut_from_ui()
+        if normalize_shortcut(shortcut) == normalize_shortcut(doc_shortcut):
+            self.shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
+            self.shortcut_status_label.setText("문서 단축키와 중복됩니다.")
             return
 
         work_shortcut = self._get_current_work_shortcut_from_ui()
@@ -7247,6 +7441,12 @@ class SettingsDialog(QDialog):
             self.memo_shortcut_status_label.setText("캘린더 단축키와 중복됩니다.")
             return
 
+        doc_shortcut = self._get_current_doc_shortcut_from_ui()
+        if normalize_shortcut(shortcut) == normalize_shortcut(doc_shortcut):
+            self.memo_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
+            self.memo_shortcut_status_label.setText("문서 단축키와 중복됩니다.")
+            return
+
         work_shortcut = self._get_current_work_shortcut_from_ui()
         if normalize_shortcut(shortcut) == normalize_shortcut(work_shortcut):
             self.memo_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
@@ -7256,6 +7456,37 @@ class SettingsDialog(QDialog):
         available, message = self._check_shortcut_availability(shortcut, target="memo")
         self.memo_shortcut_status_label.setStyleSheet(f"color: {self.palette['accent']};" if available else f"color: {self.palette['danger']};")
         self.memo_shortcut_status_label.setText(message)
+
+    def _refresh_doc_shortcut_status(self) -> None:
+        shortcut = self._get_current_doc_shortcut_from_ui()
+        modifiers = [m for m in ["Ctrl", "Shift", "Alt"] if getattr(self, f"doc_shortcut_{m.lower()}_check").isChecked()]
+        key_token = str(self.doc_shortcut_key_combo.currentData())
+        if not modifiers and not (key_token.startswith("F") and key_token[1:].isdigit()):
+            self.doc_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
+            self.doc_shortcut_status_label.setText("단독 키는 F1~F12만 가능합니다.")
+            return
+
+        cal_shortcut = self._get_current_cal_shortcut_from_ui()
+        if normalize_shortcut(shortcut) == normalize_shortcut(cal_shortcut):
+            self.doc_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
+            self.doc_shortcut_status_label.setText("캘린더 단축키와 중복됩니다.")
+            return
+
+        memo_shortcut = self._get_current_memo_shortcut_from_ui()
+        if normalize_shortcut(shortcut) == normalize_shortcut(memo_shortcut):
+            self.doc_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
+            self.doc_shortcut_status_label.setText("메모 단축키와 중복됩니다.")
+            return
+
+        work_shortcut = self._get_current_work_shortcut_from_ui()
+        if normalize_shortcut(shortcut) == normalize_shortcut(work_shortcut):
+            self.doc_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
+            self.doc_shortcut_status_label.setText("업무 단축키와 중복됩니다.")
+            return
+
+        available, message = self._check_shortcut_availability(shortcut, target="doc")
+        self.doc_shortcut_status_label.setStyleSheet(f"color: {self.palette['accent']};" if available else f"color: {self.palette['danger']};")
+        self.doc_shortcut_status_label.setText(message)
 
     def _refresh_work_shortcut_status(self) -> None:
         shortcut = self._get_current_work_shortcut_from_ui()
@@ -7278,6 +7509,12 @@ class SettingsDialog(QDialog):
             self.work_shortcut_status_label.setText("메모 단축키와 중복됩니다.")
             return
 
+        doc_shortcut = self._get_current_doc_shortcut_from_ui()
+        if normalize_shortcut(shortcut) == normalize_shortcut(doc_shortcut):
+            self.work_shortcut_status_label.setStyleSheet(f"color: {self.palette['danger']};")
+            self.work_shortcut_status_label.setText("문서 단축키와 중복됩니다.")
+            return
+
         available, message = self._check_shortcut_availability(shortcut, target="work")
         self.work_shortcut_status_label.setStyleSheet(f"color: {self.palette['accent']};" if available else f"color: {self.palette['danger']};")
         self.work_shortcut_status_label.setText(message)
@@ -7287,6 +7524,7 @@ class SettingsDialog(QDialog):
         current_map = {
             "calendar": self._current_shortcut,
             "memo": self._current_memo_shortcut,
+            "doc": self._current_doc_shortcut,
             "work": self._current_work_shortcut,
         }
         current = current_map.get(target, "")
@@ -7301,8 +7539,8 @@ class SettingsDialog(QDialog):
         user32.RegisterHotKey.restype = ctypes.c_int
         user32.UnregisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int]
         user32.UnregisterHotKey.restype = ctypes.c_int
-        test_id_map = {"calendar": 0xB7FE, "memo": 0xB7FD, "work": 0xB7FC}
-        test_id = test_id_map.get(target, 0xB7FB)
+        test_id_map = {"calendar": 0xB7FE, "memo": 0xB7FD, "doc": 0xB7FB, "work": 0xB7FC}
+        test_id = test_id_map.get(target, 0xB7FA)
         ok = bool(user32.RegisterHotKey(None, test_id, modifiers, vk))
         if ok:
             user32.UnregisterHotKey(None, test_id)
@@ -8036,10 +8274,11 @@ class BackupRestoreFormatDialog(QDialog):
         self.palette = resolve_palette(parent)
         self.mode = mode  # "export" or "import"
         self.selected_format = "zip"  # default
+        self.include_attachments = False
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowTitle("데이터 내보내기" if mode == "export" else "데이터 가져오기")
-        self.resize(480, 260)
-        self.setFixedWidth(480)
+        self.resize(500, 330 if mode == "export" else 280)
+        self.setFixedWidth(500)
 
         # Style sheet
         self.setStyleSheet(dialog_stylesheet(self.palette))
@@ -8063,17 +8302,19 @@ class BackupRestoreFormatDialog(QDialog):
         self.zip_card = QFrame()
         self.zip_card.setObjectName("card")
         zip_card_layout = QVBoxLayout(self.zip_card)
-        zip_card_layout.setContentsMargins(8, 8, 8, 8)
-        zip_card_layout.setSpacing(2)
+        zip_card_layout.setContentsMargins(10, 10, 10, 10)
+        zip_card_layout.setSpacing(6)
 
-        self.zip_radio = QRadioButton("ZIP 백업 파일 (.zip) - 권장")
+        self.zip_radio = QRadioButton(
+            "전체 데이터 백업 ZIP (.zip) - 권장" if mode == "export" else "전체 데이터 복원 ZIP (.zip) - 권장"
+        )
         self.zip_radio.setChecked(True)
         zip_card_layout.addWidget(self.zip_radio)
 
         zip_desc_text = (
-            "일정, 메모, 설정 및 모든 첨부파일을 포함하여 안전하게 백업합니다."
+            "캘린더, 메모, 문서관리, 업무관리(분류/본문/서식 일체), 환경설정을 포함한 데이터베이스를 안전하게 백업합니다."
             if mode == "export"
-            else "전체 일정, 메모, 설정 및 첨부파일을 백업 파일 상태로 복원합니다.\n(⚠️ 복원 시 현재의 모든 데이터와 첨부파일이 덮어쓰여집니다.)"
+            else "백업 파일로부터 캘린더, 메모, 문서, 업무관리(본문/서식), 설정을 복원합니다.\n(⚠️ 현재 데이터가 백업 상태로 교체됩니다. 첨부파일이 포함된 백업은 첨부파일도 함께 복원됩니다.)"
         )
         zip_info = QLabel(zip_desc_text)
         if mode == "import":
@@ -8082,22 +8323,41 @@ class BackupRestoreFormatDialog(QDialog):
             zip_info.setObjectName("info_label")
         zip_info.setWordWrap(True)
         zip_card_layout.addWidget(zip_info)
+
+        if mode == "export":
+            self.include_attachments_check = QCheckBox("대용량 첨부파일 폴더도 백업에 포함 (PC 교체/전체 이전용)")
+            self.include_attachments_check.setChecked(False)
+            self.include_attachments_check.setStyleSheet("margin-top: 4px; font-weight: 500;")
+            zip_card_layout.addWidget(self.include_attachments_check)
+
+            att_hint = QLabel(
+                "• 체크 해제(기본): 초경량·초고속 백업 (수 MB 이내, 로컬 첨부파일 폴더와 자동 연결 유지)\n"
+                "• 체크 시: 새 컴퓨터로 이전할 때 모든 첨부파일까지 묶어 백업 (용량이 커질 수 있음)"
+            )
+            att_hint.setStyleSheet(f"font-size: 11px; color: {self.palette.get('muted', '#666')}; margin-left: 20px;")
+            att_hint.setWordWrap(True)
+            zip_card_layout.addWidget(att_hint)
+
+            self.zip_radio.toggled.connect(self._on_zip_radio_toggled)
+
         layout.addWidget(self.zip_card)
 
         # Excel Card
         self.excel_card = QFrame()
         self.excel_card.setObjectName("card")
         excel_card_layout = QVBoxLayout(self.excel_card)
-        excel_card_layout.setContentsMargins(8, 8, 8, 8)
-        excel_card_layout.setSpacing(2)
+        excel_card_layout.setContentsMargins(10, 10, 10, 10)
+        excel_card_layout.setSpacing(6)
 
-        self.excel_radio = QRadioButton("Excel 파일 (.xlsx)")
+        self.excel_radio = QRadioButton(
+            "Excel 표 내보내기 (.xlsx)" if mode == "export" else "Excel 표 불러오기 (.xlsx)"
+        )
         excel_card_layout.addWidget(self.excel_radio)
 
         excel_desc_text = (
-            "일정과 메모의 텍스트 데이터만 엑셀로 저장합니다.\n(⚠️ 엑셀 형식은 첨부파일을 내보낼 수 없습니다.)"
+            "캘린더 일정, 메모, 문서관리 리스트의 텍스트 표 데이터만 엑셀로 저장합니다.\n(⚠️ 엑셀 형식은 업무관리 본문 서식 및 첨부파일을 포함하지 않습니다.)"
             if mode == "export"
-            else "엑셀 파일로부터 일정 및 메모 데이터를 가져와 현재 데이터에 병합/대체합니다.\n(⚠️ 엑셀 형식은 첨부파일을 가져올 수 없습니다.)"
+            else "엑셀 파일로부터 일정 및 메모 데이터를 가져와 현재 데이터에 병합/대체합니다.\n(⚠️ 엑셀 형식은 업무관리 및 첨부파일을 가져올 수 없습니다.)"
         )
         excel_info = QLabel(excel_desc_text)
         excel_info.setObjectName("warning_label")
@@ -8120,11 +8380,20 @@ class BackupRestoreFormatDialog(QDialog):
 
         layout.addLayout(button_layout)
 
+    def _on_zip_radio_toggled(self, checked: bool) -> None:
+        if hasattr(self, "include_attachments_check"):
+            self.include_attachments_check.setEnabled(checked)
+
     def _on_confirm(self) -> None:
         if self.zip_radio.isChecked():
             self.selected_format = "zip"
+            if hasattr(self, "include_attachments_check"):
+                self.include_attachments = self.include_attachments_check.isChecked()
+            else:
+                self.include_attachments = False
         else:
             self.selected_format = "xlsx"
+            self.include_attachments = False
         self.accept()
 
 
@@ -8529,7 +8798,7 @@ class WelcomeFeatureIntroDialog(QDialog):
     def __init__(self, parent=None, is_dismissed: bool = False) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
-        self.setWindowTitle("K캘린더 기능 안내 & 팁")
+        self.setWindowTitle("나라수첩 기능 안내 & 팁")
         self.setWindowIcon(_dialog_icon())
         self.setModal(False)
         self.setWindowModality(Qt.WindowModality.NonModal)
@@ -8547,7 +8816,7 @@ class WelcomeFeatureIntroDialog(QDialog):
         h_layout = QVBoxLayout(header)
         h_layout.setContentsMargins(12, 10, 12, 10)
         h_layout.setSpacing(4)
-        h_title = QLabel("K캘린더 기능 소개 & 안내")
+        h_title = QLabel("나라수첩 기능 소개 & 안내")
         h_title.setObjectName("headerTitle")
         h_sub = QLabel("환경설정에서 업무 스타일에 맞춰 다양한 기능을 자유롭게 On/Off 할 수 있습니다.")
         h_sub.setObjectName("headerSubtitle")

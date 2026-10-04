@@ -623,31 +623,68 @@ class RichTextEdit(QTextEdit):
                 memo_all_act.triggered.connect(lambda: parent_dlg._show_memo_context_menu(event.globalPosition().toPoint()))
 
             # AI 도우미 메뉴 추가
-            menu.addSeparator()
-            act_chat = menu.addAction("대화하기 (AI 도우미)")
-            act_chat.triggered.connect(self._open_ai_chat)
-            act_analyze = menu.addAction("분석하기 (법령/규정)")
-            act_analyze.triggered.connect(self._open_ai_analyze)
-
+            self._add_ai_menu(menu)
             menu.exec(event.globalPosition().toPoint())
             return
 
         menu = self.createStandardContextMenu()
         menu.addSeparator()
-        act_chat = menu.addAction("대화하기 (AI 도우미)")
-        act_chat.triggered.connect(self._open_ai_chat)
-        act_analyze = menu.addAction("분석하기 (법령/규정)")
-        act_analyze.triggered.connect(self._open_ai_analyze)
+        self._add_ai_menu(menu)
         menu.exec(event.globalPosition().toPoint())
+
+    def _add_ai_menu(self, menu) -> None:
+        selected = self.textCursor().selectedText().strip()
+        ai_menu = menu.addMenu("✨ AI 작성 도우미")
+        ai_menu.setStyleSheet(menu.styleSheet())
+
+        act_gongmun = ai_menu.addAction("🏛️ 공문서 개조식 다듬기")
+        act_gongmun.triggered.connect(lambda: self._open_ai_preset("gongmun"))
+
+        act_summary = ai_menu.addAction("📋 3줄 핵심 요약")
+        act_summary.triggered.connect(lambda: self._open_ai_preset("summary"))
+
+        act_law = ai_menu.addAction("⚖️ 관련 법령·규정 검토")
+        act_law.triggered.connect(lambda: self._open_ai_preset("law"))
+
+        act_refine = ai_menu.addAction("✍️ 쉬운 공공언어로 순화")
+        act_refine.triggered.connect(lambda: self._open_ai_preset("refine"))
+
+        ai_menu.addSeparator()
+        act_chat = ai_menu.addAction("💬 자유 질문 / 대화하기")
+        act_chat.triggered.connect(self._open_ai_chat)
 
     def insert_text_at_cursor(self, text: str) -> None:
         """현재 에디터 커서 위치에 텍스트 삽입"""
         self.insertPlainText(text)
 
+    def replace_selection_with_text(self, text: str) -> None:
+        """선택된 텍스트 영역을 새 텍스트로 치환"""
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            cursor.insertText(text)
+        else:
+            self.insertPlainText(text)
+
+    def _open_ai_preset(self, preset: str) -> None:
+        try:
+            from taskcalendar.ai_assistant import AIChatDialog
+            selected = self.textCursor().selectedText().strip()
+            # 줄바꿈 복원 (Qt selection u2029)
+            selected = selected.replace("\u2029", "\n")
+            dlg = AIChatDialog(
+                parent_editor=self,
+                selected_text=selected,
+                preset=preset,
+            )
+            dlg.show()
+        except Exception:
+            pass
+
     def _open_ai_chat(self) -> None:
         try:
             from taskcalendar.ai_assistant import AIChatDialog
-            dlg = AIChatDialog(parent_editor=self)
+            selected = self.textCursor().selectedText().strip().replace("\u2029", "\n")
+            dlg = AIChatDialog(parent_editor=self, selected_text=selected)
             dlg.show()
         except Exception:
             pass

@@ -684,7 +684,7 @@ document.addEventListener('DOMContentLoaded', () => {
       selectPickField(data.targetPickField);
     }
 
-    // 🎯 K캘린더 팝업 내부 모달: 방금 직접 찍기로 들어온 경우 팝업 안에서 확인 대화창 표시
+    // 🎯 나라수첩 팝업 내부 모달: 방금 직접 찍기로 들어온 경우 팝업 안에서 확인 대화창 표시
     if (data.justPicked && data.justPicked.field && data.justPicked.rawText) {
       const pField = data.justPicked.field;
       const pRaw = data.justPicked.rawText;
@@ -1520,6 +1520,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (els.chkDate.checked && els.valDate.value) {
         url += `&date=${els.valDate.value}`;
+      }
+
+      if (type === 'schedule') {
+        url += `&all_day=1`;
       }
 
       // 비고: 체크된 경우 전송 (메모 및 비고 용도로 최대 1000자까지 허용)

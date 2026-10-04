@@ -54,6 +54,80 @@ DEFAULT_AI_KEY = "user_2PKt7EHf5NygyxWLz62XfKn1ZT6aKx2P6Q2kEpRP2uiUUjTh66Eepmnjc
 DEFAULT_AI_MODEL = "gpt-5.6-sol"
 
 
+def extract_svg_from_text(text: str) -> str | None:
+    """텍스트/AI 응답 중에서 순수 SVG 마크업 코드를 정규식으로 추출"""
+    if not text:
+        return None
+    import re
+
+    # 1. 텍스트 내에서 <svg ... </svg> 완전문 추출 (혹은 <?xml ...?> 뒤에 오는 경우 포함)
+    m_tag = re.search(r"(<svg[\s\S]*?</svg>)", text, re.IGNORECASE)
+    if m_tag:
+        svg_candidate = m_tag.group(1).strip()
+        return svg_candidate
+
+    # 2. 코드 블록(```xml, ```svg 등) 또는 본문 내에서 <svg 태그로 시작하는 영역 추출
+    # AI가 출력 도중 중단되었거나 </svg> 닫는 태그가 누락된 경우도 복원
+    m_code = re.search(r"<svg[\s\S]*?(?:</svg>|(?=```)|$)", text, re.IGNORECASE)
+    if m_code:
+        svg_candidate = m_code.group(0).strip()
+        # 끝에 불완전하게 잘린 미완성 태그(예: <path d="... ) 제거
+        if not re.search(r"</svg>\s*$", svg_candidate, re.IGNORECASE):
+            svg_candidate = re.sub(r"<[^>]*$", "", svg_candidate).strip()
+            svg_candidate += "\n</svg>"
+        return svg_candidate
+
+    return None
+
+
+
+def render_svg_to_png(svg_str: str, max_width: int = 500, max_height: int = 500) -> str | None:
+    """순수 SVG 문자열을 PySide6 QSvgRenderer로 고화질 투명 배경 PNG 파일로 변환하여 임시 경로 반환"""
+    if not svg_str or "<svg" not in svg_str.lower():
+        return None
+    try:
+        import tempfile
+        import re
+        from PySide6.QtCore import QByteArray, QSize
+        from PySide6.QtGui import QImage, QPainter
+        from PySide6.QtSvg import QSvgRenderer
+
+        # xmlns 속성이 누락된 경우 자동 보정
+        if "xmlns=" not in svg_str:
+            svg_str = re.sub(r"(<svg\b[^>]*)>", r'\1 xmlns="http://www.w3.org/2000/svg">', svg_str, count=1, flags=re.IGNORECASE)
+
+        # SVG 유효성 검사 및 렌더러 준비
+        data_bytes = svg_str.encode("utf-8")
+        renderer = QSvgRenderer(QByteArray(data_bytes))
+        if not renderer.isValid():
+            return None
+
+        def_sz = renderer.defaultSize()
+        w = def_sz.width() if def_sz.width() > 0 else 300
+        h = def_sz.height() if def_sz.height() > 0 else 300
+
+        # 종횡비 유지하면서 max 크기 내로 스케일링
+        scale = min(max_width / max(w, 1), max_height / max(h, 1), 2.0)
+        out_w = max(32, int(w * scale))
+        out_h = max(32, int(h * scale))
+
+        img = QImage(out_w, out_h, QImage.Format_ARGB32_Premultiplied)
+        img.fill(0)  # 투명 배경
+
+        painter = QPainter(img)
+        renderer.render(painter)
+        painter.end()
+
+        temp_dir = Path(tempfile.gettempdir())
+        out_path = temp_dir / f"ai_gen_{int(os.getpid())}_{int(id(svg_str))}.png"
+        if img.save(str(out_path), "PNG"):
+            return str(out_path)
+    except Exception as e:
+        logger.warning("Failed to render SVG to PNG: %s", e)
+    return None
+
+
+
 class TruststoreAdapter(HTTPAdapter):
     """Adapter that injects Windows OS certificate store into urllib3 poolmanager."""
 
@@ -160,6 +234,7 @@ class AIChatWorker(QThread):
             "messages": self.messages,
             "stream": stream_enabled,
             "temperature": 0.4,
+            "max_tokens": 4096,
         }
 
         session = requests.Session()
@@ -246,6 +321,119 @@ class AIChatWorker(QThread):
                 pass
 
 
+class AIConnectionTestWorker(QThread):
+    """AI 연결 테스트 워커 — 입력값(저장 전)으로 실제 API 호출 후 결과 반환"""
+
+    finished_ok = Signal(str, str)   # (응답 텍스트, 사용 모델)
+    failed = Signal(str)             # (오류 메시지)
+
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str,
+        model: str,
+        ssl_verify: bool = True,
+        timeout_sec: int = 35,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.endpoint = endpoint
+        self.api_key = api_key
+        self.model = model
+        self.ssl_verify = ssl_verify
+        self.timeout_sec = timeout_sec
+
+    def run(self) -> None:
+        endpoint = self.endpoint.strip()
+        if not (endpoint.startswith("http://") or endpoint.startswith("https://")):
+            self.failed.emit("올바른 HTTP/HTTPS API 엔드포인트 URL을 입력해 주세요.")
+            return
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key.strip()}",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        }
+        payload = {
+            "model": self.model.strip(),
+            "messages": [{"role": "user", "content": "연결 확인"}],
+            "stream": False,
+            "temperature": 0.1,
+        }
+
+        session = requests.Session()
+        try:
+            if self.ssl_verify:
+                try:
+                    import truststore
+                    ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                    session.mount("https://", TruststoreAdapter(ssl_context=ctx))
+                except Exception:
+                    pass
+            else:
+                try:
+                    import urllib3
+                    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                except Exception:
+                    pass
+
+            with session.post(
+                endpoint,
+                json=payload,
+                headers=headers,
+                timeout=self.timeout_sec,
+                verify=self.ssl_verify,
+            ) as resp:
+                if resp.status_code != 200:
+                    detail = ""
+                    try:
+                        detail = resp.text[:300]
+                    except Exception:
+                        detail = ""
+                    msg = f"서버 오류 (HTTP {resp.status_code})"
+                    if detail:
+                        msg += f"\n\n{detail}"
+                    if resp.status_code in (401, 403):
+                        msg += "\n\nAPI Key가 유효하지 않거나 권한이 없습니다."
+                    self.failed.emit(msg)
+                    return
+
+                try:
+                    data = resp.json()
+                    choices = data.get("choices", [])
+                    if choices:
+                        content = choices[0].get("message", {}).get("content", "")
+                        if isinstance(content, str) and content.strip():
+                            self.finished_ok.emit(content.strip(), self.model.strip())
+                            return
+                    # content가 비어 있으면 원문으로 확인
+                    raw = resp.text[:200]
+                    self.finished_ok.emit(f"(응답 수신, 본문: {raw})", self.model.strip())
+                except Exception:
+                    self.finished_ok.emit("(응답 수신, JSON 파싱 불가)", self.model.strip())
+
+        except requests.exceptions.SSLError as e:
+            self.failed.emit(
+                f"SSL 보안 인증서 검증 실패:\n{e}\n\n"
+                "(기관 전용 사설 인증서 또는 행정망 환경인 경우 "
+                "'표준 SSL 보안 인증서 검증 활성화' 체크를 해제해 주세요.)"
+            )
+        except requests.exceptions.Timeout:
+            self.failed.emit(f"요청 시간 초과 ({self.timeout_sec}초 경과). 서버 상태를 확인해 주세요.")
+        except requests.exceptions.HTTPError as e:
+            self.failed.emit(f"HTTP 오류 발생: {e}")
+        except requests.exceptions.RequestException as e:
+            self.failed.emit(f"네트워크 통신 오류:\n{e}\n\n(엔드포인트 URL과 네트워크 연결을 확인해 주세요.)")
+        except Exception as e:
+            self.failed.emit(f"연결 테스트 중 오류 발생: {type(e).__name__}: {e}")
+        finally:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+
 class AISettingsDialog(QDialog):
     """AI API 연동 설정 대화상자 (인터넷망/공공기관 행정망 프리셋 지원)"""
 
@@ -257,6 +445,7 @@ class AISettingsDialog(QDialog):
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
 
         self.cfg = AIConfigManager.load()
+        self._test_worker: AIConnectionTestWorker | None = None
         self.init_ui()
 
     def init_ui(self) -> None:
@@ -267,6 +456,7 @@ class AISettingsDialog(QDialog):
         line = self.palette.get("line", "#CBD5E1")
         accent = self.palette.get("accent", "#2563EB")
         button_text = self.palette.get("button_text", "#FFFFFF")
+        self._muted = muted
 
         self.setStyleSheet(f"""
             QDialog {{
@@ -357,6 +547,30 @@ class AISettingsDialog(QDialog):
         lbl_hint.setStyleSheet(f"color: {muted}; font-size: 11px;")
         layout.addWidget(lbl_hint)
 
+        # ---- 연결 테스트 영역 ----
+        test_group = QGroupBox("연결 테스트", self)
+        test_layout = QVBoxLayout(test_group)
+        test_layout.setSpacing(8)
+
+        test_btn_row = QHBoxLayout()
+        test_btn_row.setSpacing(8)
+        self.btn_test = QPushButton("연결 테스트", self)
+        self.btn_test.setStyleSheet(
+            f"background-color: {panel}; color: {text}; border: 1px solid {line}; "
+            "padding: 6px 14px; border-radius: 4px; font-size: 12px;"
+        )
+        self.btn_test.clicked.connect(self._run_connection_test)
+        test_btn_row.addWidget(self.btn_test)
+        test_btn_row.addStretch(1)
+        test_layout.addLayout(test_btn_row)
+
+        self.lbl_test_result = QLabel("아직 테스트하지 않았습니다.", self)
+        self.lbl_test_result.setWordWrap(True)
+        self.lbl_test_result.setStyleSheet(f"color: {muted}; font-size: 11px;")
+        test_layout.addWidget(self.lbl_test_result)
+
+        layout.addWidget(test_group)
+
         btn_layout = QHBoxLayout()
         btn_layout.addStretch(1)
 
@@ -404,6 +618,56 @@ class AISettingsDialog(QDialog):
             self.edit_model.setText("HCX-003")
             self.edit_key.setPlaceholderText("범정부 AI API 키를 입력하세요")
 
+    def _run_connection_test(self) -> None:
+        """입력된 현재 설정값으로 실제 API를 호출해 연결 여부 확인"""
+        if self._test_worker is not None and self._test_worker.isRunning():
+            return
+
+        endpoint = self.edit_endpoint.text().strip()
+        api_key = self.edit_key.text().strip()
+        model = self.edit_model.text().strip()
+        ssl_verify = self.chk_ssl.isChecked()
+
+        if not endpoint:
+            self.lbl_test_result.setText("✗ API 엔드포인트를 입력해 주세요.")
+            return
+        if not api_key:
+            self.lbl_test_result.setText("✗ API Key를 입력해 주세요.")
+            return
+        if not model:
+            self.lbl_test_result.setText("✗ 모델명을 입력해 주세요.")
+            return
+
+        self.btn_test.setEnabled(False)
+        self.btn_test.setText("테스트 중...")
+        self.lbl_test_result.setText("⏳ 연결 여부를 확인하고 있습니다... (최대 35초)")
+        self.lbl_test_result.setStyleSheet(f"color: {self._muted}; font-size: 11px;")
+
+        self._test_worker = AIConnectionTestWorker(
+            endpoint=endpoint,
+            api_key=api_key,
+            model=model,
+            ssl_verify=ssl_verify,
+            timeout_sec=int(self.cfg.get("timeout_sec", 35) or 35),
+            parent=self,
+        )
+        self._test_worker.finished_ok.connect(self._on_test_success)
+        self._test_worker.failed.connect(self._on_test_failed)
+        self._test_worker.start()
+
+    def _on_test_success(self, text: str, model: str) -> None:
+        self.btn_test.setEnabled(True)
+        self.btn_test.setText("연결 테스트")
+        preview = text[:200] + ("..." if len(text) > 200 else "")
+        self.lbl_test_result.setText(f"✓ 연결 성공 (모델: {model})\n응답: {preview}")
+        self.lbl_test_result.setStyleSheet("color: #16A34A; font-size: 11px;")
+
+    def _on_test_failed(self, err: str) -> None:
+        self.btn_test.setEnabled(True)
+        self.btn_test.setText("연결 테스트")
+        self.lbl_test_result.setText(f"✗ 연결 실패\n{err}")
+        self.lbl_test_result.setStyleSheet("color: #DC2626; font-size: 11px;")
+
     def _save_settings(self) -> None:
         new_data = {
             "provider": self.combo_preset.currentData(),
@@ -420,27 +684,50 @@ class AISettingsDialog(QDialog):
 
 class AIChatDialog(QDialog):
     """
-    [우클릭 ➔ 대화하기] 플로팅 팝업
+    [우클릭 ➔ AI 도우미 / 원클릭 프리셋] 플로팅 팝업
     - 깔끔한 스킨 디자인 연동
-    - 버튼/제목 이모티콘 제거
-    - 요청 진행 중 '커서 위치에 삽입' 비활성화, 완료 시 활성화
+    - 원클릭 프리셋 (공문서체 다듬기, 3줄 요약, 법령 검토, 공공언어 순화 등)
+    - 요청 진행 중 '바꾸기', '삽입' 비활성화, 완료 시 활성화
     """
 
-    def __init__(self, parent_editor: Any = None, initial_prompt: str = "", palette: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        parent_editor: Any = None,
+        initial_prompt: str = "",
+        selected_text: str = "",
+        preset: str = "",
+        palette: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(parent_editor)
         self.editor = parent_editor
         self.palette = palette or {}
         self.worker: AIChatWorker | None = None
         self.full_response_text = ""
+        self.selected_text = (selected_text or "").strip()
+        self.preset = preset or ""
 
-        self.setWindowTitle("AI 업무 도우미")
-        self.resize(580, 580)
+        title = "AI 업무 도우미"
+        if preset == "gongmun":
+            title = "✨ 공문서 개조식 다듬기"
+        elif preset == "summary":
+            title = "📋 3줄 핵심 요약"
+        elif preset == "law":
+            title = "⚖️ 관련 법령·규정 검토"
+        elif preset == "refine":
+            title = "✍️ 쉬운 공공언어로 순화"
+
+        self.setWindowTitle(title)
+        self.resize(600, 600)
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.WindowCloseButtonHint
         )
         self.init_ui(initial_prompt)
+
+        # 프리셋이 지정되어 있고 선택 텍스트가 있으면 즉시 자동 실행
+        if self.preset and (self.selected_text or initial_prompt):
+            self._send_request()
 
     def init_ui(self, initial_prompt: str) -> None:
         bg = self.palette.get("bg", "#F8FAFC")
@@ -543,21 +830,43 @@ class AIChatDialog(QDialog):
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(8)
 
+        # [바꾸기] 버튼: 선택 영역이 있을 때만 표시/활성화
+        if self.selected_text:
+            self.btn_replace = QPushButton("🔄 선택 영역 바꾸기", self)
+            self.btn_replace.setEnabled(False)
+            self.btn_replace.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_replace.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {accent};
+                    color: {button_text};
+                    font-weight: bold;
+                    padding: 7px 14px;
+                    border: none;
+                }}
+                QPushButton:disabled {{
+                    background-color: {line};
+                    color: {muted};
+                }}
+            """)
+            self.btn_replace.clicked.connect(self._replace_in_editor)
+            bottom_row.addWidget(self.btn_replace)
+
         # 커서 위치에 삽입 버튼 (초기 비활성화, 완료 시 활성화)
-        self.btn_insert = QPushButton("커서 위치에 삽입", self)
+        self.btn_insert = QPushButton("➕ 본문에 삽입" if self.selected_text else "커서 위치에 삽입", self)
         self.btn_insert.setEnabled(False)
         self.btn_insert.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_insert.setStyleSheet(f"""
             QPushButton {{
-                background-color: {accent};
-                color: {button_text};
+                background-color: {panel if self.selected_text else accent};
+                color: {text if self.selected_text else button_text};
+                border: 1px solid {line if self.selected_text else accent};
                 font-weight: bold;
                 padding: 7px 14px;
-                border: none;
             }}
             QPushButton:disabled {{
                 background-color: {line};
                 color: {muted};
+                border: none;
             }}
         """)
         self.btn_insert.clicked.connect(self._insert_to_editor)
@@ -594,27 +903,90 @@ class AIChatDialog(QDialog):
 
     def _send_request(self) -> None:
         prompt = self.input_edit.toPlainText().strip()
-        if not prompt:
+        if not prompt and not self.selected_text:
             QMessageBox.warning(self, "입력 필요", "요청하실 내용을 입력해 주세요.")
             return
 
         self.viewer_edit.clear()
         self.full_response_text = ""
         self.btn_send.setEnabled(False)
-        self.btn_insert.setEnabled(False)  # 진행 중 비활성화
+        if hasattr(self, "btn_replace"):
+            self.btn_replace.setEnabled(False)
+        self.btn_insert.setEnabled(False)
         self.progress_bar.show()
 
-        system_prompt = (
-            "당신은 대한민국 공공기관 및 지방자치단체 행정 문서 작성 전문 AI 비서입니다.\n"
-            "사용자의 요청에 따라 완성도 높은 공문서, 보고서 서식, 개조식 정리(□, ○, -, *), 기안문 등을 격식 있게 작성해 주세요.\n"
-            "불필요한 인사말은 생략하고 곧바로 본문 서식 또는 요청된 작성 결과물을 명확하게 제공하세요."
-        )
+        # 프리셋별 특화 시스템 프롬프트 및 사용자 내용 구성
+        if self.preset == "gongmun":
+            system_prompt = (
+                "당신은 대한민국 행정안전부 「행정업무운영 편람」 및 「공문서 작성 규정」을 준수하는 공문서 전문 교정 AI입니다.\n"
+                "[절대 원칙]\n"
+                "1. 사용자가 입력한 내용이 인사말, 구어체, 구호, 메모 등 그 어떤 형태이더라도 절대 사용자와 대화하거나 안부 인사를 건네지 마십시오.\n"
+                "2. 원문의 핵심 의도를 파악하여 행정기관 공문서 본문에 즉시 들어갈 수 있는 완벽한 '행정 표준 개조식 문체'로 변환하여 출력하십시오.\n"
+                "3. 반드시 항목 부호(1., 가., 1) 또는 □, ○, -)를 사용하고, 명사형 또는 개조식 종결어미(~함, ~바람, ~안내함, ~추진 예정)로 문장을 끝맺으십시오.\n"
+                "4. '안녕하세요', '반갑습니다', '좋은 하루 되세요' 같은 일상 대화체는 공문서에서 결코 사용하지 않습니다.\n"
+                "5. 설명이나 코멘트 없이 변환된 공문서 개조식 본문 결과만 단독으로 출력하십시오.\n\n"
+                "[변환 예시]\n"
+                "원문: '안녕 반가워요 ㅋㅋ 오늘도 즐거운 하루 되시랑께'\n"
+                "변환 결과:\n"
+                "□ 인사 및 업무 협조 안내\n"
+                "  ○ 부서 간 원활한 소통 및 상호 협력 체계 구축\n"
+                "  ○ 활기찬 근무 환경 조성을 위한 부서원 격려\n"
+                "  ○ 금일 업무 추진에 만전을 기하여 주시기 바람."
+            )
+            target_content = self.selected_text or prompt
+            user_content = f"[다듬을 원문 내용]:\n{target_content}"
+        elif self.preset == "summary":
+            system_prompt = (
+                "당신은 행정 보고서 및 결재 문서 핵심 요약 전문가입니다.\n"
+                "사용자가 제공한 내용을 상급자/기관장 보고에 즉시 활용할 수 있도록 '핵심 3줄 요약'으로 정리해 주세요.\n"
+                "- 1줄: 추진 배경 및 목적\n"
+                "- 2줄: 주요 핵심 내용 및 현황\n"
+                "- 3줄: 향후 계획 및 기대 효과\n"
+                "- 각 줄은 '○ ' 불릿과 함께 명확하고 간결한 개조식 문장으로 작성하세요.\n"
+                "- 다른 설명이나 인사말 없이 3줄 요약 결과만 바로 출력하세요."
+            )
+            target_content = self.selected_text or prompt
+            user_content = f"[요약할 본문 내용]:\n{target_content}"
+        elif self.preset == "law":
+            system_prompt = (
+                "당신은 대한민국 행정 법률 및 감사 실무 전문 자문관입니다.\n"
+                "사용자가 작성한 업무/기안문 내용을 바탕으로 다음 사항을 검토하여 정리해 주세요:\n"
+                "1. [관련 법령 및 조례]: 직접적 근거가 되는 법률·시행령·자치법규\n"
+                "2. [필수 사전 절차]: 결재·시행 전 필수 심의/협의/사전예고 등\n"
+                "3. [실무 유의사항]: 감사 지적 예방 체크포인트\n"
+                "불필요한 인사말 없이 개조식으로 명료하게 제공하세요."
+            )
+            target_content = self.selected_text or prompt
+            user_content = f"[검토할 업무 내용]:\n{target_content}"
+        elif self.preset == "refine":
+            system_prompt = (
+                "당신은 문화체육관광부 및 국립국어원 표준 행정용어 순화 전문가입니다.\n"
+                "사용자가 제공한 문장에서 어려운 한자어, 무분별한 외래어, 일본식 행정용어, 권위적 표현을 찾아 국민이 이해하기 쉬운 '바른 공공언어'로 순화하여 다시 작성해 주세요.\n"
+                "- 순화된 최종 완성 문장을 최상단에 제공하세요.\n"
+                "- 하단에 [주요 순화 내역]을 간단한 표나 목록으로 첨부하세요 (예: 바우처 → 이용권, 익일 → 다음 날).\n"
+                "- 부가적인 인사말은 생략하세요."
+            )
+            target_content = self.selected_text or prompt
+            user_content = f"[순화할 원문 내용]:\n{target_content}"
+        else:
+            system_prompt = (
+                "당신은 대한민국 공공기관 및 지방자치단체 행정 문서 작성 전문 AI 비서입니다.\n"
+                "사용자의 요청에 따라 완성도 높은 공문서, 보고서 서식, 개조식 정리(□, ○, -, *), 기안문 등을 격식 있게 작성해 주세요.\n"
+                "[이미지/일러스트/아이콘/도장 생성 요청 시 절대 규칙]:\n"
+                "사용자가 이미지, 일러스트, 아이콘, 마크, 도장, 사과, 캐릭터 등의 그림 생성을 요청하는 경우, "
+                "반드시 단독으로 즉시 렌더링 가능한 완전한 SVG XML 코드를 작성하여 ```xml 코드 블록 안에 담아 출력하십시오.\n"
+                "- SVG는 viewBox, xmlns를 포함하고 화려하고 선명하며 완성도 높은 벡터 그래픽으로 디자인하세요.\n"
+                "- 불필요한 설명이나 잡담은 일절 배제하고 곧바로 결과물(SVG 코드 블록 또는 서식 본문)만 출력하세요.\n"
+                "불필요한 인사말은 생략하고 곧바로 본문 서식 또는 요청된 작성 결과물을 명확하게 제공하세요."
+            )
+            user_content = prompt or self.selected_text
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": user_content},
         ]
 
+        self.generated_image_path = None
         self.worker = AIChatWorker(messages=messages, parent=self)
         self.worker.chunk_received.connect(self._on_chunk)
         self.worker.finished.connect(self._on_finished)
@@ -630,18 +1002,65 @@ class AIChatDialog(QDialog):
 
     def _on_finished(self, text: str) -> None:
         self.full_response_text = text
-        self.viewer_edit.setPlainText(text)
         self.btn_send.setEnabled(True)
-        self.btn_insert.setEnabled(bool(text.strip()))  # 결과 완료 시 활성화
+        has_text = bool(text.strip())
         self.progress_bar.hide()
+
+        # SVG 이미지 생성 여부 확인 및 렌더링
+        svg_code = extract_svg_from_text(text)
+        if svg_code:
+            png_path = render_svg_to_png(svg_code)
+            if png_path and os.path.exists(png_path):
+                self.generated_image_path = png_path
+                self.viewer_edit.setHtml(
+                    f'<div style="text-align:center; padding:15px;">'
+                    f'<h3 style="color:#2563EB; margin-bottom:10px;">🎨 AI 이미지/일러스트 생성 완료</h3>'
+                    f'<img src="{png_path}" style="max-width:260px; max-height:220px; border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,0.1);" /><br>'
+                    f'<p style="color:#64748B; font-size:11px; margin-top:10px;">하단 <b>[커서 위치에 이미지 삽입]</b> 버튼을 누르면 에디터에 삽입됩니다.</p>'
+                    f'</div>'
+                )
+                self.btn_insert.setText("🖼️ 커서 위치에 이미지 삽입")
+                self.btn_insert.setEnabled(True)
+                if hasattr(self, "btn_replace"):
+                    self.btn_replace.setEnabled(False)
+                return
+
+        self.viewer_edit.setPlainText(text)
+        self.btn_insert.setText("➕ 본문에 삽입" if self.selected_text else "커서 위치에 삽입")
+        if hasattr(self, "btn_replace"):
+            self.btn_replace.setEnabled(has_text)
+        self.btn_insert.setEnabled(has_text)
 
     def _on_error(self, err: str) -> None:
         self.btn_send.setEnabled(True)
+        if hasattr(self, "btn_replace"):
+            self.btn_replace.setEnabled(False)
         self.btn_insert.setEnabled(False)
         self.progress_bar.hide()
         QMessageBox.critical(self, "AI 오류", err)
 
+    def _replace_in_editor(self) -> None:
+        text = self.full_response_text.strip()
+        if not text:
+            return
+
+        if self.editor and hasattr(self.editor, "replace_selection_with_text"):
+            self.editor.replace_selection_with_text(text)
+            self.close()
+        elif self.editor and hasattr(self.editor, "insert_text_at_cursor"):
+            self.editor.insert_text_at_cursor(text)
+            self.close()
+        else:
+            QGuiApplication.clipboard().setText(text)
+            QMessageBox.information(self, "안내", "클립보드에 복사되었습니다.")
+
     def _insert_to_editor(self) -> None:
+        if getattr(self, "generated_image_path", None) and os.path.exists(self.generated_image_path):
+            if self.editor and hasattr(self.editor, "insert_image_file"):
+                self.editor.insert_image_file(self.generated_image_path)
+                self.close()
+                return
+
         text = self.full_response_text.strip()
         if not text:
             return

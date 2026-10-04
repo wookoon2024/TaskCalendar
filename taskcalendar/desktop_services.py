@@ -27,6 +27,7 @@ RUN_VALUE_NAME = "TaskCalendar"
 HOTKEY_ID = 0xB001
 HOTKEY_MEMO_ID = 0xB002
 HOTKEY_WORK_ID = 0xB003
+HOTKEY_DOC_ID = 0xB004
 WM_HOTKEY = 0x0312
 PM_REMOVE = 0x0001
 MOD_ALT = 0x0001
@@ -121,6 +122,10 @@ def default_memo_shortcut() -> str:
 
 def default_work_shortcut() -> str:
     return "F6"
+
+
+def default_doc_shortcut() -> str:
+    return "F5"
 
 
 def normalize_shortcut(shortcut: str) -> str:
@@ -816,7 +821,7 @@ class SystemTrayManager:
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP
         nid.uCallbackMessage = WM_TRAYICON
         nid.hIcon = self._hicon
-        nid.szTip = "K캘린더"
+        nid.szTip = "나라수첩"
         if not shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid)):
             logger.warning("failed to add tray icon, winerr=%s", ctypes.WinError(ctypes.get_last_error()))
         else:

@@ -273,7 +273,9 @@ class EncryptedRepository:
             );
             CREATE TABLE IF NOT EXISTS work_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                parent_id INTEGER DEFAULT NULL,
+                tab_id INTEGER NOT NULL DEFAULT 1,
                 sort_order INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -314,6 +316,13 @@ class EncryptedRepository:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (work_id) REFERENCES work_items(id) ON DELETE CASCADE,
                 FOREIGN KEY (attachment_id) REFERENCES work_attachments(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS work_entry_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                work_id INTEGER NOT NULL,
+                entry_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(work_id, entry_id)
             );
             """
         )
@@ -367,6 +376,43 @@ class EncryptedRepository:
                 self.connection.execute("ALTER TABLE work_categories ADD COLUMN parent_id INTEGER DEFAULT NULL")
             except Exception as cat_err:
                 logger.warning("Could not add parent_id column to work_categories: %s", cat_err)
+        if "tab_id" not in existing_work_cat_cols:
+            try:
+                self.connection.execute("ALTER TABLE work_categories ADD COLUMN tab_id INTEGER NOT NULL DEFAULT 1")
+            except Exception as cat_err:
+                logger.warning("Could not add tab_id column to work_categories: %s", cat_err)
+
+        # Remove UNIQUE constraint from work_categories.name if present
+        try:
+            indexes = self.connection.execute("PRAGMA index_list(work_categories)").fetchall()
+            has_unique_name = False
+            for idx in indexes:
+                if idx["unique"]:
+                    idx_info = self.connection.execute(f"PRAGMA index_info({idx['name']})").fetchall()
+                    cols = [col["name"] for col in idx_info]
+                    if cols == ["name"]:
+                        has_unique_name = True
+                        break
+            if has_unique_name:
+                self.connection.execute("""
+                    CREATE TABLE work_categories_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL,
+                        parent_id INTEGER DEFAULT NULL,
+                        tab_id INTEGER NOT NULL DEFAULT 1,
+                        sort_order INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                self.connection.execute("""
+                    INSERT INTO work_categories_new (id, name, parent_id, tab_id, sort_order, created_at, updated_at)
+                    SELECT id, name, parent_id, tab_id, sort_order, created_at, updated_at FROM work_categories
+                """)
+                self.connection.execute("DROP TABLE work_categories")
+                self.connection.execute("ALTER TABLE work_categories_new RENAME TO work_categories")
+        except Exception as e:
+            logger.warning("Could not migrate work_categories unique constraint: %s", e)
 
         existing_work_att_cols = {row["name"] for row in self.connection.execute("PRAGMA table_info(work_attachments)").fetchall()}
         if "folder_path" not in existing_work_att_cols:
@@ -899,8 +945,11 @@ class EncryptedRepository:
         clauses: list[str] = []
         params: list[object] = []
         if work_id is not None and int(work_id) > 0:
+            w_id = int(work_id)
             clauses.append("(linked_work_id = ? AND linked_work_type = 'work')")
-            params.append(int(work_id))
+            params.append(w_id)
+            clauses.append("id IN (SELECT entry_id FROM work_entry_links WHERE work_id = ?)")
+            params.append(w_id)
         if work_title:
             cleaned = work_title.strip()
             if cleaned:
@@ -925,6 +974,111 @@ class EncryptedRepository:
                 seen_ids.add(entry.entry_id)
                 result.append(entry)
         return result
+
+    def link_entries_to_works(self, work_ids: list[int], entry_ids: list[int]) -> None:
+        """선택한 업무(work_id)들과 문서/일정(entry_id)들을 다대다 연결"""
+        now = datetime.now().isoformat()
+        clean_work_ids = [int(w) for w in work_ids if w and int(w) > 0]
+        clean_entry_ids = [int(e) for e in entry_ids if e and int(e) > 0]
+        if not clean_work_ids or not clean_entry_ids:
+            return
+
+        for w_id in clean_work_ids:
+            for e_id in clean_entry_ids:
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO work_entry_links (work_id, entry_id, created_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (w_id, e_id, now),
+                )
+
+        # 기존 단일 컬럼 호환성을 위해 첫 번째 work_id를 linked_work_id로 동기화
+        for e_id in clean_entry_ids:
+            row = self.connection.execute("SELECT linked_work_id FROM entries WHERE id = ?", (e_id,)).fetchone()
+            if row and not row["linked_work_id"]:
+                self.connection.execute(
+                    "UPDATE entries SET linked_work_id = ?, linked_work_type = 'work' WHERE id = ?",
+                    (clean_work_ids[0], e_id),
+                )
+        self.save()
+
+    def unlink_entry_from_work(self, work_id: int, entry_id: int) -> None:
+        """특정 업무와 문서/일정의 연결 해제"""
+        self.connection.execute(
+            "DELETE FROM work_entry_links WHERE work_id = ? AND entry_id = ?",
+            (int(work_id), int(entry_id)),
+        )
+        # 만약 entries.linked_work_id가 이 work_id였으면 다른 연결된 work_id로 변경하거나 NULL로 초기화
+        other = self.connection.execute(
+            "SELECT work_id FROM work_entry_links WHERE entry_id = ? LIMIT 1",
+            (int(entry_id),),
+        ).fetchone()
+        new_wid = other["work_id"] if other else None
+        new_type = "work" if new_wid else ""
+        self.connection.execute(
+            "UPDATE entries SET linked_work_id = ?, linked_work_type = ? WHERE id = ? AND linked_work_id = ?",
+            (new_wid, new_type, int(entry_id), int(work_id)),
+        )
+        self.save()
+
+    def set_entry_work_links(self, entry_id: int, work_ids: list[int]) -> None:
+        """단일 항목의 연결 업무 목록을 전달받은 목록으로 일괄 갱신"""
+        now = datetime.now().isoformat()
+        e_id = int(entry_id)
+        clean_work_ids = [int(w) for w in work_ids if w and int(w) > 0]
+
+        self.connection.execute("DELETE FROM work_entry_links WHERE entry_id = ?", (e_id,))
+        for w_id in clean_work_ids:
+            self.connection.execute(
+                """
+                INSERT OR IGNORE INTO work_entry_links (work_id, entry_id, created_at)
+                VALUES (?, ?, ?)
+                """,
+                (w_id, e_id, now),
+            )
+        primary_wid = clean_work_ids[0] if clean_work_ids else None
+        primary_type = "work" if primary_wid else ""
+        self.connection.execute(
+            "UPDATE entries SET linked_work_id = ?, linked_work_type = ? WHERE id = ?",
+            (primary_wid, primary_type, e_id),
+        )
+        self.save()
+
+    def list_linked_works_for_entry(self, entry_id: int) -> list[int]:
+        """특정 항목에 연결된 모든 work_id 목록 반환"""
+        rows = self.connection.execute(
+            "SELECT work_id FROM work_entry_links WHERE entry_id = ?",
+            (int(entry_id),),
+        ).fetchall()
+        w_ids = [r["work_id"] for r in rows]
+        if not w_ids:
+            # fallback to legacy column
+            row = self.connection.execute("SELECT linked_work_id FROM entries WHERE id = ?", (int(entry_id),)).fetchone()
+            if row and row["linked_work_id"]:
+                w_ids = [int(row["linked_work_id"])]
+        return w_ids
+
+    def list_linked_entries_for_work(self, work_id: int | None = None, entry_type: str = "task") -> list[CalendarEntry]:
+        """특정 업무(work_id)에 연결된 문서(task) 또는 일정(schedule) 목록 반환"""
+        if not work_id or int(work_id) <= 0:
+            return []
+        w_id = int(work_id)
+        sql = """
+            SELECT DISTINCT e.* FROM entries e
+            LEFT JOIN work_entry_links wel ON e.id = wel.entry_id
+            WHERE e.entry_type = ? AND (wel.work_id = ? OR (e.linked_work_id = ? AND e.linked_work_type = 'work'))
+            ORDER BY COALESCE(e.start_date, e.day, e.created_at) DESC, e.id DESC
+        """
+        rows = self.connection.execute(sql, (entry_type, w_id, w_id)).fetchall()
+        seen = set()
+        results = []
+        for r in rows:
+            entry = self._row_to_entry(r)
+            if entry.entry_id not in seen:
+                seen.add(entry.entry_id)
+                results.append(entry)
+        return results
 
     def replace_all_entries(self, entries: list[CalendarEntry]) -> int:
         rows = self.connection.execute("SELECT attachments_json FROM entries").fetchall()
@@ -1256,20 +1410,46 @@ class EncryptedRepository:
     # 업무 및 인수인계 매뉴얼 (Work Management & Knowledge Hub / RAG)
     # =========================================================================
 
-    def list_work_categories(self) -> list[dict]:
-        """업무 분류 목록 조회 (parent_id 포함)"""
+    def list_work_categories(self, tab_id: int | None = None) -> list[dict]:
+        """업무 분류 목록 조회 (parent_id 및 tab_id 포함)"""
         self._ensure_default_work_data_if_empty()
-        rows = self.connection.execute(
-            "SELECT id, name, parent_id, sort_order, created_at, updated_at FROM work_categories ORDER BY sort_order ASC, id ASC"
-        ).fetchall()
-        return [dict(row) for row in rows]
+        cols = {row["name"] for row in self.connection.execute("PRAGMA table_info(work_categories)").fetchall()}
+        has_tab = "tab_id" in cols
+        if has_tab:
+            if tab_id is not None:
+                rows = self.connection.execute(
+                    "SELECT id, name, parent_id, sort_order, tab_id, created_at, updated_at FROM work_categories WHERE tab_id = ? ORDER BY sort_order ASC, id ASC",
+                    (int(tab_id),),
+                ).fetchall()
+            else:
+                rows = self.connection.execute(
+                    "SELECT id, name, parent_id, sort_order, tab_id, created_at, updated_at FROM work_categories ORDER BY sort_order ASC, id ASC"
+                ).fetchall()
+        else:
+            rows = self.connection.execute(
+                "SELECT id, name, parent_id, sort_order, created_at, updated_at FROM work_categories ORDER BY sort_order ASC, id ASC"
+            ).fetchall()
+        results = []
+        for row in rows:
+            d = dict(row)
+            if "tab_id" not in d:
+                d["tab_id"] = 1
+            results.append(d)
+        return results
 
-    def add_work_category(self, name: str, sort_order: int = 0, parent_id: int | None = None) -> int:
+    def add_work_category(self, name: str, sort_order: int = 0, parent_id: int | None = None, tab_id: int = 1) -> int:
         now = datetime.now().isoformat()
-        cursor = self.connection.execute(
-            "INSERT INTO work_categories (name, sort_order, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (name.strip(), sort_order, parent_id, now, now),
-        )
+        cols = {row["name"] for row in self.connection.execute("PRAGMA table_info(work_categories)").fetchall()}
+        if "tab_id" in cols:
+            cursor = self.connection.execute(
+                "INSERT INTO work_categories (name, sort_order, parent_id, tab_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (name.strip(), sort_order, parent_id, int(tab_id), now, now),
+            )
+        else:
+            cursor = self.connection.execute(
+                "INSERT INTO work_categories (name, sort_order, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (name.strip(), sort_order, parent_id, now, now),
+            )
         self.save()
         return cursor.lastrowid
 
@@ -1289,12 +1469,46 @@ class EncryptedRepository:
         )
         self.save()
 
+    def update_work_category_tab(self, cat_id: int, tab_id: int) -> None:
+        """카테고리 및 그 하위 카테고리들의 소속 탭(tab_id) 일괄 변경"""
+        now = datetime.now().isoformat()
+        cols = {row["name"] for row in self.connection.execute("PRAGMA table_info(work_categories)").fetchall()}
+        if "tab_id" in cols:
+            cat_ids = [cat_id]
+            idx = 0
+            while idx < len(cat_ids):
+                curr = cat_ids[idx]
+                idx += 1
+                sub_rows = self.connection.execute("SELECT id FROM work_categories WHERE parent_id = ?", (curr,)).fetchall()
+                for r in sub_rows:
+                    if r["id"] not in cat_ids:
+                        cat_ids.append(r["id"])
+            placeholders = ",".join("?" for _ in cat_ids)
+            self.connection.execute(
+                f"UPDATE work_categories SET tab_id = ?, updated_at = ? WHERE id IN ({placeholders})",
+                [int(tab_id), now, *cat_ids],
+            )
+            self.connection.execute(
+                "UPDATE work_categories SET parent_id = NULL, updated_at = ? WHERE id = ?",
+                (now, cat_id),
+            )
+            self.save()
+
     def delete_work_category(self, cat_id: int) -> None:
         # 하위 카테고리도 재귀 삭제
         sub_rows = self.connection.execute("SELECT id FROM work_categories WHERE parent_id = ?", (cat_id,)).fetchall()
         for r in sub_rows:
             self.delete_work_category(r["id"])
         self.connection.execute("DELETE FROM work_categories WHERE id = ?", (cat_id,))
+        self.save()
+
+    def update_work_item_category(self, work_id: int, category_id: int) -> None:
+        """업무 항목의 소속 카테고리(분류) 변경"""
+        now = datetime.now().isoformat()
+        self.connection.execute(
+            "UPDATE work_items SET category_id = ?, updated_at = ? WHERE id = ?",
+            (category_id, now, work_id),
+        )
         self.save()
 
     def list_work_items(self, category_id: int | None = None) -> list[dict]:
@@ -1610,6 +1824,9 @@ class EncryptedRepository:
 
         if not chunks:
             chunks = [title]
+        elif len(chunks) > 60:
+            # 대용량 문서 색인 시 FTS 폭증 및 DB 팽창 방지
+            chunks = chunks[:60]
 
         now = datetime.now().isoformat()
         for i, chunk in enumerate(chunks):

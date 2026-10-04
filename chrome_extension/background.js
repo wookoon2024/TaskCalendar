@@ -3,7 +3,7 @@ function setupContextMenu() {
     chrome.contextMenus.removeAll(() => {
       chrome.contextMenus.create({
         id: "taskcalendar-add",
-        title: "K캘린더로 보내기",
+        title: "나라수첩로 보내기",
         contexts: ["page", "selection", "link", "image"]
       });
     });

@@ -53,7 +53,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [('O', None, 'OPTION')],
-    name='Calendar',
+    name='나라수첩',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -92,7 +92,7 @@ def main() -> None:
     if res.returncode == 0:
         print("\n=== Build Completed Successfully! ===")
         dist_dir = ROOT / "dist"
-        dist_exe = dist_dir / "Calendar.exe"
+        dist_exe = dist_dir / "나라수첩.exe"
         if dist_exe.exists():
             print(f"Output executable: {dist_exe} ({dist_exe.stat().st_size:,} bytes)")
         ext_zip = ROOT / "chrome_extension.zip"

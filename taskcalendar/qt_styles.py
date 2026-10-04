@@ -62,6 +62,11 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
     check_icon = asset_path("checkmark.svg").as_posix()
     arrow_svg = asset_path("chevron_down.svg").as_posix()
 
+    is_dark = p.get("bg", "").lower() in ("#0a0c10", "#171b22") or p.get("text", "").lower() == "#f3f6fb"
+    tip_bg = "#1E293B" if is_dark else "#FFFFFF"
+    tip_fg = "#F8FAFC" if is_dark else "#0F172A"
+    tip_border = "#475569" if is_dark else "#CBD5E1"
+
     return f"""
     QWidget {{
         font-family: {font_family_css()};
@@ -118,8 +123,10 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
     QFrame#softCard {{
         background: {panel_alt};
     }}
-    QFrame#card:hover {{
-        border-color: {accent};
+    QFrame#shortcutCard {{
+        border: 1px solid {line};
+        border-radius: 8px;
+        background: {panel};
     }}
     QFrame#separator {{
         background: {line_soft};
@@ -350,17 +357,17 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
         border: 1px solid {line};
         border-radius: 10px;
         outline: none;
-        padding: 6px;
+        padding: 4px;
         font-family: {font_family_css()};
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 600;
     }}
     QListWidget#navSidebar::item {{
-        height: 40px;
-        min-height: 40px;
-        padding-left: 10px;
+        height: 38px;
+        min-height: 38px;
+        padding-left: 8px;
         font-family: {font_family_css()};
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 600;
         color: {text};
         border-radius: 6px;
@@ -397,5 +404,15 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
     }}
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
         background: transparent;
+    }}
+    QToolTip {{
+        background-color: {tip_bg};
+        color: {tip_fg};
+        border: 1px solid {tip_border};
+        border-radius: 6px;
+        padding: 5px 8px;
+        font-family: {font_family_css()};
+        font-size: 12px;
+        font-weight: 500;
     }}
     """

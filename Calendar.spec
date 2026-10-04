@@ -40,7 +40,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [('O', None, 'OPTION')],
-    name='Calendar',
+    name='나라수첩',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -363,7 +363,19 @@ class SimpleListManagerDialog(QDialog):
             self.items = list(items)
         self.on_save_callback = on_save_callback
 
-        self.setStyleSheet(f"QDialog {{ background-color: {self.palette['bg']}; color: {self.palette['text']}; }}")
+        # font-family 를 명시해야 전역 폰트(Pretendard)가 상속되어
+        # 캘린더·업무 화면과 동일하게 깨짐 없이 렌��링된다.
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {self.palette['bg']};
+                color: {self.palette['text']};
+                font-family: {font_family_css()};
+            }}
+            QListWidget, QLineEdit, QPushButton, QLabel,
+            QComboBox, QTableWidget, QTextEdit {{
+                font-family: {font_family_css()};
+            }}
+        """)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -541,9 +553,20 @@ class TaskEditDialog(QDialog):
         self.known_depts = known_depts or []
 
         is_new = (task is None or task.entry_id is None)
-        self.setWindowTitle("새 업무 등록" if is_new else "업무 정보 수정")
+        self.setWindowTitle("새 문서 등록" if is_new else "문서 정보 수정")
         self.resize(620, 560)
-        self.setStyleSheet(f"QDialog {{ background-color: {self.palette['bg']}; color: {self.palette['text']}; }}")
+        # font-family 를 명시해야 전역 폰트(Pretendard)가 상속되어 글자가 깨지지 않는다.
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {self.palette['bg']};
+                color: {self.palette['text']};
+                font-family: {font_family_css()};
+            }}
+            QLineEdit, QComboBox, QTextEdit, QPushButton, QLabel,
+            QTableWidget, QListWidget, QCheckBox {{
+                font-family: {font_family_css()};
+            }}
+        """)
 
         self._init_ui()
         self._load_data()
@@ -1290,7 +1313,18 @@ class TaskManagerDialog(QDialog):
 
     def _apply_dialog_styles(self) -> None:
         """현재 self.palette를 바탕으로 창 배경, 버튼, 툴바, 탭, 테이블 스타일 일괄 갱신"""
-        self.setStyleSheet(f"QDialog {{ background-color: {self.palette['bg']}; color: {self.palette['text']}; }}")
+        # font-family 명시: 상속되지 않으면 캘린더·업무 화면과 달리 글자가 깨진다.
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {self.palette['bg']};
+                color: {self.palette['text']};
+                font-family: {font_family_css()};
+            }}
+            QLineEdit, QComboBox, QTextEdit, QPushButton, QLabel,
+            QTableWidget, QListWidget, QCheckBox, QToolButton {{
+                font-family: {font_family_css()};
+            }}
+        """)
         self._apply_header_button_styles()
         self._apply_toolbar_styles()
         self._apply_table_styles()
@@ -2994,10 +3028,21 @@ class TaskExportDialog(QDialog):
         self.tasks = tasks
         self.palette = palette or get_dialog_palette(parent, repository)
 
-        self.setWindowTitle("업무 목록 내보내기 (공문 맞춤형 / 엑셀)")
+        self.setWindowTitle("문서 목록 내보내기 (공문 맞춤형 / 엑셀)")
         self.resize(840, 640)
         self.setMinimumSize(720, 520)
-        self.setStyleSheet(f"QDialog {{ background-color: {self.palette['bg']}; color: {self.palette['text']}; }}")
+        # font-family 명시: 상속되지 않으면 캘린더·업무 화면과 달리 글자가 깨진다.
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {self.palette['bg']};
+                color: {self.palette['text']};
+                font-family: {font_family_css()};
+            }}
+            QLineEdit, QComboBox, QTextEdit, QPushButton, QLabel,
+            QTableWidget, QListWidget, QCheckBox, QRadioButton {{
+                font-family: {font_family_css()};
+            }}
+        """)
 
         self._available_columns = [
             ("seq", "순번", "순번", True),

@@ -81,7 +81,7 @@ TaskCalendar (캘린더 & 업무 관리) 업무망 소스 안내
    > python build_exe.py
 
    * 자동으로 app_icon.ico 생성 및 엔진 복원 후
-     Calendar.exe 단일 바이너리를 빌드합니다. (dist/Calendar.exe 생성)
+     나라수첩.exe 단일 바이너리를 빌드합니다. (dist/나라수첩.exe 생성)
 
 4. 자산 파일 수동 복원 (선택 사항):
    > python restore.py

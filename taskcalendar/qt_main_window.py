@@ -56,6 +56,7 @@ from taskcalendar.desktop_services import (
     HOTKEY_ID,
     HOTKEY_MEMO_ID,
     HOTKEY_WORK_ID,
+    HOTKEY_DOC_ID,
     MSG,
     PM_REMOVE,
     WM_HOTKEY,
@@ -63,6 +64,7 @@ from taskcalendar.desktop_services import (
     default_shortcut,
     default_memo_shortcut,
     default_work_shortcut,
+    default_doc_shortcut,
     is_startup_enabled,
     normalize_shortcut,
     set_startup_enabled,
@@ -239,6 +241,10 @@ class QtGlobalHotkeyManager:
 
 
 def app_stylesheet(p: dict[str, str]) -> str:
+    is_dark = p.get("bg", "").lower() in ("#0a0c10", "#171b22") or p.get("text", "").lower() == "#f3f6fb"
+    tip_bg = "#1E293B" if is_dark else "#FFFFFF"
+    tip_fg = "#F8FAFC" if is_dark else "#0F172A"
+    tip_border = "#475569" if is_dark else "#CBD5E1"
     return f"""
     QWidget {{
         font-family: {font_family_css()};
@@ -342,13 +348,14 @@ def app_stylesheet(p: dict[str, str]) -> str:
         outline: none;
     }}
     QToolTip {{
-        background-color: {p['panel']};
-        color: {p['text']};
-        border: 1px solid {p['line']};
+        background-color: {tip_bg};
+        color: {tip_fg};
+        border: 1px solid {tip_border};
         border-radius: 6px;
         padding: 6px 10px;
         font-family: {font_family_css()};
         font-size: 12px;
+        font-weight: 500;
     }}
     QScrollBar:vertical {{
         background: transparent;
@@ -1225,6 +1232,7 @@ class MainWindow(QMainWindow):
         self.tray_icon: QSystemTrayIcon | None = None
         self.hotkey_manager: QtGlobalHotkeyManager | None = None
         self.memo_hotkey_manager: QtGlobalHotkeyManager | None = None
+        self.doc_hotkey_manager: QtGlobalHotkeyManager | None = None
         self.work_hotkey_manager: QtGlobalHotkeyManager | None = None
         self._sticker_nudge_shortcuts: list[QShortcut] = []
         self._calendar_nav_shortcuts: list[QShortcut] = []
@@ -1236,7 +1244,7 @@ class MainWindow(QMainWindow):
         self._did_memo_restore = False
         self._current_applied_theme: str | None = None
 
-        self.setWindowTitle(f"K캘린더 {APP_VERSION}")
+        self.setWindowTitle(f"나라수첩 {APP_VERSION}")
         self.setWindowIcon(app_icon())
         self.resize(1024, 640)
         self.setMinimumSize(980, 620)
@@ -1358,7 +1366,7 @@ class MainWindow(QMainWindow):
 
         self._window_controls = QWidget()
         wc_layout = QHBoxLayout(self._window_controls)
-        wc_layout.setContentsMargins(0, 0, 0, 0)
+        wc_layout.setContentsMargins(0, 0, 28, 0)
         wc_layout.setSpacing(6)
 
         self._opacity_label = QLabel("투명도")
@@ -1398,7 +1406,7 @@ class MainWindow(QMainWindow):
         tac_layout.addWidget(self.memo_button)
 
         self.doc_button = self._top_button("문서")
-        self.doc_button.setToolTip("문서 (온나라/웹 수집 결재문서 목록, 완료 체크, 엑셀 내보내기)")
+        self.doc_button.setToolTip("문서 관리 (문서 목록, 완료 체크, 엑셀 내보내기)")
         self.doc_button.clicked.connect(self._open_task_manager)
         tac_layout.addWidget(self.doc_button)
         self.task_button = self.doc_button  # 호환성 유지
@@ -1444,12 +1452,12 @@ class MainWindow(QMainWindow):
         self.service_button.clicked.connect(self._show_service_menu)
         tac_layout.addWidget(self.service_button)
 
+        tac_layout.addStretch(1)
+
         settings_button = self._top_button("설정")
         settings_button.setToolTip("환경설정")
         settings_button.clicked.connect(self._open_settings)
         tac_layout.addWidget(settings_button)
-
-        tac_layout.addStretch(1)
 
         self.topbar_collapse_btn = self._top_button("", 28)
         self.topbar_collapse_btn.setIcon(QIcon(str(asset_path("chevron_up.svg"))))
@@ -1792,8 +1800,12 @@ class MainWindow(QMainWindow):
 
     def _apply_tooltip_palette(self) -> None:
         palette = QToolTip.palette()
-        bg_col = QColor(self.palette.get("panel", "#FFFFFF"))
-        text_col = QColor(self.palette.get("text", "#1F2328"))
+        is_dark = getattr(self, "theme_name", "") == "dark" or self.palette.get("bg", "").lower() in ("#0a0c10", "#171b22")
+        tip_bg = "#1E293B" if is_dark else "#FFFFFF"
+        tip_fg = "#F8FAFC" if is_dark else "#0F172A"
+        tip_border = "#475569" if is_dark else "#CBD5E1"
+        bg_col = QColor(tip_bg)
+        text_col = QColor(tip_fg)
         for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
             palette.setColor(group, QPalette.ToolTipBase, bg_col)
             palette.setColor(group, QPalette.ToolTipText, text_col)
@@ -1802,16 +1814,16 @@ class MainWindow(QMainWindow):
         QToolTip.setPalette(palette)
         app = QApplication.instance()
         if app:
-            p = self.palette
             app.setStyleSheet(
                 f"QToolTip {{ "
-                f"background-color: {p.get('panel', '#FFFFFF')}; "
-                f"color: {p.get('text', '#1F2328')}; "
-                f"border: 1px solid {p.get('line', '#CBD5E1')}; "
+                f"background-color: {tip_bg}; "
+                f"color: {tip_fg}; "
+                f"border: 1px solid {tip_border}; "
                 f"border-radius: 6px; "
                 f"padding: 6px 10px; "
                 f"font-family: {font_family_css()}; "
                 f"font-size: 12px; "
+                f"font-weight: 500; "
                 f"}}"
             )
 
@@ -2371,7 +2383,42 @@ class MainWindow(QMainWindow):
             logger.exception("failed to initialize memo global hotkey")
             self.memo_hotkey_manager = None
 
-        # Determine work candidates (must not duplicate cal or memo)
+        # Determine doc candidates (must not duplicate cal or memo)
+        doc_fallback = "Ctrl+Alt+D"
+        default_doc = default_doc_shortcut()
+        stored_doc = self.repository.get_setting("doc_toggle_shortcut", "").strip()
+        stored_doc_norm = normalize_shortcut(stored_doc) if stored_doc else ""
+
+        if stored_doc_norm:
+            raw_doc_candidates = [stored_doc_norm, default_doc, doc_fallback]
+        else:
+            raw_doc_candidates = [default_doc, doc_fallback]
+
+        used_hotkeys = {norm_applied_cal, normalize_shortcut(applied_memo or "")}
+        doc_candidates = [
+            c for c in raw_doc_candidates
+            if normalize_shortcut(c) not in used_hotkeys
+        ]
+        if not doc_candidates:
+            doc_candidates = [doc_fallback]
+
+        applied_doc: str | None = None
+        try:
+            self.doc_hotkey_manager = QtGlobalHotkeyManager(doc_fallback, self._toggle_task_manager, hotkey_id=HOTKEY_DOC_ID)
+            for candidate in doc_candidates:
+                if self.doc_hotkey_manager.update_shortcut(candidate):
+                    applied_doc = candidate
+                    break
+            if applied_doc is None:
+                applied_doc = normalize_shortcut(doc_fallback)
+
+            if stored_doc != applied_doc:
+                self.repository.set_setting("doc_toggle_shortcut", applied_doc)
+        except Exception:
+            logger.exception("failed to initialize doc global hotkey")
+            self.doc_hotkey_manager = None
+
+        # Determine work candidates (must not duplicate cal, memo, or doc)
         work_fallback = "Ctrl+Alt+W"
         default_work = default_work_shortcut()
         stored_work = self.repository.get_setting("work_toggle_shortcut", "").strip()
@@ -2382,7 +2429,7 @@ class MainWindow(QMainWindow):
         else:
             raw_work_candidates = [default_work, work_fallback]
 
-        used_hotkeys = {norm_applied_cal, normalize_shortcut(applied_memo or "")}
+        used_hotkeys.add(normalize_shortcut(applied_doc or ""))
         work_candidates = [
             c for c in raw_work_candidates
             if normalize_shortcut(c) not in used_hotkeys
@@ -2409,6 +2456,13 @@ class MainWindow(QMainWindow):
         if not migrated_v2:
             self.repository.set_setting("hotkey_migrated_v2", "1")
         self.repository.save()
+
+    def _toggle_task_manager(self) -> None:
+        dlg = getattr(self, "_task_manager_dialog", None)
+        if dlg is not None and dlg.isVisible() and not dlg.isMinimized():
+            dlg.hide()
+        else:
+            self._open_task_manager()
 
     def _toggle_work_manager(self) -> None:
         dlg = getattr(self, "_work_manager_dialog", None)
@@ -4216,7 +4270,7 @@ class MainWindow(QMainWindow):
 
     def _create_task_count_badge(self, target_day: date, tasks: list[CalendarEntry]) -> QWidget:
         count = len(tasks)
-        badge = ClickableLabel(f"업무 {count}건", is_elided=False)
+        badge = ClickableLabel(f"문서 {count}건", is_elided=False)
         badge.setCursor(Qt.PointingHandCursor)
 
         is_dark = self.theme_name == "dark"
@@ -4235,11 +4289,11 @@ class MainWindow(QMainWindow):
             hover_border = "#1E40AF"
             hover_text = "#1E40AF"
 
-        panel_col = self.palette.get("panel", "#FFFFFF")
-        text_main = self.palette.get("text", "#1F2328")
+        panel_col = "#1E293B" if is_dark else "#FFFFFF"
+        text_main = "#F8FAFC" if is_dark else "#0F172A"
         text_muted = self.palette.get("muted", "#667085")
         accent_col = "#2563EB" if not is_dark else "#60A5FA"
-        line_col = self.palette.get("line", "#CBD5E1")
+        line_col = "#475569" if is_dark else "#CBD5E1"
 
         badge.setStyleSheet(f"""
             QLabel {{
@@ -4264,12 +4318,13 @@ class MainWindow(QMainWindow):
                 padding: 6px 10px;
                 font-family: {font_family_css()};
                 font-size: 12px;
+                font-weight: 500;
             }}
         """)
 
         html_lines = [
             f"<div style=\"font-family: {font_family_css()}; font-size: {scale_px(12)}px; color: {text_main}; white-space: nowrap;\">",
-            f"<div style=\"font-weight: bold; font-size: {scale_px(12)}px; margin-bottom: 4px; white-space: nowrap;\"><nobr>📋 {target_day.strftime('%Y-%m-%d')} 업무 총 {count}건:</nobr></div>",
+            f"<div style=\"font-weight: bold; font-size: {scale_px(12)}px; margin-bottom: 4px; white-space: nowrap;\"><nobr>📋 {target_day.strftime('%Y-%m-%d')} 문서 총 {count}건:</nobr></div>",
             f"<hr style=\"border: none; border-top: 1px solid {line_col}; margin: 4px 0 6px 0;\">",
             f"<div style=\"font-size: {scale_px(11.5)}px; line-height: 150%; white-space: nowrap;\">",
         ]
@@ -4284,7 +4339,7 @@ class MainWindow(QMainWindow):
         if count > 10:
             html_lines.append(f"<nobr><span style=\"color: {text_muted};\">외 {count - 10}건...</span></nobr><br>")
         html_lines.append("</div>")
-        html_lines.append(f"<div style=\"font-size: 10.5px; color: {text_muted}; margin-top: 6px; white-space: nowrap;\"><nobr>(클릭 시 해당 일자 선택 및 업무 리스트 열기)</nobr></div>")
+        html_lines.append(f"<div style=\"font-size: 10.5px; color: {text_muted}; margin-top: 6px; white-space: nowrap;\"><nobr>(클릭 시 해당 일자 선택 및 문서 리스트 열기)</nobr></div>")
         html_lines.append("</div>")
         badge.setToolTip("".join(html_lines))
 
@@ -5142,8 +5197,12 @@ class MainWindow(QMainWindow):
         if getattr(self, "_sidebar_visible", True) and hasattr(self, "sidebar_panel") and self.sidebar_panel.isVisible():
             target_w = max(natural_w, self.info_card.width())
             self.topbar_actions_container.setFixedWidth(target_w)
+            if hasattr(self, "_window_controls") and self._window_controls.layout():
+                self._window_controls.layout().setContentsMargins(0, 0, 28, 0)
         else:
             self.topbar_actions_container.setFixedWidth(natural_w)
+            if hasattr(self, "_window_controls") and self._window_controls.layout():
+                self._window_controls.layout().setContentsMargins(0, 0, 0, 0)
 
     def _memo_button_aligned_sidebar_width(self) -> int:
         return 341
@@ -5480,7 +5539,9 @@ class MainWindow(QMainWindow):
             self._export_all_entries_to_excel()
         else:
             stamp = datetime.now().strftime("%Y%m%d_%H%M")
-            default_path = self._default_export_dir() / f"taskcalendar_backup_{stamp}.zip"
+            include_attachments = getattr(dialog, "include_attachments", False)
+            default_name = f"taskcalendar_full_backup_{stamp}.zip" if include_attachments else f"taskcalendar_backup_{stamp}.zip"
+            default_path = self._default_export_dir() / default_name
             file_path, _ = QFileDialog.getSaveFileName(
                 self,
                 "데이터 내보내기 (ZIP)",
@@ -5497,8 +5558,14 @@ class MainWindow(QMainWindow):
                     Path(file_path),
                     settings_dict=self.repository.get_all_settings(),
                     plain_db_bytes=self.repository.connection.serialize(),
+                    include_attachments=include_attachments,
                 )
-                QMessageBox.information(self, "데이터 내보내기", f"백업 파일이 성공적으로 저장되었습니다.\n{file_path}")
+                msg = "백업 파일이 성공적으로 저장되었습니다."
+                if not include_attachments:
+                    msg += "\n\n• 초경량 고속 백업: 캘린더, 메모, 문서관리, 업무관리(분류/본문/서식 일체) 및 환경설정이 안전하게 백업되었습니다.\n(첨부파일은 PC 폴더에 보존되어 있어 복원 시 자동으로 연결됩니다)"
+                else:
+                    msg += "\n\n• 전체 이전 백업: 첨부파일 폴더를 포함하여 모든 데이터가 ZIP 파일로 압축 저장되었습니다."
+                QMessageBox.information(self, "데이터 내보내기 완료", f"{msg}\n\n저장 위치:\n{file_path}")
             except Exception as exc:
                 logger.exception("zip backup failed")
                 QMessageBox.critical(self, "데이터 내보내기 실패", f"백업 중 오류가 발생했습니다.\n{exc}")
@@ -5617,6 +5684,9 @@ class MainWindow(QMainWindow):
             if self.memo_hotkey_manager is not None:
                 self.memo_hotkey_manager.stop()
                 self.memo_hotkey_manager = None
+            if self.doc_hotkey_manager is not None:
+                self.doc_hotkey_manager.stop()
+                self.doc_hotkey_manager = None
             if self.work_hotkey_manager is not None:
                 self.work_hotkey_manager.stop()
                 self.work_hotkey_manager = None
@@ -5675,8 +5745,11 @@ class MainWindow(QMainWindow):
 
             reply = QMessageBox.warning(
                 self,
-                "데이터 가져오기 경고",
-                "경고: 정말 데이터를 복원하시겠습니까?\n\n이 작업은 현재 캘린더에 있는 모든 일정, 메모, 설정 및 첨부파일을 덮어씁니다. 이 작업은 되돌릴 수 없습니다.",
+                "데이터 복원 확인",
+                "경고: 백업 파일의 데이터로 복원하시겠습니까?\n\n"
+                "• 캘린더 일정, 메모, 문서관리, 업무관리 본문/서식 및 환경설정이 백업 시점의 상태로 복원됩니다.\n"
+                "• 백업 파일에 첨부파일이 포함되어 있으면 첨부파일도 함께 복원됩니다.\n\n"
+                "계속 진행하시겠습니까?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -5691,7 +5764,7 @@ class MainWindow(QMainWindow):
                 self.search_results = []
                 self.sidebar_mode = "day"
                 self.refresh()
-                QMessageBox.information(self, "데이터 가져오기", "백업 데이터 및 환경설정이 성공적으로 복원되었습니다.")
+                QMessageBox.information(self, "데이터 복원 완료", "백업 데이터(캘린더, 메모, 문서, 업무관리, 설정)가 성공적으로 복원되었습니다.")
             except Exception as exc:
                 logger.exception("zip restore failed")
                 QMessageBox.critical(self, "데이터 가져오기 실패", f"복원 중 오류가 발생했습니다.\n{exc}")
@@ -6135,6 +6208,7 @@ class MainWindow(QMainWindow):
             int(self.repository.get_setting("auto_backup_keep_count", "5")),
             self.repository.db_path,
             current_memo_shortcut=self.repository.get_setting("memo_toggle_shortcut", default_memo_shortcut()),
+            current_doc_shortcut=self.repository.get_setting("doc_toggle_shortcut", default_doc_shortcut()),
             current_work_shortcut=self.repository.get_setting("work_toggle_shortcut", default_work_shortcut()),
             initial_tab=initial_tab,
             show_lunar_calendar=self.show_lunar_calendar,
@@ -6159,6 +6233,7 @@ class MainWindow(QMainWindow):
             work_copy_attachments_default=self.repository.get_setting("work_copy_attachments_default", "1") != "0",
             work_delete_attachments_default=self.repository.get_setting("work_delete_attachments_default", "1") != "0",
             work_default_cycle=self.repository.get_setting("work_default_cycle", "수시"),
+            task_strikeout_completed=self.repository.get_setting("task_strikeout_completed", "1") == "1",
         )
         if dialog.exec() and dialog.result is not None:
             action = str(dialog.result.get("action", "apply"))
@@ -6186,6 +6261,10 @@ class MainWindow(QMainWindow):
             if self.memo_hotkey_manager is not None and not self.memo_hotkey_manager.update_shortcut(new_memo_shortcut):
                 QMessageBox.warning(self, "단축키 오류", "해당 메모 단축키를 다른 프로그램에서 사용 중이오니, 다른 단축키로 변경해 주세요.")
                 return
+            new_doc_shortcut = str(dialog.result.get("doc_shortcut", default_doc_shortcut()))
+            if self.doc_hotkey_manager is not None and not self.doc_hotkey_manager.update_shortcut(new_doc_shortcut):
+                QMessageBox.warning(self, "단축키 오류", "해당 문서 단축키를 다른 프로그램에서 사용 중이오니, 다른 단축키로 변경해 주세요.")
+                return
             new_work_shortcut = str(dialog.result.get("work_shortcut", default_work_shortcut()))
             if self.work_hotkey_manager is not None and not self.work_hotkey_manager.update_shortcut(new_work_shortcut):
                 QMessageBox.warning(self, "단축키 오류", "해당 업무 단축키를 다른 프로그램에서 사용 중이오니, 다른 단축키로 변경해 주세요.")
@@ -6194,6 +6273,7 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("theme", self.theme_name)
             self.repository.set_setting("toggle_shortcut", new_shortcut)
             self.repository.set_setting("memo_toggle_shortcut", new_memo_shortcut)
+            self.repository.set_setting("doc_toggle_shortcut", new_doc_shortcut)
             self.repository.set_setting("work_toggle_shortcut", new_work_shortcut)
             requested_auto_start = bool(dialog.result["auto_start"])
             applied = set_startup_enabled(requested_auto_start)
@@ -6276,6 +6356,12 @@ class MainWindow(QMainWindow):
                 self.repository.set_setting("work_delete_attachments_default", "1" if dialog.result["work_delete_attachments_default"] else "0")
             if "work_default_cycle" in dialog.result:
                 self.repository.set_setting("work_default_cycle", str(dialog.result["work_default_cycle"]))
+            if "task_strikeout_completed" in dialog.result:
+                new_strike = bool(dialog.result["task_strikeout_completed"])
+                self.repository.set_setting("task_strikeout_completed", "1" if new_strike else "0")
+                if getattr(self, "_task_manager_dialog", None) is not None:
+                    if hasattr(self._task_manager_dialog, "update_settings"):
+                        self._task_manager_dialog.update_settings()
 
             if not self._sticker_animation_enabled:
                 self._sticker_animation_state.clear()
@@ -6305,8 +6391,13 @@ class MainWindow(QMainWindow):
         """업무 관리 대시보드 창 열기"""
         try:
             from taskcalendar.qt_task_manager import TaskManagerDialog
-            if getattr(self, "_task_manager_dialog", None) is None or not self._task_manager_dialog.isVisible():
-                self._task_manager_dialog = TaskManagerDialog(self, self.repository, self)
+            if getattr(self, "_task_manager_dialog", None) is None or not self._task_manager_dialog.isVisible() or self._task_manager_dialog.parent() is not None:
+                if getattr(self, "_task_manager_dialog", None) is not None and self._task_manager_dialog.parent() is not None:
+                    try:
+                        self._task_manager_dialog.close()
+                    except Exception:
+                        pass
+                self._task_manager_dialog = TaskManagerDialog(None, self.repository, self)
                 self._task_manager_dialog.show()
             else:
                 self._task_manager_dialog.apply_palette(self.palette)
@@ -6484,12 +6575,16 @@ class MainWindow(QMainWindow):
                     except ValueError:
                         pass
 
+                all_day_param = data.get("all_day", "1")
+                is_all_day = str(all_day_param).lower() not in ("0", "false") if all_day_param is not None else True
+
                 entry = CalendarEntry(
                     entry_type=entry_type,
                     title=title or "크롬에서 등록",
                     description=full_desc,
                     day=target_day,
                     start_date=target_day,
+                    all_day=is_all_day,
                 )
                 self._edit_entry(entry_type, entry, force_top=True)
 
@@ -7181,6 +7276,9 @@ class MainWindow(QMainWindow):
         if self.memo_hotkey_manager is not None:
             self.memo_hotkey_manager.stop()
             self.memo_hotkey_manager = None
+        if self.doc_hotkey_manager is not None:
+            self.doc_hotkey_manager.stop()
+            self.doc_hotkey_manager = None
         if self.work_hotkey_manager is not None:
             self.work_hotkey_manager.stop()
             self.work_hotkey_manager = None

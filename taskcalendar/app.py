@@ -126,6 +126,7 @@ def _parse_protocol_url(argv: list[str]) -> dict | None:
                     "desc": unquote(params.get("desc", [""])[0]),
                     "url": unquote(params.get("url", [""])[0]),
                     "date": params.get("date", [""])[0],
+                    "all_day": params.get("all_day", ["1"])[0],
                 }
                 logger.info(f"[_parse_protocol_url] Parsed: {data}")
                 return data
@@ -216,7 +217,7 @@ def run() -> None:
     _set_windows_app_id()
     app = ensure_qt_application()
     app.setQuitOnLastWindowClosed(False)
-    app.setApplicationName("K캘린더")
+    app.setApplicationName("나라수첩")
     # 내장 폰트(Pretendard) 등록 + 전역 글자 크기 배율 훅 설치
     fonts.install_style_hook()
     fonts.load_bundled_fonts()

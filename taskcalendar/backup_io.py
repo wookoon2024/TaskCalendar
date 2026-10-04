@@ -13,8 +13,9 @@ def backup_to_zip(
     zip_filepath: Path,
     settings_dict: dict[str, str] | None = None,
     plain_db_bytes: bytes | None = None,
+    include_attachments: bool = False,
 ) -> None:
-    """Compresses the database file, portable plain SQLite bytes, companion settings, and attachments into a single zip file."""
+    """Compresses the database file, portable plain SQLite bytes, companion settings, and optionally attachments into a single zip file."""
     with zipfile.ZipFile(zip_filepath, "w", zipfile.ZIP_DEFLATED) as zipf:
         if db_path.exists():
             zipf.write(db_path, arcname=db_path.name)
@@ -26,7 +27,7 @@ def backup_to_zip(
             latest_settings = db_path.parent / "backups" / "settings_latest.json"
             if latest_settings.exists():
                 zipf.write(latest_settings, arcname="settings.json")
-        if attachments_dir.exists():
+        if include_attachments and attachments_dir.exists():
             for file in attachments_dir.rglob("*"):
                 if file.is_file():
                     arcname = Path("attachments") / file.relative_to(attachments_dir)
@@ -117,12 +118,13 @@ def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -
             except Exception:
                 pass
 
-            # Replace attachments
-            if attachments_dir.exists():
-                shutil.rmtree(attachments_dir)
-            attachments_dir.mkdir(parents=True, exist_ok=True)
-
-            if extracted_attachments.exists():
+            # If the backup zip contains attachments, restore/merge them safely
+            has_extracted_attachments = (
+                extracted_attachments.exists()
+                and any(f.is_file() for f in extracted_attachments.rglob("*"))
+            )
+            if has_extracted_attachments:
+                attachments_dir.mkdir(parents=True, exist_ok=True)
                 for file in extracted_attachments.rglob("*"):
                     if file.is_file():
                         rel = file.relative_to(extracted_attachments)

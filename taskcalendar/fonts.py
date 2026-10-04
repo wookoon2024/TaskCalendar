@@ -98,6 +98,40 @@ def ui_font_scale() -> float:
     return _scale
 
 
+def make_ui_font(size_px: float, weight: int = -1) -> QFont:
+    """전역 렌더링 설정을 물려받아 QFont 를 만든다.
+
+    QFont(family, size) 로 직접 만들면 앱 전역 폰트(set_ui_font)의
+    styleStrategy / hintingPreference 를 상속하지 않아, 캘린더·업무 화면과
+    달리 글자가 뭉개져(ClearType 힌팅 미적용) 보인다.
+    직접 폰트를 만들어야 하는 곳에서는 반드시 이 함수를 쓴다.
+
+    size_px 는 화면 픽셀 기준이다. 예전처럼 pointSize 를 쓰면 DPI 에 따라
+    크기가 흔들리므로, QSS 와 동일하게 픽셀 단위로 고정한다.
+    """
+    font = QFont(_family)
+    font.setStyleStrategy(
+        QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality
+    )
+    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    if weight >= 0:
+        font.setWeight(QFont.Weight(weight))
+    font.setPixelSize(scale_px(size_px))
+    return font
+
+
+def make_ui_font_like(size_pt: float, weight: int = -1) -> QFont:
+    """pointSize(pt) 기준 헬퍼. 기존 QFont(family, pt) 동작을 그대로 유지한다.
+
+    앱 전역 폰트와 같은 pointSize → pixelSize 환산을 적용해,
+    렌더링 설정만 물려받으면서 크기는 예전과 완전히 같게 만든다.
+    """
+    font = make_ui_font(BASE_FONT_PX, weight=weight)
+    font.setPixelSize(-1)  # pixelSize 해제 후 pointSize 로 전환
+    font.setPointSizeF(max(1.0, float(size_pt) * _scale))
+    return font
+
+
 def scale_key(scale: float | None = None) -> str:
     """배율 값을 설정 키로 되돌린다."""
     value = _scale if scale is None else float(scale)
