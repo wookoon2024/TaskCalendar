@@ -6688,7 +6688,9 @@ class SettingsDialog(QDialog):
 
         backup_note = QLabel("• 첨부파일은 PC 폴더에 안전하게 보관되므로 DB 및 설정만 초경량(수 MB 이내)으로 백업됩니다.")
         backup_note.setObjectName("subtitle")
-        backup_note.setStyleSheet(f"color: {self.palette['muted']}; font-size: 11px; margin-left: 20px; margin-top: -4px;")
+        # margin-top 음수는 라벨 높이를 줄여 글자를 위아래로 잘라 보이게 하므로 쓰지 않는다.
+        backup_note.setWordWrap(True)
+        backup_note.setStyleSheet(f"color: {self.palette['muted']}; font-size: 11px; margin-left: 20px;")
         backup_layout.addWidget(backup_note)
 
         backup_row2 = QHBoxLayout()
