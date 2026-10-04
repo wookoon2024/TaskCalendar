@@ -306,6 +306,12 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
     QPushButton#secondary:hover, QPushButton#secondaryBtn:hover, QDialogButtonBox QPushButton#secondary:hover {{
         background: {panel_alt};
     }}
+    QPushButton#secondary:disabled, QPushButton#secondaryBtn:disabled, QDialogButtonBox QPushButton#secondary:disabled {{
+        background: {panel_alt};
+        color: {muted};
+        border: 1px solid {line};
+        font-weight: 400;
+    }}
     QPushButton#attachLink {{
         background: {panel};
         border: 1px solid {line};
