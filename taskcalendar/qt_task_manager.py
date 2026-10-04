@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
 )
 
-from taskcalendar.fonts import font_family_css, scale_px, ui_font_family
+from taskcalendar.fonts import font_family_css, make_ui_font_like, scale_px, ui_font_family
 from taskcalendar.models import CalendarEntry, EntryType
 from taskcalendar.paths import asset_path
 from taskcalendar.storage import EncryptedRepository
@@ -2431,7 +2431,7 @@ class TaskManagerDialog(QDialog):
         text_normal = QColor(self.palette.get("text", "#2D3748"))
         text_muted = QColor(self.palette.get("muted", "#A0AEC0"))
 
-        row_font = QFont(ui_font_family(), scale_px(10))
+        row_font = make_ui_font_like(10)
         for row_idx, task in enumerate(tasks_to_show):
             is_done = (task.status == "완료")
             text_color = text_muted if is_done else text_normal
@@ -2601,7 +2601,7 @@ class TaskManagerDialog(QDialog):
         """완료 상태 변경 시 해당 행 글자 스타일(취소선/색상) 즉시 갱신"""
         is_done = (task.status == "완료")
         text_color = QColor(self.palette.get("muted", "#A0AEC0")) if is_done else QColor(self.palette.get("text", "#2D3748"))
-        row_font = QFont(ui_font_family(), scale_px(10))
+        row_font = make_ui_font_like(10)
         f = QFont(row_font)
         if is_done:
             f.setStrikeOut(True)

@@ -2022,6 +2022,10 @@ class MainWindow(QMainWindow):
         add_action.triggered.connect(self._open_add_from_tray)
         add_memo_action = menu.addAction("새 메모 추가")
         add_memo_action.triggered.connect(self._open_add_memo_from_tray)
+        add_doc_action = menu.addAction("새 문서 추가")
+        add_doc_action.triggered.connect(self._open_add_doc_from_tray)
+        add_work_action = menu.addAction("새 업무 추가")
+        add_work_action.triggered.connect(self._open_add_work_from_tray)
         memo_open_action = menu.addAction("메모 열기")
         memo_open_action.triggered.connect(self._open_memo_from_tray)
         doc_open_action = menu.addAction("문서 관리 열기")
@@ -2057,6 +2061,19 @@ class MainWindow(QMainWindow):
 
     def _open_add_memo_from_tray(self) -> None:
         self._edit_entry(EntryType.MEMO, None)
+
+    def _open_add_doc_from_tray(self) -> None:
+        """트레이에서 새 문서 등록 창 열기"""
+        self._show_from_tray()
+        self._edit_entry(EntryType.TASK, None)
+
+    def _open_add_work_from_tray(self) -> None:
+        """트레이에서 새 업무 등록 창 열기"""
+        self._show_from_tray()
+        self._open_work_manager()
+        dlg = getattr(self, "_work_manager_dialog", None)
+        if dlg is not None:
+            QTimer.singleShot(200, dlg._on_add_new_sheet)
 
     def _open_memo_from_tray(self) -> None:
         """트레이에서 메모 화면으로 바로 이동"""
