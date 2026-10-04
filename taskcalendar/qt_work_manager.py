@@ -5334,6 +5334,11 @@ class WorkManagerDialog(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
+        # __init__ 시점(창 미표시)에서 setSizes 를 호출하면 Qt 가 최소폭(130px)으로
+        # 강제해 좌우 패널이 좁아진다. 창이 실제로 표시된 뒤 한 번 더 적용한다.
+        if not getattr(self, "_panel_sizes_applied", False):
+            self._panel_sizes_applied = True
+            QTimer.singleShot(0, self._apply_restored_panel_sizes)
         if hasattr(self, "search_input") and self.search_input:
             self.search_input.clearFocus()
         if self._active_sheet_index >= 0:
@@ -5341,6 +5346,23 @@ class WorkManagerDialog(QDialog):
         if not getattr(self, "_first_show_prompt_done", False):
             self._first_show_prompt_done = True
             QTimer.singleShot(350, self._check_first_time_context_menu_prompt)
+
+    def _apply_restored_panel_sizes(self) -> None:
+        """창이 표시된 뒤 저장된 좌·우 패널 폭을 확정적으로 적용한다."""
+        try:
+            sizes = self.splitter.sizes()
+            if len(sizes) != 3:
+                return
+            s0, s1, s2 = sizes
+            # 최소폭(130px)으로 붙어 있는 경우에만 저장된 폭으로 되돌린다.
+            if self._left_expanded and s0 < 200:
+                s0 = max(self._last_left_width, 320)
+            if self._right_expanded and s2 < 200:
+                s2 = max(self._last_right_width, 320)
+            if (s0, s1, s2) != tuple(sizes):
+                self.splitter.setSizes([s0, s1, s2])
+        except Exception:
+            logger.debug("Failed to apply restored panel sizes")
 
     def _focus_editor(self) -> None:
         """문서 편집기로 포커스를 이동하여 즉시 타이핑할 수 있도록 함"""
