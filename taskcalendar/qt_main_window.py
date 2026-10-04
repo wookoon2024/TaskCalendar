@@ -1416,6 +1416,9 @@ class MainWindow(QMainWindow):
         self.work_button.clicked.connect(self._open_work_manager)
         tac_layout.addWidget(self.work_button)
 
+        # 남은 공간을 먼저 밀어 넣고, [기능][설정] 을 오른쪽 끝에 붙인다.
+        tac_layout.addStretch(1)
+
         # 민원계산기 버튼 (추후 보완 후 재오픈 예정)
         # self.complaint_button = self._top_button("민원계산기")
         # self.complaint_button.setToolTip("민원 처리기한 모의계산기 (법정 공휴일/근무시간 자동 산정)")
@@ -1451,8 +1454,6 @@ class MainWindow(QMainWindow):
 
         self.service_button.clicked.connect(self._show_service_menu)
         tac_layout.addWidget(self.service_button)
-
-        tac_layout.addStretch(1)
 
         settings_button = self._top_button("설정")
         settings_button.setToolTip("환경설정")
@@ -2016,10 +2017,18 @@ class MainWindow(QMainWindow):
         )
         open_action = menu.addAction("열기 / 숨기기")
         open_action.triggered.connect(self._toggle_window_visibility)
+        menu.addSeparator()
         add_action = menu.addAction("새 일정 추가")
         add_action.triggered.connect(self._open_add_from_tray)
         add_memo_action = menu.addAction("새 메모 추가")
         add_memo_action.triggered.connect(self._open_add_memo_from_tray)
+        memo_open_action = menu.addAction("메모 열기")
+        memo_open_action.triggered.connect(self._open_memo_from_tray)
+        doc_open_action = menu.addAction("문서 관리 열기")
+        doc_open_action.triggered.connect(self._open_document_from_tray)
+        work_open_action = menu.addAction("업무 관리 열기")
+        work_open_action.triggered.connect(self._open_work_from_tray)
+        menu.addSeparator()
         settings_action = menu.addAction("환경설정")
         settings_action.triggered.connect(self._open_settings_from_tray)
         menu.addSeparator()
@@ -2048,6 +2057,21 @@ class MainWindow(QMainWindow):
 
     def _open_add_memo_from_tray(self) -> None:
         self._edit_entry(EntryType.MEMO, None)
+
+    def _open_memo_from_tray(self) -> None:
+        """트레이에서 메모 화면으로 바로 이동"""
+        self._show_from_tray()
+        self._set_sidebar_mode("memo")
+
+    def _open_document_from_tray(self) -> None:
+        """트레이에서 문서 관리 창 열기"""
+        self._show_from_tray()
+        self._open_task_manager()
+
+    def _open_work_from_tray(self) -> None:
+        """트레이에서 업무 관리 창 열기"""
+        self._show_from_tray()
+        self._open_work_manager()
 
     def _setup_alert_timer(self) -> None:
         timer = QTimer(self)

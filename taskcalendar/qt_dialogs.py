@@ -8797,6 +8797,139 @@ class CivilComplaintCalculatorDialog(QDialog):
 
 
 class WelcomeFeatureIntroDialog(QDialog):
+    """기능 안내 — 5개 분류를 하나씩 살펴보는 페이지형 안내 창"""
+
+    PAGES: list[tuple[str, str, str]] = [
+        (
+            "📅 일정 관리",
+            "회의·보고·기한 등 업무 일정을 등록하고 알림받습니다.",
+            """<b>□ 일정 등록</b>
+  · 날짜와 시작·종료 시간을 지정하거나 [종일]로 하루 통째로 잡습니다.
+  · 스티커와 배경색 8색으로 일정 종류를 구분할 수 있습니다.
+  · 시작일의 음력 날짜가 등록 화면에 함께 표시됩니다.
+
+<b>□ 반복 일정</b>
+  · 매일 / 매주 / 매월 / 매월 n번째 요일 / 매년(양력) / 매년(음력) 중 선택합니다.
+  · 반복 간격과 요일을 지정하면 달력에 자동으로 이어집니다.
+  · 기간은 1일부터 영구까지 버튼 하나로 설정됩니다.
+
+<b>□ 알림</b>
+  · 시작시간 / 30분 전 / 1시간 전 / 1일 전 중에서 선택합니다.
+  · 알림이 되면 화면에 팝업으로 알려줍니다.
+
+<b>□ 날짜 계산기  [기능] 메뉴</b>
+  · D-Day, 기념일(100일·1주년 등), 만 나이·띠·근속기간을 계산합니다.
+  · 영업일·근무일 계산은 주말과 공휴일을 자동으로 제외합니다.
+  · 계산한 결과는 [일정 등록] 버튼으로 캘린더에 바로 넣을 수 있습니다.
+
+<b>□ 음력 · 24절기 · 공휴일</b>
+  · 음력 날짜와 24절기를 캘린더에 표시합니다. (표시 주기 6종 중 선택)
+  · 대한민국의 공휴일과 대체공휴일을 매년 계산해 표시합니다.""",
+        ),
+        (
+            "📝 메모 관리",
+            "화면 어디에나 띄워 두고 쓰는 메모입니다.",
+            """<b>□ 플로팅 메모</b>
+  · 메모를 원하는 위치에 띄우고 [항상 위 고정]으로 다른 창 위에 유지합니다.
+  · 투명도와 크기를 조절할 수 있으며, 화면 가장자리와 다른 메모에 가까이 두면 자동으로 붙습니다.
+
+<b>□ 메모 그룹</b>
+  · 여러 메모를 한 그룹으로 묶어 한 창에 모을 수 있습니다.
+  · 그룹은 [한줄 목록]과 [카드형] 두 가지 보기 방식을 지원합니다.
+  · 메모를 다른 그룹으로 드래그하면 소속이 자동으로 바뀝니다.
+
+<b>□ 편집</b>
+  · 서식 도구(굵게·기울임·밑줄·취소선·글꼴·크기·색상)를 사용할 수 있습니다.
+  · 이미지는 파일 선택·붙여넣기·드래그로 본문에 바로 넣습니다.
+  · [To-Do 스타일]로 바꾸면 체크박스가 자동으로 삽입됩니다.
+  · 메모에 파일을 그대로 드롭하면 첨부파일로 등록됩니다.
+
+<b>□ 정렬</b>
+  · 사이드바와 그룹 창에서 드래그로 순서를 바꿀 수 있습니다.
+  · 프로그램을 다시 켜면 마지막에 열었던 메모와 그룹이 그대로 복원됩니다.""",
+        ),
+        (
+            "📄 문서 관리",
+            "기관에서 오고 가는 문서를 대장으로 관리합니다.",
+            """<b>□ 문서 등록</b>
+  · 분류(일반·공문·보고·기안·결재·민원·예산·기타)와 처리상태를 지정합니다.
+  · 부서와 기안자는 입력하면 자동완성으로 이어서 선택할 수 있습니다.
+  · 출처 URL을 함께 남길 수 있습니다.
+
+<b>□ 목록 관리</b>
+  · 표에서 제목·부서·기안자·비고를 직접 더블클릭해 수정할 수 있습니다.
+  · 분류와 상태는 셀의 배지 버튼을 눌러 바꿉니다.
+  · 여러 개를 선택해 일괄으로 분류·상태를 바꾸거나 삭제할 수 있습니다.
+
+<b>□ 검색과 필터</b>
+  · 분류·상태·기간(오늘/이번 주/이번 달/올해/직접 지정)으로 좁힐 수 있습니다.
+  · 검색어로 제목·부서·기안자·내용·분류를 동시에 찾습니다.
+  · 정렬과 페이징(10·20·50개, 일별·주간별·월별)을 지원합니다.
+
+<b>□ 엑셀 내보내기</b>
+  · [공문 본문 나열형] — 공문에 그대로 붙여 쓸 수 있는 나열형
+  · [공문 붙임 표 형식] — 원하는 열을 골라 만드는 표
+  · [표준 업무관리대장] — 8개 고정 열로 된 표준 대장
+  · 미리보기와 클립보드 복사(한글·엑셀에 바로 붙여넣기)를 지원합니다.""",
+        ),
+        (
+            "📑 업무 관리",
+            "업무의 절차와 맥락을 남기고, 인수인계까지 이어집니다.",
+            """<b>□ 업무 항목</b>
+  · 제목·업무분류·주기(매일/매주/매월/분기/반기/연간/수시)·담당자·마감일을 지정합니다.
+  · 중앙 에디터에서 한글(HWP/HWPX) 원본 서식을 그대로 편집합니다.
+
+<b>□ 분류 트리</b>
+  · 분류를 여러 단계로 만들고 탭별로 나눠 관리할 수 있습니다.
+  · 문서를 트리에서 드래그하면 분류가 바뀌고, 하단 시트 탭으로 여러 문서를 동시에 열어둘 수 있습니다.
+
+<b>□ 첨부파일</b>
+  · 폴더 단위로 계층 구조를 만들며, 파일을 그대로 드롭해 등록합니다.
+  · 등록된 파일은 업무 전용 폴더에 보관됩니다.
+
+<b>□ 표준 서식  [템플릿] 버튼</b>
+  · [업무 템플릿] — 기안·보고·결재·민원·감사 등 공무원 서식 21종
+  · [이미지 템플릿] — 직인·결재선·구분선·절차도
+
+<b>□ AI 도우미  (본문 우클릭)</b>
+  · [대화하기] — 공문서·보고서 서식을 AI가 작성해 줍니다.
+  · [업무 분석기] — 본문에서 관련 법령과 필수 행정 절차를 분석합니다.
+  · [법령 찾기] — 국가법령정보센터에서 현행·연혁 법령을 찾아 공식 페이지로 연결합니다.
+  · 응답은 [선택 영역 교체] 또는 [커서 위치에 삽입]으로 본문에 반영됩니다.
+  · AI 연결과 사용 모델은 AI 패널의 [AI 설정] 버튼에서 지정합니다.
+
+<b>□ 다른 기능과의 연결</b>
+  · 이 업무와 관련된 일정을 등록하면 [일정] 탭에서 바로 확인·수정할 수 있습니다.
+  · 관련 문서를 여러 개 연결하고 문서 관리 화면으로 이동할 수 있습니다.""",
+        ),
+        (
+            "⚙️ 환경설정",
+            "업무 스타일에 맞춰 기능을 켜고 끌 수 있습니다.",
+            """<b>□ 화면 맞춤</b>
+  · 달력에서 완료 일정 숨기기, 캘린더에 업무내역 표시하기
+  · 캘린더에 표시할 처리상태를 고를 수 있습니다.
+  · 음력 표시 주기(6종)와 24절기 표시
+  · 메모 기본 색상·투명도·크기·글자 크기
+  · 문서 완료 항목 취소선, 탐색기 우클릭 연동
+
+<b>□ 스킨</b>
+  · 라이트·웜·블랙·핑크·민트·라벤더 6종 테마
+  · 글꼴과 글자 크기 배율(90% / 100% / 115% / 130%) 조절
+
+<b>□ 단축키</b>
+  · 캘린더(F3) · 메모(F4) · 문서(F5) · 업무(F6)를 자유롭게 지정할 수 있습니다.
+  · Ctrl·Shift·Alt 조합을 각각 사용할 수 있습니다.
+
+<b>□ 데이터</b>
+  · 자동 백업 주기(1·3·7·30일)와 보관 개수(3·5·10·20·무제한) 설정
+  · 백업 파일 복원, ZIP으로 내보내기와 가져오기
+
+<b>□ 보안</b>
+  · 모든 데이터는 이 PC 전용으로 암호화되어 저장됩니다.
+  · 다른 PC나 다른 Windows 계정에서는 열 수 없습니다.""",
+        ),
+    ]
+
     def __init__(self, parent=None, is_dismissed: bool = False) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
@@ -8804,8 +8937,10 @@ class WelcomeFeatureIntroDialog(QDialog):
         self.setWindowIcon(_dialog_icon())
         self.setModal(False)
         self.setWindowModality(Qt.WindowModality.NonModal)
-        self.resize(520, 440)
+        self.resize(700, 560)
+        self.setMinimumSize(620, 480)
         self.open_settings_requested = False
+        self._page_index = 0
 
         self.setStyleSheet(dialog_stylesheet(self.palette))
 
@@ -8818,36 +8953,70 @@ class WelcomeFeatureIntroDialog(QDialog):
         h_layout = QVBoxLayout(header)
         h_layout.setContentsMargins(12, 10, 12, 10)
         h_layout.setSpacing(4)
-        h_title = QLabel("나라수첩 기능 소개 & 안내")
+        h_title = QLabel("나라수첩 기능 안내 & 팁")
         h_title.setObjectName("headerTitle")
-        h_sub = QLabel("환경설정에서 업무 스타일에 맞춰 다양한 기능을 자유롭게 On/Off 할 수 있습니다.")
+        h_sub = QLabel("5가지 기능을 차례대로 살펴보세요. 좌측 목록이나 [이전] [다음]으로 이동할 수 있습니다.")
         h_sub.setObjectName("headerSubtitle")
         h_layout.addWidget(h_title)
         h_layout.addWidget(h_sub)
         layout.addWidget(header)
 
-        items = [
-            ("다양한 기능 맞춤 On/Off (환경설정)", "상단 우측 [환경설정]에서 음력·24절기 표시, 스티커 애니메이션, 완료 일정 숨기기, 자동 백업 등 필요 없는 기능은 끄고 원하는 기능만 켜서 가볍고 깔끔하게 사용할 수 있습니다."),
-            ("스마트 플로팅 메모 & 서식 에디터", "바탕화면에 메모를 자유롭게 띄우며, 내용/배경 마우스 우클릭 [에디터 보기/닫기]를 통해 상단 서식 도구(굵게, 폰트, 크기, 색상)로 메모를 손쉽게 편집할 수 있습니다."),
-            ("언제 어디서나 전역 단축키 (F3)", "다른 작업 중에도 언제든지 F3 키를 누르면 캘린더가 즉시 열리거나 숨겨집니다. (단축키는 환경설정에서 변경 가능)"),
-        ]
+        body = QHBoxLayout()
+        body.setSpacing(12)
 
-        for item_title_text, item_desc_text in items:
-            card = QFrame()
-            card.setObjectName("itemCard")
-            c_layout = QVBoxLayout(card)
-            c_layout.setContentsMargins(12, 8, 12, 8)
-            c_layout.setSpacing(3)
-            lbl_t = QLabel(item_title_text)
-            lbl_t.setObjectName("itemTitle")
-            lbl_d = QLabel(item_desc_text)
-            lbl_d.setObjectName("itemDesc")
-            lbl_d.setWordWrap(True)
-            c_layout.addWidget(lbl_t)
-            c_layout.addWidget(lbl_d)
-            layout.addWidget(card)
+        self.list_menu = QListWidget(self)
+        self.list_menu.setFixedWidth(190)
+        self.list_menu.currentRowChanged.connect(self._on_page_selected)
+        for name, _brief, _detail in self.PAGES:
+            self.list_menu.addItem(name)
+        body.addWidget(self.list_menu)
 
-        layout.addStretch(1)
+        detail_panel = QWidget(self)
+        detail_layout = QVBoxLayout(detail_panel)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.setSpacing(6)
+
+        self.lbl_page_title = QLabel(self)
+        self.lbl_page_title.setObjectName("itemTitle")
+        detail_layout.addWidget(self.lbl_page_title)
+
+        self.lbl_page_brief = QLabel(self)
+        self.lbl_page_brief.setObjectName("itemDesc")
+        self.lbl_page_brief.setWordWrap(True)
+        detail_layout.addWidget(self.lbl_page_brief)
+
+        self.scroll = QScrollArea(self)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.lbl_page_detail = QLabel(self)
+        self.lbl_page_detail.setObjectName("itemDesc")
+        self.lbl_page_detail.setWordWrap(True)
+        self.lbl_page_detail.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.lbl_page_detail.setTextFormat(Qt.TextFormat.RichText)
+        self.scroll.setWidget(self.lbl_page_detail)
+        detail_layout.addWidget(self.scroll, 1)
+
+        body.addWidget(detail_panel, 1)
+        layout.addLayout(body, 1)
+
+        # 페이지 이동 바
+        nav = QHBoxLayout()
+        nav.setSpacing(8)
+        self.lbl_page_indicator = QLabel(self)
+        self.lbl_page_indicator.setObjectName("itemDesc")
+        nav.addWidget(self.lbl_page_indicator)
+        nav.addStretch(1)
+
+        self.btn_prev = QPushButton("← 이전", self)
+        self.btn_prev.setObjectName("secondaryBtn")
+        self.btn_prev.clicked.connect(self._on_prev_page)
+        nav.addWidget(self.btn_prev)
+
+        self.btn_next = QPushButton("다음 →", self)
+        self.btn_next.setObjectName("secondaryBtn")
+        self.btn_next.clicked.connect(self._on_next_page)
+        nav.addWidget(self.btn_next)
+        layout.addLayout(nav)
 
         footer = QHBoxLayout()
         footer.setSpacing(8)
@@ -8862,12 +9031,42 @@ class WelcomeFeatureIntroDialog(QDialog):
         settings_btn.clicked.connect(self._on_open_settings)
         footer.addWidget(settings_btn)
 
-        confirm_btn = QPushButton("확인")
+        confirm_btn = QPushButton("시작하기 →")
         confirm_btn.setObjectName("primaryBtn")
         confirm_btn.clicked.connect(self.accept)
         footer.addWidget(confirm_btn)
 
         layout.addLayout(footer)
+
+        self._show_page(0)
+
+    # ---------------------------------------------------------- 페이지 전환
+    def _show_page(self, index: int) -> None:
+        total = len(self.PAGES)
+        self._page_index = max(0, min(index, total - 1))
+        name, brief, detail = self.PAGES[self._page_index]
+
+        self.lbl_page_title.setText(name)
+        self.lbl_page_brief.setText(brief)
+        self.lbl_page_detail.setText(detail)
+        self.lbl_page_indicator.setText(f"{self._page_index + 1} / {total}")
+
+        if self.list_menu.currentRow() != self._page_index:
+            self.list_menu.setCurrentRow(self._page_index)
+
+        self.btn_prev.setEnabled(self._page_index > 0)
+        self.btn_next.setEnabled(self._page_index < total - 1)
+        self.scroll.verticalScrollBar().setValue(0)
+
+    def _on_page_selected(self, row: int) -> None:
+        if 0 <= row < len(self.PAGES) and row != self._page_index:
+            self._show_page(row)
+
+    def _on_prev_page(self) -> None:
+        self._show_page(self._page_index - 1)
+
+    def _on_next_page(self) -> None:
+        self._show_page(self._page_index + 1)
 
     def _on_open_settings(self) -> None:
         self.open_settings_requested = True
