@@ -9,10 +9,11 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QItemSelectionModel, QObject, QPoint, QSize, QStringListModel, Qt, QTimer, QUrl
+from PySide6.QtCore import QDate, QEvent, QItemSelectionModel, QObject, QPoint, QSize, QStringListModel, Qt, QTimer, QUrl
 from PySide6.QtGui import QBrush, QColor, QCursor, QDesktopServices, QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QCompleter,
@@ -3059,6 +3060,68 @@ class TaskManagerDialog(QDialog):
                     QItemSelectionModel.Select | QItemSelectionModel.Rows,
                 )
 
+    def select_and_highlight_task(self, entry_id: str | None) -> bool:
+        """특정 업무(엔트리 ID)를 테이블에서 찾아 선택하고 화면에 보이도록 스크롤.
+
+        다른 창(업무 관리 -> 관련 문서)에서 넘어올 때 호출된다. 사용자가 갖고 있던
+        검색어/상태/기간/분류 필터나 페이징 때문에 대상 업무가 목록에 없으면 아무것도
+        안 보이므로, 그 경우에만 필터를 전체로 되돌린 뒤 다시 시도한다.
+        """
+        if not entry_id:
+            return False
+
+        if not self._reveal_task_row(entry_id):
+            self._reset_filters_for_reveal()
+            self._apply_filters()
+            if not self._reveal_task_row(entry_id):
+                return False
+
+        return True
+
+    def _reveal_task_row(self, entry_id: str) -> bool:
+        """현재 표시 중인 목록에서 entry_id 행을 선택. 있으면 True."""
+        for r, t in enumerate(self._displayed_tasks):
+            if t.entry_id == entry_id:
+                self.table.clearSelection()
+                self.table.selectRow(r)
+                self.table.setCurrentCell(r, 0)
+                self.table.scrollToItem(
+                    self.table.item(r, 0), QAbstractItemView.ScrollHint.PositionAtCenter
+                )
+                return True
+        return False
+
+    def _reset_filters_for_reveal(self) -> None:
+        """특정 업무를 보여주기 위해 필터를 모두 전체로 되돌린다."""
+        self._set_active_tab("all")
+        self.period_combo.blockSignals(True)
+        idx = self.period_combo.findText("기간")
+        if idx >= 0:
+            self.period_combo.setCurrentIndex(idx)
+        self.period_combo.blockSignals(False)
+        # '기간'은 전체 범위지만 날짜 편집기에 이전 기간 값이 남아 있을 수 있어 초기화한다.
+        self.start_date_edit.blockSignals(True)
+        self.end_date_edit.blockSignals(True)
+        self.start_date_edit.setDate(QDate(2000, 1, 1))
+        self.end_date_edit.setDate(QDate(2100, 12, 31))
+        self.start_date_edit.blockSignals(False)
+        self.end_date_edit.blockSignals(False)
+        self.category_combo.blockSignals(True)
+        c_idx = self.category_combo.findText("분류")
+        if c_idx >= 0:
+            self.category_combo.setCurrentIndex(c_idx)
+        self.category_combo.blockSignals(False)
+        self.search_input.blockSignals(True)
+        self.search_input.clear()
+        self.search_input.blockSignals(False)
+        if hasattr(self, "paging_combo"):
+            self.paging_combo.blockSignals(True)
+            p_idx = self.paging_combo.findText("전체")
+            if p_idx >= 0:
+                self.paging_combo.setCurrentIndex(p_idx)
+            self.paging_combo.blockSignals(False)
+        self._current_page = 1
+        self._current_date_anchor = None
 
     def _on_add_task(self) -> None:
         """새 업무 등록 (전용 TaskEditDialog 호출)"""

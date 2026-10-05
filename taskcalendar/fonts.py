@@ -127,7 +127,9 @@ def make_ui_font_like(size_pt: float, weight: int = -1) -> QFont:
     렌더링 설정만 물려받으면서 크기는 예전과 완전히 같게 만든다.
     """
     font = make_ui_font(BASE_FONT_PX, weight=weight)
-    font.setPixelSize(-1)  # pixelSize 해제 후 pointSize 로 전환
+    # setPointSizeF 호출 시 pixelSize 는 Qt 가 자동으로 미지정(-1)으로 되돌린다.
+    # setPixelSize(-1) 로 미리 해제하려 하면 "Pixel size <= 0 (-1)" 경고만 출력되고
+    # 아무 효과가 없으므로 호출하지 않는다.
     font.setPointSizeF(max(1.0, float(size_pt) * _scale))
     return font
 

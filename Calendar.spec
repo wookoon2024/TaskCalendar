@@ -16,7 +16,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', '_tkinter', 'tcl', 'numpy', 'scipy', 'matplotlib', 'PIL', 'PySide6.QtQuick', 'PySide6.QtQml', 'PySide6.QtVirtualKeyboard', 'PySide6.QtPdf', 'PySide6.QtOpenGL', 'lxml', 'bs4', 'soupsieve'],
+    excludes=['tkinter', '_tkinter', 'tcl', 'numpy', 'scipy', 'matplotlib', 'PySide6.QtQuick', 'PySide6.QtQml', 'PySide6.QtVirtualKeyboard', 'PySide6.QtPdf', 'PySide6.QtOpenGL', 'lxml', 'bs4', 'soupsieve'],
     noarchive=False,
     optimize=1,
 )
@@ -40,7 +40,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [('O', None, 'OPTION')],
-    name='나라수첩',
+    name='바로업무',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

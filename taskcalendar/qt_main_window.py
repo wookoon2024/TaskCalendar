@@ -1244,7 +1244,7 @@ class MainWindow(QMainWindow):
         self._did_memo_restore = False
         self._current_applied_theme: str | None = None
 
-        self.setWindowTitle(f"나라수첩 {APP_VERSION}")
+        self.setWindowTitle(f"바로업무 {APP_VERSION}")
         self.setWindowIcon(app_icon())
         self.resize(1024, 640)
         self.setMinimumSize(980, 620)

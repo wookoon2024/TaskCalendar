@@ -10,7 +10,7 @@ LGPL-3.0 원문: https://www.gnu.org/licenses/lgpl-3.0.txt
 GPL-3.0  원문: https://www.gnu.org/licenses/gpl-3.0.txt
 """
 
-NOTICES_TEXT = """나라수첩  제3자 오픈소스 고지 (Third-Party Notices)
+NOTICES_TEXT = """바로업무  제3자 오픈소스 고지 (Third-Party Notices)
 =========================================================
 
 이 프로그램은 아래 오픈소스 소프트웨어를 포함하여 배포됩니다.

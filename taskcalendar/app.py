@@ -217,7 +217,7 @@ def run() -> None:
     _set_windows_app_id()
     app = ensure_qt_application()
     app.setQuitOnLastWindowClosed(False)
-    app.setApplicationName("나라수첩")
+    app.setApplicationName("바로업무")
     # 내장 폰트(Pretendard) 등록 + 전역 글자 크기 배율 훅 설치
     fonts.install_style_hook()
     fonts.load_bundled_fonts()

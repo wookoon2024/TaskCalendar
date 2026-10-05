@@ -684,7 +684,7 @@ document.addEventListener('DOMContentLoaded', () => {
       selectPickField(data.targetPickField);
     }
 
-    // 🎯 나라수첩 팝업 내부 모달: 방금 직접 찍기로 들어온 경우 팝업 안에서 확인 대화창 표시
+    // 🎯 바로업무 팝업 내부 모달: 방금 직접 찍기로 들어온 경우 팝업 안에서 확인 대화창 표시
     if (data.justPicked && data.justPicked.field && data.justPicked.rawText) {
       const pField = data.justPicked.field;
       const pRaw = data.justPicked.rawText;

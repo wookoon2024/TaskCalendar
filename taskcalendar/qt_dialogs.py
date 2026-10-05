@@ -6834,13 +6834,13 @@ class SettingsDialog(QDialog):
         chrome_layout.setContentsMargins(14, 12, 14, 12)
         chrome_layout.setSpacing(10)
 
-        chrome_title = QLabel("크롬 확장프로그램 연동 (나라수첩로 보내기)")
+        chrome_title = QLabel("크롬 확장프로그램 연동 (바로업무로 보내기)")
         chrome_title.setObjectName("sectionTitle")
         chrome_layout.addWidget(chrome_title)
 
         chrome_desc = QLabel(
             "인터넷 서핑 또는 웹 업무 화면에서 드래그한 텍스트나 기사, 현재 웹페이지를\n"
-            "나라수첩의 일정 / 업무 / 메모로 마우스 우클릭 한 번으로 즉시 전송할 수 있는 전용 확장 프로그램입니다.\n"
+            "바로업무의 일정 / 업무 / 메모로 마우스 우클릭 한 번으로 즉시 전송할 수 있는 전용 확장 프로그램입니다.\n"
             "(전용 단축키: Ctrl + Shift + K)"
         )
         chrome_desc.setObjectName("subtitle")
@@ -8942,7 +8942,7 @@ class WelcomeFeatureIntroDialog(QDialog):
 
 <b>□ 크롬 브라우저 연동  [환경설정 → 📄 문서]</b>
   · 웹에서 문서나 기사 텍스트를 드래그한 뒤 마우스 우클릭하면
-    나라수첩으로 바로 보낼 수 있습니다.
+    바로업무로 바로 보낼 수 있습니다.
   · 전용 단축키는 Ctrl + Shift + K 입니다.
   · 설치는 [크롬 브라우저 실행] → [개발자 모드 켜기] →
     [확장프로그램 폴더 열기]로 압축을 풀어 드래그하면 끝납니다.
@@ -9019,7 +9019,7 @@ class WelcomeFeatureIntroDialog(QDialog):
     def __init__(self, parent=None, is_dismissed: bool = False) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
-        self.setWindowTitle("나라수첩 기능 안내 & 팁")
+        self.setWindowTitle("바로업무 기능 안내 & 팁")
         self.setWindowIcon(_dialog_icon())
         self.setModal(False)
         self.setWindowModality(Qt.WindowModality.NonModal)
@@ -9039,7 +9039,7 @@ class WelcomeFeatureIntroDialog(QDialog):
         h_layout = QVBoxLayout(header)
         h_layout.setContentsMargins(12, 10, 12, 10)
         h_layout.setSpacing(4)
-        h_title = QLabel("나라수첩 기능 안내 & 팁")
+        h_title = QLabel("바로업무 기능 안내 & 팁")
         h_title.setObjectName("headerTitle")
         h_sub = QLabel("5가지 기능을 차례대로 살펴보세요. 좌측 목록이나 [이전] [다음]으로 이동할 수 있습니다.")
         h_sub.setObjectName("headerSubtitle")

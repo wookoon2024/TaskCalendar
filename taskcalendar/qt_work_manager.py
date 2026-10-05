@@ -1229,7 +1229,7 @@ class WorkDrmWarningDialog(QDialog):
         guide_layout.setContentsMargins(12, 10, 12, 10)
         guide_layout.setSpacing(6)
 
-        g_title = QLabel("💡 한글 프로그램에서는 열리는데 왜 나라수첩에서는 안 열리나요?")
+        g_title = QLabel("💡 한글 프로그램에서는 열리는데 왜 바로업무에서는 안 열리나요?")
         g_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #92400E;")
         guide_layout.addWidget(g_title)
 
@@ -1254,7 +1254,7 @@ class WorkDrmWarningDialog(QDialog):
         sol_desc = QLabel(
             "1. <b>한글 프로그램</b>에서 해당 문서를 엽니다.<br>"
             "2. 본문 전체 선택(<b>Ctrl + A</b>) ➔ 복사(<b>Ctrl + C</b>)합니다.<br>"
-            "3. 나라수첩 업무 편집기에 붙여넣기(<b>Ctrl + V</b>)하시면 표와 서식이 그대로 즉시 등록됩니다!<br>"
+            "3. 바로업무 업무 편집기에 붙여넣기(<b>Ctrl + V</b>)하시면 표와 서식이 그대로 즉시 등록됩니다!<br>"
             "<span style='color: #B45309;'>(또는 사내 결재 시스템에서 '보안 해제(반출)' 승인 후 등록해 주세요.)</span>"
         )
         sol_desc.setTextFormat(Qt.TextFormat.RichText)
@@ -6768,6 +6768,12 @@ class WorkManagerDialog(QDialog):
         """현재 시트와 연결된 캘린더 일정 및 문서 목록을 갱신하여 1줄씩 표시"""
         if not hasattr(self, "work_schedule_list") or not self.work_schedule_list:
             return
+        # 목록을 다시 그리기 전에 사용자가 선택한 일정(엔트리 + 발생일)을 기억한다.
+        # 캘린더 refresh()가 이 메서드를 다시 호출하므로, 여기서 무조건 오늘 기준으로
+        # 재선택하면 사용자가 클릭한 일정이 즉시 풀려버린다.
+        prev_item = self.work_schedule_list.currentItem()
+        prev_entry_id = prev_item.data(Qt.UserRole) if prev_item else None
+        prev_day = prev_item.data(Qt.UserRole + 2) if prev_item else None
         self.work_schedule_list.clear()
         if sheet is None:
             sheet = self._get_current_sheet()
@@ -6842,6 +6848,18 @@ class WorkManagerDialog(QDialog):
             item.setData(Qt.UserRole + 2, cur_date)
             item.setToolTip(f"제목: {entry.title}\n일시: {date_txt}{time_txt}\n설명: {entry.description or '(없음)'}\n(더블클릭 시 해당 일자 캘린더로 이동 / 우클릭 메뉴)")
             self.work_schedule_list.addItem(item)
+
+        # 사용자가 선택했던 일정이 있으면 그걸 되살리고, 그때만 스크롤한다.
+        # (캘린더 refresh()가 목록을 다시 그려도 선택이 유지된다)
+        if prev_entry_id is not None and prev_day is not None:
+            for i in range(self.work_schedule_list.count()):
+                it = self.work_schedule_list.item(i)
+                if it.data(Qt.UserRole) == prev_entry_id and it.data(Qt.UserRole + 2) == prev_day:
+                    self.work_schedule_list.scrollToItem(it, QAbstractItemView.ScrollHint.PositionAtTop)
+                    self.work_schedule_list.setCurrentItem(it)
+                    return
+            # 선택했던 일정이 목록에 없음 = 다른 업무로 이동한 경우이므로
+            # 아래 '오늘 기준' 기본 선택으로 넘어간다.
 
         # 오늘 날짜와 가장 가까운 일정으로 자동 스크롤
         today = date.today()
@@ -7009,8 +7027,8 @@ class WorkManagerDialog(QDialog):
             tm.show()
             tm.raise_()
             tm.activateWindow()
-            if entry.entry_id:
-                tm._select_and_highlight_task(entry.entry_id)
+            if entry.entry_id and not tm.select_and_highlight_task(entry.entry_id):
+                self.show_floating_toast("해당 문서를 문서 관리에서 찾지 못했습니다.")
         except Exception as e:
             logger.exception("Failed to jump to task manager: %s", e)
 
@@ -7130,9 +7148,10 @@ class WorkManagerDialog(QDialog):
             return
         if target_day is None:
             target_day = entry.start_date or entry.day or date.today()
-        self.main_window.current_date = target_day
-        self.main_window.selected_day = target_day
-        self.main_window.refresh()
+        # 주의: MainWindow에는 current_date 속성이 없다. 달력 표시는 current_year/current_month가
+        # 좌우하므로 selected_day만 바꾸면 다른 월의 일정일 때 표시는 오늘 달로 남아버린다.
+        # 메인 창의 실제 진입점(_select_day_by_date)을 그대로 사용한다.
+        self.main_window._select_day_by_date(target_day)
         self.main_window.show()
         self.main_window.raise_()
         self.main_window.activateWindow()

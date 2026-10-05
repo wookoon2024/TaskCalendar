@@ -2,6 +2,24 @@
 
 이 파일은 TaskCalendar의 버전 변경 이력을 관리합니다.
 
+## [1.9.52] - 2026-10-05
+
+### Changed
+- **프로그램 명칭을 「바로업무」로 변경**: 창 제목·트레이 아이콘 툴팁·확장 프로그램(매니페스트/팝업/우클릭 메뉴)·기능 안내·날짜 계산기·README 등 사용자 노출 문자열 일괄 반영
+  - exe 파일명도 `바로업무.exe`로 변경 — **`Calendar.spec`의 `name=` 값이 실제 exe 이름을 결정**하므로 스크립트(`build_exe.py`)만 고쳐서는 반영되지 않습니다
+  - 배포 zip 파일명도 `바로업무_v1.9.52_20261005.zip`로 변경해 README 다운로드 링크와 일치시킴
+  - **의도적으로 유지한 내부 식별자**: IPC 서버명 `TaskCalendar_IPC`, `AppUserModelID` `taskcalendar.calendar`, `QSettings("TaskCalendar", ...)`, DB 파일명 `taskcalendar.db.enc` — 이 값들을 바꾸면 기존 암호화 데이터·설정·백업이 통째로 끊깁니다
+  - 과거 릴리스 기록(`CHANGELOG.md`의 「나라수첩」-era 항목)은 당시의 사실이므로 그대로 둠
+
+### Fixed
+- **업무 관리 → 관련 일정 「이동」 시 클릭한 일정이 아닌 오늘 일정으로 이동되던 문제**
+  - 메인 창의 `refresh()`가 업무 관리의 일정 목록을 다시 그리면서 무조건 "오늘 이후 가장 빠른 일정"을 재선택해, 사용자가 고른 일정이 즉시 풀리던 것을 선택 상태를 유지하도록 변경
+  - `_jump_to_calendar_entry`가 존재하지 않는 `MainWindow.current_date`에 값을 쓰고 있었습니다. 실제로는 `current_year`/`current_month`가 달력 표시를 좌우하므로 다른 월의 일정을 눌러도 화면은 오늘 달에 머물렀습니다. 메인 창의 실제 진입점 `_select_day_by_date()`를 호출하도록 수정
+- **업무 관리 → 관련 문서 「이동」 시 `AttributeError` 발생**
+  - `TaskManagerDialog._select_and_highlight_task`가 프로젝트 전체에 **호출부만 있고 정의가 없어서** 이동은 되지만 대상 문서를 선택하지 못한 채 `logger.exception`만 남고 있었습니다. `select_and_highlight_task()`를 구현
+  - 사용자가 걸어둔 검색어·상태 탭·기간·분류·페이징에 대상 문서가 가려져 있으면 필터를 전체로 되돌린 뒤 재시도하도록 처리
+- **`Font::setPixelSize: Pixel size <= 0 (-1)` 경고**: `make_ui_font_like()`의 `setPixelSize(-1)` 호출 제거 — 실제로는 효과가 없고 경고만 출력되며, 이어지는 `setPointSizeF()` 호출이 pixelSize 해제를 자동 처리합니다
+
 ## [1.9.51] - 2026-10-04
 
 ### Added

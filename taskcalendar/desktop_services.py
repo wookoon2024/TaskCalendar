@@ -821,7 +821,7 @@ class SystemTrayManager:
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP
         nid.uCallbackMessage = WM_TRAYICON
         nid.hIcon = self._hicon
-        nid.szTip = "나라수첩"
+        nid.szTip = "바로업무"
         if not shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid)):
             logger.warning("failed to add tray icon, winerr=%s", ctypes.WinError(ctypes.get_last_error()))
         else:
