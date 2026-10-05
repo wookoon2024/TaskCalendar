@@ -388,6 +388,28 @@ def app_stylesheet(p: dict[str, str]) -> str:
         background: {p['accent']};
         border-radius: 4px;
     }}
+    QMessageBox {{
+        background-color: {p['panel']};
+        color: {p['text']};
+    }}
+    QMessageBox QLabel {{
+        color: {p['text']};
+        background-color: transparent;
+    }}
+    QMessageBox QPushButton {{
+        background-color: {p['panel_alt']};
+        color: {p['text']};
+        border: 1px solid {p['line']};
+        border-radius: 4px;
+        padding: 4px 12px;
+        min-width: 65px;
+        height: 24px;
+    }}
+    QMessageBox QPushButton:hover {{
+        background-color: {p.get('accent_soft', p['panel_alt'])};
+        color: {p['accent']};
+        border-color: {p['accent']};
+    }}
     """
 
 

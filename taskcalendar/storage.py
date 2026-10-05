@@ -9,6 +9,7 @@ import sqlite3
 import time
 import traceback
 from ctypes import wintypes
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -547,6 +548,9 @@ class EncryptedRepository:
                 self._log_diagnostic("load_no_usable_candidate", "no_candidate_error")
 
     def save(self) -> None:
+        # deferred() 블록 안에서는 실제 저장을 미루고, 블록 종료 시 한 번만 쓴다.
+        if getattr(self, "_save_deferred", False):
+            return
         self.connection.commit()
         encrypted = protect_bytes(self.connection.serialize())
         if getattr(self, "_load_failed", False):
@@ -602,6 +606,24 @@ class EncryptedRepository:
                 len(encrypted),
                 self.db_path,
             )
+
+    # ── 배치 저장 ────────────────────────────────────────────────────────
+    # save() 는 매번 DB 전체를 직렬화·재암호화하고 .bak 을 복사해 파일에 쓴다.
+    # 업무 분류 트리 드래그처럼 항목 수만큼 upsert/update 를 호출하는 경로에서는
+    # 이 비용이 그대로 N배가 되어 응답이 멈춘 것처럼 느려진다.
+    # deferred() 안에서는 save() 가 무시되고, 블록이 끝날 때 한 번만 수행된다.
+
+    @contextmanager
+    def deferred(self):
+        """여러 변경을 모아 마지막에 save() 를 한 번만 수행한다."""
+        previous = getattr(self, "_save_deferred", False)
+        self._save_deferred = True
+        try:
+            yield self
+        finally:
+            self._save_deferred = previous
+            if not previous:
+                self.save()
 
     def reload_database(self) -> None:
         if self.db_path.exists():

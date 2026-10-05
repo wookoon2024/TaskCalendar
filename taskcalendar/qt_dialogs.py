@@ -6037,7 +6037,7 @@ class SettingsDialog(QDialog):
         info_layout.addRow(info_title)
         email_label = QLabel("이메일")
         email_label.setObjectName("muted")
-        email_value = QLabel("westock@korea.kr")
+        email_value = QLabel("westock@nate.com")
         email_value.setObjectName("value")
         info_layout.addRow(email_label, email_value)
         license_label = QLabel("오픈소스")

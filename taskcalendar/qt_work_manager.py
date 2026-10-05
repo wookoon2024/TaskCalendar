@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import html
 import logging
 import os
@@ -230,14 +231,18 @@ class CompactCategoryItemDelegate(QStyledItemDelegate):
         is_parent = not index.parent().isValid()
         text = opt.text or ""
 
-        # 상단 '📁 업무 분류' 헤더(left_title)와 100% 동일한 QLabel 스타일 및 렌더링
+        # 테마 팔레트 색상 조회 (다크 테마 대응)
+        wm = view.window() if view else None
+        pal = getattr(wm, "palette", {}) if wm else {}
+        is_dark = bool(pal.get("bg", "").lower() in ("#0a0c10", "#171b22") or pal.get("text", "").lower() == "#f3f6fb")
+
         weight = "bold" if is_parent else "normal"
         if is_sel:
-            color = "#0284C7"
+            color = pal.get("accent", "#38BDF8") if is_dark else pal.get("accent", "#0284C7")
         elif is_hover:
-            color = "#0F172A"
+            color = "#F8FAFC" if is_dark else "#0F172A"
         else:
-            color = "#1F2328"
+            color = pal.get("text", "#F3F6FB") if is_dark else pal.get("text", "#1F2328")
 
         self._lbl.setText(text)
         self._lbl.setStyleSheet(f"font-weight: {weight}; font-size: 12px; color: {color}; border: none; background: transparent;")
@@ -292,7 +297,13 @@ class CompactCategoryTree(QTreeWidget):
             try:
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
                 painter.setPen(Qt.PenStyle.NoPen)
-                bg_color = QColor('#E0F2FE') if is_sel else QColor('#F1F5F9')
+                wm = self.window()
+                pal = getattr(wm, "palette", {}) if wm else {}
+                is_dark = bool(pal.get("bg", "").lower() in ("#0a0c10", "#171b22") or pal.get("text", "").lower() == "#f3f6fb")
+                if is_dark:
+                    bg_color = QColor(pal.get("accent_soft", "#16382b")) if is_sel else QColor(pal.get("panel_alt", "#20252e"))
+                else:
+                    bg_color = QColor('#E0F2FE') if is_sel else QColor('#F1F5F9')
                 painter.setBrush(bg_color)
                 if is_parent:
                     row_rect = QRect(0, option.rect.y() + 1, option.rect.width(), option.rect.height() - 2)
@@ -591,15 +602,24 @@ class CompactAttachmentItemDelegate(QStyledItemDelegate):
         item_data = item.data(0, Qt.UserRole) if item else {}
         is_folder = isinstance(item_data, dict) and item_data.get("type") == "folder"
 
+        wm = view.window() if view else None
+        pal = getattr(wm, "palette", {}) if wm else {}
+        is_dark = bool(pal.get("bg", "").lower() in ("#0a0c10", "#171b22") or pal.get("text", "").lower() == "#f3f6fb")
+
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         if is_sel:
-            painter.setPen(QColor("#0284C7"))
+            color = pal.get("accent", "#38BDF8") if is_dark else pal.get("accent", "#0284C7")
         elif opt.state & QStyle.State_MouseOver:
-            painter.setPen(QColor("#0F172A"))
+            color = "#F8FAFC" if is_dark else "#0F172A"
         else:
-            painter.setPen(QColor("#1E293B") if is_folder else QColor("#334155"))
+            if is_dark:
+                color = pal.get("text", "#F3F6FB") if is_folder else pal.get("muted", "#94A3B8")
+            else:
+                color = "#1E293B" if is_folder else "#334155"
+
+        painter.setPen(QColor(color))
 
         font = opt.font
         if is_folder or is_sel:
@@ -703,7 +723,13 @@ class CompactAttachmentTree(QTreeWidget):
             try:
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
                 painter.setPen(Qt.PenStyle.NoPen)
-                bg_color = QColor("#E0F2FE") if is_sel else QColor("#F1F5F9")
+                wm = self.window()
+                pal = getattr(wm, "palette", {}) if wm else {}
+                is_dark = bool(pal.get("bg", "").lower() in ("#0a0c10", "#171b22") or pal.get("text", "").lower() == "#f3f6fb")
+                if is_dark:
+                    bg_color = QColor(pal.get("accent_soft", "#16382b")) if is_sel else QColor(pal.get("panel_alt", "#20252e"))
+                else:
+                    bg_color = QColor("#E0F2FE") if is_sel else QColor("#F1F5F9")
                 painter.setBrush(bg_color)
                 row_rect = QRect(0, option.rect.y() + 1, self.viewport().width(), option.rect.height() - 2)
                 painter.drawRoundedRect(row_rect, 4, 4)
@@ -3581,6 +3607,28 @@ class WorkManagerDialog(QDialog):
                 font-size: 12px;
                 font-weight: 500;
             }}
+            QMessageBox {{
+                background-color: {panel};
+                color: {text};
+            }}
+            QMessageBox QLabel {{
+                color: {text};
+                background-color: transparent;
+            }}
+            QMessageBox QPushButton {{
+                background-color: {panel_alt};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 4px;
+                padding: 4px 12px;
+                min-width: 65px;
+                height: 24px;
+            }}
+            QMessageBox QPushButton:hover {{
+                background-color: {accent_soft};
+                color: {accent};
+                border-color: {accent};
+            }}
         """)
         self._apply_tooltip_palette()
 
@@ -3650,7 +3698,7 @@ class WorkManagerDialog(QDialog):
                 padding: 0px 4px 0px 10px;
             }}
             QTabBar::tab:hover:!selected {{
-                background: #FFFFFF;
+                background: {panel_alt if is_dark else '#FFFFFF'};
                 color: {text};
                 border: 1px solid {line};
                 border-bottom: 1px solid {line};
@@ -3905,6 +3953,7 @@ class WorkManagerDialog(QDialog):
                 margin: 1px 1px;
                 border: none;
                 background: transparent;
+                color: {text};
             }}
             QTreeWidget::branch {{
                 background: transparent;
@@ -4243,6 +4292,7 @@ class WorkManagerDialog(QDialog):
                 margin: 1px 0px;
                 border: none;
                 border-radius: 3px;
+                color: {text};
             }}
             QTreeWidget::item:hover:!selected {{
                 background-color: {accent_soft};
@@ -6402,29 +6452,32 @@ class WorkManagerDialog(QDialog):
         new_cat, ok = get_input_text(self, "폴더(분류) 이름 변경", "새 분류 명칭:", text=old_cat)
         if ok and new_cat.strip() and new_cat.strip() != old_cat:
             c = new_cat.strip()
-            # DB 상의 카테고리 이름 갱신
-            if self.repository:
-                for row in self._category_rows:
-                    if row["name"] == old_cat:
-                        self.repository.update_work_category(row["id"], c)
-                        break
+            # 같은 분류에 속한 업무가 여러 개일 수 있어 저장은 한 번으로 묶는다.
+            deferred = self.repository.deferred() if self.repository else contextlib.nullcontext()
+            with deferred:
+                # DB 상의 카테고리 이름 갱신
+                if self.repository:
+                    for row in self._category_rows:
+                        if row["name"] == old_cat:
+                            self.repository.update_work_category(row["id"], c)
+                            break
 
-            for s in self._all_sheets:
-                if s.category == old_cat:
-                    s.category = c
-                    if self.repository and s.db_id:
-                        self.repository.upsert_work_item(
-                            work_id=s.db_id,
-                            title=s.title,
-                            category_name=c,
-                            category_id=s.category_id,
-                            cycle=s.cycle,
-                            assignee=s.assignee,
-                            deadline=s.deadline,
-                            content_text=s.content_text,
-                            content_html=s.content_html,
-                            hwpx_blob=s.hwpx_blob,
-                        )
+                for s in self._all_sheets:
+                    if s.category == old_cat:
+                        s.category = c
+                        if self.repository and s.db_id:
+                            self.repository.upsert_work_item(
+                                work_id=s.db_id,
+                                title=s.title,
+                                category_name=c,
+                                category_id=s.category_id,
+                                cycle=s.cycle,
+                                assignee=s.assignee,
+                                deadline=s.deadline,
+                                content_text=s.content_text,
+                                content_html=s.content_html,
+                                hwpx_blob=s.hwpx_blob,
+                            )
             self._load_categories_from_db()
             self._refresh_category_combos()
             self._refresh_category_tree()
@@ -6572,11 +6625,16 @@ class WorkManagerDialog(QDialog):
                     sub_order += 1
                     traverse_folder(child, cat_id, sub_order)
 
-        for i in range(self.category_tree.topLevelItemCount()):
-            top = self.category_tree.topLevelItem(i)
-            sheet = top.data(0, Qt.UserRole)
-            if not isinstance(sheet, WorkSheetData):
-                traverse_folder(top, None, i + 1)
+        # 항목 수만큼 upsert/update 를 호출하는데, 각 호출이 save() 로 DB 전체를
+        # 다시 암호화·백업하면 드롭 한 번에 N번 저장 비용이 발생해 매우 느려진다.
+        # 따라서 순회 구간에서 저장을 미루고 마지막에 한 번만 수행한다.
+        deferred = self.repository.deferred() if self.repository else contextlib.nullcontext()
+        with deferred:
+            for i in range(self.category_tree.topLevelItemCount()):
+                top = self.category_tree.topLevelItem(i)
+                sheet = top.data(0, Qt.UserRole)
+                if not isinstance(sheet, WorkSheetData):
+                    traverse_folder(top, None, i + 1)
 
         # 중복 아이템이 감지되었다면 트리에서 정리
         for p_item, c_item in duplicates_to_remove:
@@ -8991,6 +9049,28 @@ class WorkManagerDialog(QDialog):
                 font-size: 12px;
                 font-weight: 500;
             }}
+            QMessageBox {{
+                background-color: {panel};
+                color: {text};
+            }}
+            QMessageBox QLabel {{
+                color: {text};
+                background-color: transparent;
+            }}
+            QMessageBox QPushButton {{
+                background-color: {panel_alt};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 4px;
+                padding: 4px 12px;
+                min-width: 65px;
+                height: 24px;
+            }}
+            QMessageBox QPushButton:hover {{
+                background-color: {accent_soft};
+                color: {accent};
+                border-color: {accent};
+            }}
         """)
 
         for btn in (
@@ -9090,6 +9170,7 @@ class WorkManagerDialog(QDialog):
                     padding: 0px 4px;
                     margin: 1px 1px;
                     border: none;
+                    color: {text};
                 }}
                 QTreeWidget::item:hover {{
                     background-color: {accent_soft};
@@ -9153,6 +9234,7 @@ class WorkManagerDialog(QDialog):
                     margin: 1px 0px;
                     border: none;
                     border-radius: 3px;
+                    color: {text};
                 }}
                 QTreeWidget::item:hover:!selected {{
                     background-color: {accent_soft};
@@ -9249,7 +9331,7 @@ class WorkManagerDialog(QDialog):
                     padding: 0px 4px 0px 10px;
                 }}
                 QTabBar::tab:hover:!selected {{
-                    background: #FFFFFF;
+                    background: {panel_alt if is_dark else '#FFFFFF'};
                     color: {text};
                     border: 1px solid {line};
                     border-bottom: 1px solid {line};
