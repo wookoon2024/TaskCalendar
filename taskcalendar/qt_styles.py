@@ -5,6 +5,107 @@ from taskcalendar.paths import asset_path
 from taskcalendar.themes import THEMES
 
 
+def _add_korean_button_box(dlg) -> None:
+    """Relabel a QInputDialog's native OK/Cancel buttons into Korean.
+
+    Qt resets the button texts from the platform locale every time the dialog
+    is shown, so the labels are re-applied from a queued callback as well as
+    immediately. The native row is kept (removing it does not survive show()).
+    """
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QDialogButtonBox
+
+    labels = {
+        QDialogButtonBox.StandardButton.Ok: "확인",
+        QDialogButtonBox.StandardButton.Cancel: "취소",
+    }
+
+    def apply() -> None:
+        for box in dlg.findChildren(QDialogButtonBox):
+            for std, text in labels.items():
+                btn = box.button(std)
+                if btn is not None:
+                    btn.setText(text)
+        dlg.adjustSize()
+
+    apply()
+    QTimer.singleShot(0, apply)
+    return None
+
+
+def get_input_text(parent, title: str, label: str, *args, text: str = "", **kwargs) -> tuple[str, bool]:
+    """QInputDialog.getText() with Korean OK/Cancel buttons.
+
+    Mirrors the original signature, so ``QLineEdit.EchoMode`` and the default
+    text can be passed positionally exactly as before::
+
+        get_input_text(parent, "제목", "라벨", QLineEdit.Normal, "초깃값")
+
+    Qt renders the built-in dialog's buttons from the platform locale, so an
+    English Windows shows "OK / Cancel" even in a Korean app. We relabel the
+    native buttons so they stay Korean everywhere.
+    """
+    from PySide6.QtWidgets import QInputDialog
+
+    dlg = QInputDialog(parent)
+    dlg.setWindowTitle(title)
+
+    echo_mode = None
+    for a in args:
+        if isinstance(a, int):
+            echo_mode = a
+        elif isinstance(a, str):
+            text = a
+    if echo_mode is not None and hasattr(dlg, "setTextEchoMode"):
+        try:
+            from PySide6.QtWidgets import QLineEdit
+            dlg.setTextEchoMode(QLineEdit.EchoMode(echo_mode))
+        except Exception:
+            pass
+
+    dlg.setLabelText(label)
+    dlg.setTextValue(text)
+    for key, value in kwargs.items():
+        if hasattr(dlg, key):
+            setattr(dlg, key, value)
+
+    _add_korean_button_box(dlg)
+
+    if dlg.exec() != QInputDialog.DialogCode.Accepted:
+        return "", False
+    return dlg.textValue(), True
+
+
+def get_input_int(parent, title: str, label: str, *args, value: int = 0,
+                  minimum: int = 0, maximum: int = 99, step: int = 1, **kwargs) -> tuple[int, bool]:
+    """QInputDialog.getInt() with Korean OK/Cancel buttons.
+
+    Mirrors the original positional signature (value, min, max, step).
+    """
+    from PySide6.QtWidgets import QInputDialog
+
+    defaults = [value, minimum, maximum, step]
+    names = ["value", "minimum", "maximum", "step"]
+    for i, a in enumerate(args[:4]):
+        if isinstance(a, int):
+            defaults[i] = a
+    value, minimum, maximum, step = defaults
+
+    dlg = QInputDialog(parent)
+    dlg.setWindowTitle(title)
+    dlg.setLabelText(label)
+    dlg.setIntStep(step if step > 0 else 1)
+    # QInputDialog 에는 setValue() 가 없어 IntRange 로 초기값을 함께 지정한다.
+    dlg.setIntRange(minimum, maximum)
+    dlg.setIntValue(value)
+
+    _add_korean_button_box(dlg)
+
+    if dlg.exec() != QInputDialog.DialogCode.Accepted:
+        return value, False
+    return dlg.intValue(), True
+
+
 def resolve_palette(source) -> dict[str, str]:
     """Return a full skin palette for a dialog.
 
@@ -74,6 +175,50 @@ def dialog_stylesheet(p: dict[str, str]) -> str:
     QDialog, QDialog#entryDialog {{
         background: {bg};
         color: {text};
+        font-family: {font_family_css()};
+        font-size: 13px;
+    }}
+    /* Qt 기본 팝업(QMessageBox / QInputDialog / QFileDialog 등)은 OS 테마에서
+       글자색을 가져온다. Windows 다크 모드 PC 에서는 하얀 배경에 하얀 글자가 되어
+       보이지 않으므로, 앱 테마 색을 명시한다. */
+    QMessageBox, QInputDialog, QFileDialog, QColorDialog, QFontDialog, QProgressDialog {{
+        background: {bg};
+        color: {text};
+        font-family: {font_family_css()};
+        font-size: 13px;
+    }}
+    QMessageBox QLabel, QInputDialog QLabel, QFileDialog QLabel {{
+        background: transparent;
+        color: {text};
+        font-family: {font_family_css()};
+        font-size: 13px;
+    }}
+    QMessageBox QPushButton, QInputDialog QPushButton, QDialogButtonBox {{
+        background: {panel};
+        color: {text};
+        border: 1px solid {line};
+        border-radius: 8px;
+        padding: 5px 14px;
+        min-width: 72px;
+        font-family: {font_family_css()};
+        font-size: 13px;
+    }}
+    QMessageBox QPushButton:hover, QInputDialog QPushButton:hover {{
+        background: {panel_alt};
+        border-color: {accent};
+    }}
+    QMessageBox QPushButton:pressed, QInputDialog QPushButton:pressed {{
+        background: {accent_soft};
+    }}
+    QMessageBox QLineEdit, QInputDialog QLineEdit, QInputDialog QSpinBox,
+    QInputDialog QComboBox, QInputDialog QListView, QInputDialog QTreeView {{
+        background: {panel};
+        color: {text};
+        border: 1px solid {line};
+        border-radius: 8px;
+        padding: 4px 8px;
+        selection-background-color: {accent_soft};
+        selection-color: {text};
         font-family: {font_family_css()};
         font-size: 13px;
     }}

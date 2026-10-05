@@ -39,6 +39,7 @@ from taskcalendar.image_templates import (
     create_process_flow_chart,
 )
 from taskcalendar.paths import runtime_root
+from taskcalendar.qt_styles import get_input_text
 
 class ImageTemplateDialog(QDialog):
     """문서 꾸미기 이미지 템플릿 라이브러리 (폴더 기반 관리, 추가/삭제 지원)"""
@@ -456,7 +457,7 @@ class ImageTemplateDialog(QDialog):
     def _on_add_folder_clicked(self) -> None:
         """새 이미지 분류 폴더 생성"""
         from PySide6.QtWidgets import QInputDialog
-        folder_name, ok = QInputDialog.getText(
+        folder_name, ok = get_input_text(
             self,
             "새 분류 폴더 추가",
             "새로운 이미지 분류(카테고리) 폴더 이름을 입력하세요:"

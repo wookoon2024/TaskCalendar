@@ -93,7 +93,7 @@ from PySide6.QtWidgets import (
 
 from taskcalendar.fonts import font_family_css, make_ui_font_like, scale_px, ui_font_family
 from taskcalendar.paths import asset_path
-from taskcalendar.qt_styles import _shade, resolve_palette
+from taskcalendar.qt_styles import _shade, get_input_int, get_input_text, resolve_palette
 from taskcalendar.qt_rhwp_editor import RhwpEditorWidget
 from taskcalendar.rich_text_edit import RichTextEdit
 from taskcalendar.models import CalendarEntry, EntryType, RecurrenceType
@@ -5187,7 +5187,7 @@ class WorkManagerDialog(QDialog):
         if index < 0 or index >= len(self._open_sheets):
             return
         sheet = self._open_sheets[index]
-        new_title, ok = QInputDialog.getText(
+        new_title, ok = get_input_text(
             self, "업무 시트 이름 변경", "새 시트 이름:", text=sheet.title
         )
         if ok and new_title.strip():
@@ -5683,7 +5683,7 @@ class WorkManagerDialog(QDialog):
                 target_cat_name = "1. 일반 업무"
 
         default_title = f"신규 단위업무 {len(self._all_sheets) + 1}"
-        title, ok = QInputDialog.getText(
+        title, ok = get_input_text(
             self,
             "새 업무 생성",
             f"업무 분류: [{target_cat_name}]\n생성할 업무 제목을 입력하세요:",
@@ -5877,7 +5877,7 @@ class WorkManagerDialog(QDialog):
 
         action = menu.exec(btn.mapToGlobal(pos))
         if action == act_rename:
-            new_name, ok = QInputDialog.getText(self, "탭 이름 변경", "새 탭 이름:", text=tab_name)
+            new_name, ok = get_input_text(self, "탭 이름 변경", "새 탭 이름:", text=tab_name)
             if ok and new_name.strip() and new_name.strip() != tab_name:
                 for t in self._category_tabs:
                     if t["id"] == tab_id:
@@ -6145,7 +6145,7 @@ class WorkManagerDialog(QDialog):
             elif action == act_reg_cal:
                 self._register_sheet_to_calendar(sheet)
             elif action == act_rename:
-                new_title, ok = QInputDialog.getText(self, "업무 이름 변경", "새 이름:", text=sheet.title)
+                new_title, ok = get_input_text(self, "업무 이름 변경", "새 이름:", text=sheet.title)
                 if ok and new_title.strip():
                     sheet.title = new_title.strip()
                     if self.repository and sheet.db_id:
@@ -6349,7 +6349,7 @@ class WorkManagerDialog(QDialog):
 
     def _on_add_sub_category(self, parent_id: int | None, parent_name: str) -> None:
         """하위 폴더(분류) 생성"""
-        sub_name, ok = QInputDialog.getText(self, "하위 분류(폴더) 추가", f"[{parent_name}] 하위 분류 명칭을 입력하세요:")
+        sub_name, ok = get_input_text(self, "하위 분류(폴더) 추가", f"[{parent_name}] 하위 분류 명칭을 입력하세요:")
         if ok and sub_name.strip():
             c = sub_name.strip()
             if self.repository:
@@ -6362,7 +6362,7 @@ class WorkManagerDialog(QDialog):
         """지정된 분류(폴더) 내에 모달창으로 제목을 입력받아 새 업무 생성 및 탭 오픈"""
         self._save_current_sheet_data()
         default_title = f"신규 단위업무 {len(self._all_sheets) + 1}"
-        title, ok = QInputDialog.getText(
+        title, ok = get_input_text(
             self,
             "새 업무 생성",
             f"업무 분류: [{cat_name}]\n생성할 업무 제목을 입력하세요:",
@@ -6399,7 +6399,7 @@ class WorkManagerDialog(QDialog):
 
     def _on_rename_category(self, old_cat: str) -> None:
         """폴더(분류) 이름 변경"""
-        new_cat, ok = QInputDialog.getText(self, "폴더(분류) 이름 변경", "새 분류 명칭:", text=old_cat)
+        new_cat, ok = get_input_text(self, "폴더(분류) 이름 변경", "새 분류 명칭:", text=old_cat)
         if ok and new_cat.strip() and new_cat.strip() != old_cat:
             c = new_cat.strip()
             # DB 상의 카테고리 이름 갱신
@@ -6596,7 +6596,7 @@ class WorkManagerDialog(QDialog):
                 self.meta_cat_combo.blockSignals(False)
 
     def _on_add_category(self) -> None:
-        cat_name, ok = QInputDialog.getText(self, "새 업무 분류 추가", "분류 명칭을 입력하세요 (예: 4. 대민 행정 서비스):")
+        cat_name, ok = get_input_text(self, "새 업무 분류 추가", "분류 명칭을 입력하세요 (예: 4. 대민 행정 서비스):")
         if ok and cat_name.strip():
             c = cat_name.strip()
             if self.repository:
@@ -7307,7 +7307,7 @@ class WorkManagerDialog(QDialog):
                 parent_folder = ""
 
         prompt = f"[{parent_folder}] 하위 폴더 이름:" if parent_folder else "새 폴더 이름:"
-        folder_name, ok = QInputDialog.getText(self, "새 첨부파일 폴더 생성", prompt)
+        folder_name, ok = get_input_text(self, "새 첨부파일 폴더 생성", prompt)
         if not ok or not folder_name.strip():
             return
 
@@ -7345,7 +7345,7 @@ class WorkManagerDialog(QDialog):
         curr = self._open_sheets[self._active_sheet_index]
         old_name = folder_data.get("name", "")
         old_fp = folder_data.get("folder_path", "")
-        new_name, ok = QInputDialog.getText(self, "폴더 이름 변경", "새 폴더 이름:", text=old_name)
+        new_name, ok = get_input_text(self, "폴더 이름 변경", "새 폴더 이름:", text=old_name)
         if not ok or not new_name.strip() or new_name.strip() == old_name:
             return
 
@@ -8636,10 +8636,10 @@ class WorkManagerDialog(QDialog):
             self.editor.textCursor().mergeCharFormat(fmt)
 
     def _insert_table_dialog(self) -> None:
-        rows, ok1 = QInputDialog.getInt(self, "표 삽입", "행(Row) 개수:", 3, 1, 20, 1)
+        rows, ok1 = get_input_int(self, "표 삽입", "행(Row) 개수:", 3, 1, 20, 1)
         if not ok1:
             return
-        cols, ok2 = QInputDialog.getInt(self, "표 삽입", "열(Column) 개수:", 3, 1, 10, 1)
+        cols, ok2 = get_input_int(self, "표 삽입", "열(Column) 개수:", 3, 1, 10, 1)
         if not ok2:
             return
 

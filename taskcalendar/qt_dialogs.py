@@ -72,7 +72,7 @@ from taskcalendar.models import (
 )
 from taskcalendar import APP_VERSION
 from taskcalendar.themes import THEME_LABELS
-from taskcalendar.qt_styles import dialog_stylesheet, resolve_palette
+from taskcalendar.qt_styles import dialog_stylesheet, get_input_text, resolve_palette
 from taskcalendar.desktop_services import _parse_hotkey, default_shortcut, default_memo_shortcut, default_work_shortcut, normalize_shortcut
 from taskcalendar.paths import asset_path, custom_stickers_path
 from taskcalendar.lunar import get_lunar_date
@@ -2681,7 +2681,7 @@ class EntryDialog(QDialog):
         parent = getattr(self, "_owner_window", None) or self.parent()
         if not parent:
             return
-        title, ok = QInputDialog.getText(self, "새 메모 그룹", "새 그룹 이름을 입력하세요:", text="새 그룹")
+        title, ok = get_input_text(self, "새 메모 그룹", "새 그룹 이름을 입력하세요:", text="새 그룹")
         if not ok or not title.strip():
             return
         assign_id = self.entry.entry_id if assign_current and self.entry and self.entry.entry_id else None
@@ -5681,7 +5681,7 @@ class EntryViewDialog(QDialog):
         return base
 
     def _prompt_find(self) -> None:
-        text, ok = QInputDialog.getText(self, "찾기", "찾을 내용을 입력하세요:", text=self._find_term)
+        text, ok = get_input_text(self, "찾기", "찾을 내용을 입력하세요:", text=self._find_term)
         if not ok:
             return
         self._find_term = text.strip()

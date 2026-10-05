@@ -15,6 +15,8 @@ from PySide6.QtGui import (
     QInputMethodEvent,
 )
 
+from taskcalendar.qt_styles import get_input_int
+
 class RichTextEdit(QTextEdit):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -435,7 +437,7 @@ class RichTextEdit(QTextEdit):
             self._resize_image(cursor, image_format, 600)
         elif action == custom_resize:
             current_w = int(image_format.width() or 400)
-            val, ok = QInputDialog.getInt(self, "크기 변경", "이미지 가로 크기(px):", value=current_w, min=50, max=3000, step=50)
+            val, ok = get_input_int(self, "크기 변경", "이미지 가로 크기(px):", value=current_w, minimum=50, maximum=3000, step=50)
             if ok:
                 self._resize_image(cursor, image_format, val)
 

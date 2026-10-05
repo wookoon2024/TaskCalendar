@@ -2,6 +2,15 @@
 
 이 파일은 TaskCalendar의 버전 변경 이력을 관리합니다.
 
+## [1.9.53] - 2026-10-05
+
+### Fixed
+- **Windows 다크 모드 PC에서 팝업 글자가 안 보이던 문제**
+  - Qt 기본 팝업(`QMessageBox`·`QInputDialog` 등)에 QSS 규칙이 전혀 없어, 글자색을 Qt가 **OS 테마에서 직접 가져오고 있었습니다**. 그래서 라이트 테마로 설정해도 Windows가 다크 모드인 PC에서는 하얀 배경에 하얀 글자가 되어 보이지 않았습니다 (명도비 1.12)
+  - `QMessageBox` / `QInputDialog` / `QFileDialog` / `QColorDialog` / `QFontDialog` / `QProgressDialog`에 앱 테마의 배경·글자색·버튼 스타일을 명시해 OS 테마 영향을 차단
+  - **영문 Windows에서 버튼이 `OK / Cancel`로 보이던 문제**도 함께 수정 — `QInputDialog.getText`/`getInt` 호출 16곳을 공용 헬퍼(`get_input_text` / `get_input_int`)로 교체해 「확인 / 취소」로 통일
+  - 참고: Qt가 `show()`마다 버튼 라벨을 플랫폼 로케일로 되돌리므로, 헬퍼는 `QTimer.singleShot(0)`으로 라벨을 한 번 더 적용합니다
+
 ## [1.9.52] - 2026-10-05
 
 ### Changed
@@ -14,7 +23,7 @@
 ### Fixed
 - **업무 관리 → 관련 일정 「이동」 시 클릭한 일정이 아닌 오늘 일정으로 이동되던 문제**
   - 메인 창의 `refresh()`가 업무 관리의 일정 목록을 다시 그리면서 무조건 "오늘 이후 가장 빠른 일정"을 재선택해, 사용자가 고른 일정이 즉시 풀리던 것을 선택 상태를 유지하도록 변경
-  - `_jump_to_calendar_entry`가 존재하지 않는 `MainWindow.current_date`에 값을 쓰고 있었습니다. 실제로는 `current_year`/`current_month`가 달력 표시를 좌우하므로 다른 월의 일정을 눌러도 화면은 오늘 달에 머물렀습니다. 메인 창의 실제 진입점 `_select_day_by_date()`를 호출하도록 수정
+  - `_jump_to_calendar_entry`가 존재하지 않는 `MainWindow.current_date`에 값을 쓰고 있었습니다. 실제로는 `current_year`/`current_month`가 달력 표시를 좌우하므로 다른 월의 일정을 눌러도 화면은 오늘 달에 머물렀습니다. 메인 창의 실제 진입점 `_select_day_by_date()`을 호출하도록 수정
 - **업무 관리 → 관련 문서 「이동」 시 `AttributeError` 발생**
   - `TaskManagerDialog._select_and_highlight_task`가 프로젝트 전체에 **호출부만 있고 정의가 없어서** 이동은 되지만 대상 문서를 선택하지 못한 채 `logger.exception`만 남고 있었습니다. `select_and_highlight_task()`를 구현
   - 사용자가 걸어둔 검색어·상태 탭·기간·분류·페이징에 대상 문서가 가려져 있으면 필터를 전체로 되돌린 뒤 재시도하도록 처리
