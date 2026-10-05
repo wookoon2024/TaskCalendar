@@ -4,6 +4,7 @@ import base64
 import http.server
 import json
 import logging
+import os
 import socket
 import threading
 from pathlib import Path
@@ -768,6 +769,50 @@ class RhwpEditorWidget(QWidget):
             self.web_view.page().runJavaScript(js)
         except Exception as e:
             logger.error("Failed to insert image file %s: %s", filepath, e)
+
+    # ── 이미지 드래그&드롭 ──────────────────────────────────────────────
+    # 웹 뷰는 DOM drop 이벤트를 직접 처리하지 않으므로, Qt 레벨에서 파일 URL을
+    # 받아 insert_image_file()로 넘긴다. HWP 문서 드래그는 앱마다 동작이 달라
+    # 여기서는 이미지만 지원한다.
+
+    _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"}
+
+    def _dropped_image_paths(self, mime) -> list[str]:
+        """드롭된 데이터에서 이미지 파일 경로만 골라낸다."""
+        if mime is None or not mime.hasUrls():
+            return []
+        paths = []
+        for url in mime.urls():
+            if not url.isLocalFile():
+                continue
+            path = url.toLocalFile()
+            if os.path.splitext(path)[1].lower() in self._IMAGE_EXTS:
+                paths.append(path)
+        return paths
+
+    def dragEnterEvent(self, event):
+        if self._dropped_image_paths(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if self._dropped_image_paths(event.mimeData()):
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        paths = self._dropped_image_paths(event.mimeData())
+        if not paths:
+            super().dropEvent(event)
+            return
+        event.acceptProposedAction()
+        for path in paths:
+            try:
+                self.insert_image_file(path)
+            except Exception:
+                logger.exception("Failed to insert dropped image: %s", path)
 
     def replace_selection_with_text(self, text: str) -> None:
         """현재 선택된 영역을 새 텍스트로 치환 (한글 에디터 선택 영역 덮어쓰기)"""
