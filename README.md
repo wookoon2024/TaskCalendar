@@ -25,7 +25,7 @@
 
 ## 💾 다운로드 (실행 프로그램)
 
-* 🚀 **[바로업무_v1.9.52_20261005.zip 다운로드 (최신 버전)](https://github.com/wookoon2024/TaskCalendar/releases/download/v1.9.52/바로업무_v1.9.52_20261005.zip)**
+* 🚀 **[바로업무 v1.9.52 다운로드 (최신 버전)](https://github.com/wookoon2024/TaskCalendar/releases/download/v1.9.52/baro_1.9.52_20261005.zip)**
 
   **압축 풀면 아래 4종이 들어 있습니다:**
   | 항목 | 설명 |
@@ -184,11 +184,8 @@ python main.py
 ```
 
 ### 실행 프로그램 (.exe) 직접 빌드
-PyInstaller를 사용하여 단일 실행 파일을 빌드할 수 있습니다:
+빌드 설정은 루트의 `Calendar.spec` 파일에 있습니다. exe 파일명은 이 spec의 `name=` 값이 결정하므로, 이름을 바꾸려면 spec까지 함께 수정해야 합니다:
 ```powershell
-python -m PyInstaller --noconfirm --clean --onefile --windowed --name Calendar --specpath . `
-  --icon "taskcalendar/assets/app_icon.ico" `
-  --add-data "taskcalendar/assets;taskcalendar/assets" `
-  --add-data "data/holidays_kr.json;data" `
-  .\main.py
+python -m PyInstaller Calendar.spec --noconfirm --clean
 ```
+결과물: `dist\바로업무.exe`
