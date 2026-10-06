@@ -985,12 +985,22 @@ class RhwpEditorWidget(QWidget):
                 }
                 window._getWasmSelectionInfo = getWasmSelectionInfo;
 
+                function filterSelectionText(t) {
+                    if (!t) return '';
+                    var cleaned = String(t).replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+                    if (cleaned === '|' || !cleaned) return '';
+                    return cleaned;
+                }
+                window._rhwpFilterSelectionText = filterSelectionText;
+
                 function captureCurrentSelection() {
                     var info = getWasmSelectionInfo();
-                    window._rhwpHasSelection = info.hasSelection;
-                    if (info.text && info.text.trim()) {
-                        window._rhwpLastSelectedText = info.text.trim();
-                    } else if (!info.hasSelection) {
+                    var validText = filterSelectionText(info.text);
+                    if (validText) {
+                        window._rhwpHasSelection = true;
+                        window._rhwpLastSelectedText = validText;
+                    } else {
+                        window._rhwpHasSelection = false;
                         window._rhwpLastSelectedText = '';
                     }
                     return info;
@@ -1007,9 +1017,9 @@ class RhwpEditorWidget(QWidget):
                             if (node.nodeType === 1 && node.classList && node.classList.contains('context-menu')) {
                                 if (node.querySelector('.ai-menu-item')) continue;
 
-                                var selInfo = captureCurrentSelection();
+                                captureCurrentSelection();
                                 var selText = (window._rhwpLastSelectedText || '').trim();
-                                var hasSel = Boolean(selInfo.hasSelection || selText);
+                                var hasSel = Boolean(selText);
 
                                 // 구분선 추가
                                 var sep = document.createElement('div');
@@ -1144,7 +1154,7 @@ class RhwpEditorWidget(QWidget):
                 '  </div>',
                 '  <div class="rhwp-ai-response-wrap">',
                 '    <div class="rhwp-ai-section-title">변환 결과</div>',
-                '    <div id="rhwp-ai-response" placeholder="AI 변환 결과가 여기에 표시됩니다."></div>',
+                '    <div id="rhwp-ai-response"><span class="rhwp-ai-placeholder" style="color:#94A3B8; pointer-events:none; user-select:none;">AI 변환 결과가 여기에 표시됩니다.</span></div>',
                 '  </div>',
                 '</div>',
                 '<div id="rhwp-ai-footer">',
@@ -1361,10 +1371,6 @@ class RhwpEditorWidget(QWidget):
                 '  border-radius: 5px;',
                 '  background: #F8FAFC;',
                 '}',
-                '#rhwp-ai-response:empty::before {',
-                '  content: attr(placeholder);',
-                '  color: #94A3B8;',
-                '}',
                 '#rhwp-ai-footer {',
                 '  background: #F8FAFC;',
                 '  border-top: 1px solid #E2E8F0;',
@@ -1461,7 +1467,8 @@ class RhwpEditorWidget(QWidget):
 
             window.rhwpOpenAiPanel = function(mode, selectedText) {
                 currentMode = mode || 'chat';
-                currentSelectedText = (selectedText || '').trim();
+                var cleanSelected = typeof filterSelectionText === 'function' ? filterSelectionText(selectedText) : (selectedText || '').trim();
+                currentSelectedText = cleanSelected;
 
                 var titleEl = document.getElementById('rhwp-ai-title');
                 var inputEl = document.getElementById('rhwp-ai-input');
@@ -1491,7 +1498,7 @@ class RhwpEditorWidget(QWidget):
                     if (inputTitleEl) inputTitleEl.textContent = '요청사항';
                 }
 
-                respEl.textContent = '';
+                respEl.innerHTML = '<span class="rhwp-ai-placeholder" style="color:#94A3B8; pointer-events:none; user-select:none;">AI 변환 결과가 여기에 표시됩니다.</span>';
                 fullResponse = '';
                 btnInsert.disabled = true;
 

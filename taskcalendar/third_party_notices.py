@@ -101,6 +101,29 @@ NOTICES_TEXT = """바로업무  제3자 오픈소스 고지 (Third-Party Notices
     - 이 소프트웨어는 SIL Open Font License 1.1 조건에 따라 사용/수정/재배포할 수 있습니다.
     - 폰트 자체를 단독으로 판매할 수 없으며, 라이선스 전문은 함께 배포됩니다.
     - 라이선스 전문: 앱 내 "OFL-1.1 전문" 탭 및 taskcalendar/assets/fonts/OFL.txt
+
+13) rhwp (@rhwp/editor)  (웹한글/HWP 웹 뷰어 및 에디터 엔진)
+    License : MIT
+    Copyright (c) 2024 Edward Kim <edward@rhwp.dev>
+    https://github.com/edwardkim-rhwp/rhwp
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
 """
 
 OFL1_1_TEXT = """SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007

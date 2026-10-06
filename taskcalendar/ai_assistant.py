@@ -50,7 +50,7 @@ from taskcalendar.paths import data_path
 logger = logging.getLogger(__name__)
 
 DEFAULT_AI_ENDPOINT = "https://api.commandcode.ai/provider/v1/chat/completions"
-DEFAULT_AI_KEY = "user_2PKt7EHf5NygyxWLz62XfKn1ZT6aKx2P6Q2kEpRP2uiUUjTh66Eepmnjcyvwph6peG8U6dCCrZ4mjSvmnYowyomN"
+DEFAULT_AI_KEY = ""
 DEFAULT_AI_MODEL = "gpt-5.6-sol"
 
 
@@ -221,6 +221,10 @@ class AIChatWorker(QThread):
 
         if not (endpoint.startswith("http://") or endpoint.startswith("https://")):
             self.error.emit("올바른 HTTP/HTTPS API 엔드포인트 URL을 입력해 주세요.")
+            return
+
+        if not api_key:
+            self.error.emit("AI API 키가 설정되어 있지 않습니다.\n[AI 설정] 메뉴에서 API 키를 입력하고 저장해 주세요.")
             return
 
         headers = {
@@ -444,7 +448,7 @@ class AISettingsDialog(QDialog):
         self.resize(500, 340)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
 
-        self.cfg = AIConfigManager.load()
+        self.cfg = AIConfigManager.load(force_reload=True)
         self._test_worker: AIConnectionTestWorker | None = None
         self.init_ui()
 
@@ -607,8 +611,7 @@ class AISettingsDialog(QDialog):
         if data == "commandcode":
             self.edit_endpoint.setText("https://api.commandcode.ai/provider/v1/chat/completions")
             self.edit_model.setText("gpt-5.6-sol")
-            if not self.edit_key.text() or self.edit_key.text().startswith("HCX"):
-                self.edit_key.setText(DEFAULT_AI_KEY)
+            self.edit_key.setPlaceholderText("API Key를 입력하세요")
         elif data == "clova_gov":
             self.edit_endpoint.setText("https://api.clovastudio.go.kr/api/v1/chat/completions")
             self.edit_model.setText("HCX-GOV-THINK-V1-32B")
