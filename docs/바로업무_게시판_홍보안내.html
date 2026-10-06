@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>[안내] 행정업무 올인원 솔루션 「바로업무」 개편 및 주요기능 안내</title>
+  <style>
+    /* 공공기관 사내 인트라넷 게시판 전형적인 표준 개조식 스타일 */
+    body {
+      font-family: 'Malgun Gothic', '맑은 고딕', 'Pretendard', sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      color: #222222;
+      background-color: #FFFFFF;
+      margin: 0;
+      padding: 20px;
+    }
+    .notice-wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      border: 1px solid #D0D5DD;
+      padding: 30px 35px;
+    }
+    /* 상단 공문 헤더 */
+    .title-box {
+      border-bottom: 2px solid #003366;
+      padding-bottom: 12px;
+      margin-bottom: 24px;
+    }
+    .title-box h1 {
+      font-size: 22px;
+      font-weight: bold;
+      color: #003366;
+      margin: 0 0 8px 0;
+      letter-spacing: -0.5px;
+    }
+    .meta-info {
+      font-size: 13px;
+      color: #555555;
+    }
+
+    /* 개조식 타이틀 */
+    .sec-title {
+      font-size: 16px;
+      font-weight: bold;
+      color: #111111;
+      margin: 28px 0 10px 0;
+    }
+    .sub-item {
+      font-size: 14px;
+      font-weight: bold;
+      color: #222222;
+      margin: 12px 0 6px 0;
+    }
+    .desc-item {
+      font-size: 13.5px;
+      color: #333333;
+      margin-left: 18px;
+      margin-bottom: 4px;
+    }
+
+    /* 4대 기능 요약 테이블 */
+    .summary-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px 0;
+      border-top: 2px solid #003366;
+      border-bottom: 1px solid #CCCCCC;
+    }
+    .summary-table th {
+      background-color: #F4F6F9;
+      color: #111111;
+      font-weight: bold;
+      padding: 9px 12px;
+      border: 1px solid #DCE1E7;
+      text-align: center;
+      font-size: 13.5px;
+    }
+    .summary-table td {
+      padding: 9px 12px;
+      border: 1px solid #DCE1E7;
+      font-size: 13px;
+      color: #333333;
+      vertical-align: middle;
+    }
+
+    /* 가로 3열 사진 그리드 테이블 (1줄에 3개 화면) */
+    .grid-table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 12px;
+      margin: 10px 0 24px -12px;
+    }
+    .grid-cell {
+      width: 33.33%;
+      vertical-align: top;
+      background: #FFFFFF;
+      border: 1px solid #CBD5E1;
+      padding: 8px;
+      box-sizing: border-box;
+    }
+    .step-tag {
+      font-size: 12px;
+      font-weight: bold;
+      color: #003366;
+      margin-bottom: 6px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid #E2E8F0;
+    }
+    .img-container {
+      width: 100%;
+      height: 185px;
+      background-color: #F8FAFC;
+      border: 1px solid #E2E8F0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+    .img-container img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .caption {
+      font-size: 12px;
+      color: #444444;
+      line-height: 1.45;
+    }
+    .caption strong {
+      color: #111111;
+    }
+
+    /* 참고 박스 */
+    .info-box {
+      background-color: #F8FAFC;
+      border: 1px solid #DCE1E7;
+      padding: 12px 16px;
+      margin: 16px 0;
+      font-size: 13px;
+      color: #444444;
+      line-height: 1.55;
+    }
+  </style>
+</head>
+<body>
+
+<div class="notice-wrap">
+
+  <!-- 헤더 -->
+  <div class="title-box">
+    <h1>[안내] 통합 행정업무 도우미 「바로업무」 기능 개편 및 활용 안내</h1>
+    <div class="meta-info">
+      배포 버전: v1.9.58 &nbsp;|&nbsp; 적용 분야: 일정·메모·문서·단위업무 &nbsp;|&nbsp; 설치 환경: 사내 업무망 PC (무설치 포터블)
+    </div>
+  </div>
+
+  <!-- 1. 개편 개요 -->
+  <div class="sec-title">□ 추진 개요</div>
+  <div class="desc-item">- 기존 '캘린더·메모' 단순 기능을 <strong>[일정]·[메모]·[문서]·[업무] 4대 핵심 체계</strong>로 확대 개편</div>
+  <div class="desc-item">- 온나라 전자결재 및 웹 게시물 자동 수합, 내장 한글(HWP) 에디터, AI 문서 보조를 결합한 단일 솔루션 제공</div>
+
+  <!-- 4대 기능 요약 테이블 -->
+  <table class="summary-table">
+    <thead>
+      <tr>
+        <th style="width: 20%;">구분</th>
+        <th style="width: 45%;">주요 핵심 기능</th>
+        <th style="width: 35%;">기대 효과</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td style="font-weight: bold; text-align: center;">① 일정관리</td>
+        <td>공휴일·대체공휴일 동적 계산, 음력/24절기 표기, 사전 알람, 스티커</td>
+        <td>법정 기한 준수 및 주요 일정 누락 방지</td>
+      </tr>
+      <tr>
+        <td style="font-weight: bold; text-align: center;">② 메모관리</td>
+        <td>바탕화면 플로팅 메모(자동 복원), 그룹별 분류 및 화면 핀 고정</td>
+        <td>단기 현안 및 일일 처리 메모 즉시 확인</td>
+      </tr>
+      <tr>
+        <td style="font-weight: bold; text-align: center; color: #003366;">③ 문서관리 (신규)</td>
+        <td>온나라/사내 웹 화면 우클릭 수합, 엑셀형 목록, 접수·진행·완료 추적</td>
+        <td>접수 공문 및 타 부서 수합 업무 일원화</td>
+      </tr>
+      <tr>
+        <td style="font-weight: bold; text-align: center; color: #003366;">④ 업무관리 (신규)</td>
+        <td>웹한글 에디터 내장, 단위업무 트리, 첨부파일·관련문서·일정 통합</td>
+        <td>인수인계 편람 구축 및 기안 원스톱 처리</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- 2. 문서관리 프로세스 (가로 3칸) -->
+  <div class="sec-title">□ [문서관리] 온나라·인트라넷 게시물 3단계 자동 수합 프로세스</div>
+  <div class="desc-item">- 브라우저 화면에서 드래그 우클릭 한 번으로 바로업무 대시보드에 자동 등록 및 처리 상태 관리</div>
+
+  <table class="grid-table">
+    <tr>
+      <!-- 1단계 -->
+      <td class="grid-cell">
+        <div class="step-tag">[1단계] 웹 브라우저 우클릭</div>
+        <div class="img-container">
+          <img src="new_03b_chrome.png" alt="브라우저 우클릭 바로업무로 보내기">
+        </div>
+        <div class="caption">
+          <strong>온나라/웹 화면 마우스 우클릭</strong><br>
+          공문서나 게시물을 드래그 후 <code>[바로업무로 보내기]</code> 선택 시 제목·내용·링크 자동 캡처
+        </div>
+      </td>
+      <!-- 2단계 -->
+      <td class="grid-cell">
+        <div class="step-tag">[2단계] 업무 등록창 자동 기입</div>
+        <div class="img-container">
+          <img src="new_03_document.png" alt="업무 등록창">
+        </div>
+        <div class="caption">
+          <strong>등록 팝업창 자동 완성</strong><br>
+          게시물 제목, 본문 발췌문, 원본 링크가 즉시 자동 입력되며 담당자·기한 지정 후 바로 등록
+        </div>
+      </td>
+      <!-- 3단계 -->
+      <td class="grid-cell">
+        <div class="step-tag">[3단계] 문서 목록 리스트업</div>
+        <div class="img-container">
+          <img src="new_03_document.png" alt="문서 목록 대시보드">
+        </div>
+        <div class="caption">
+          <strong>대시보드 일괄 현황 관리</strong><br>
+          수합된 문서가 표 형태로 정리되며, 접수·진행·완료 상태를 클릭하여 실시간 처리 여부 확인
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- 3. 업무관리 구조 (가로 3칸) -->
+  <div class="sec-title">□ [업무관리] 단위업무 체계화 및 문서·일정 유기적 연동</div>
+  <div class="desc-item">- 좌측 분류 트리로 업무 편람화 + 중앙 한글 에디터 본문 작성 + 우측 첨부 및 일정 등록</div>
+
+  <table class="grid-table">
+    <tr>
+      <!-- 1단계 -->
+      <td class="grid-cell">
+        <div class="step-tag">① 좌측: 업무 분류 체계 트리</div>
+        <div class="img-container">
+          <img src="new_04_work.png" alt="업무 분류 트리">
+        </div>
+        <div class="caption">
+          <strong>분류별 폴더·탭 구조화</strong><br>
+          사업별·담당자별 단위업무를 트리 형태로 체계적 정리하여 인수인계 편람 구축
+        </div>
+      </td>
+      <!-- 2단계 -->
+      <td class="grid-cell">
+        <div class="step-tag">② 중앙/우측: 한글 본문 및 첨부파일</div>
+        <div class="img-container">
+          <img src="new_04_work.png" alt="한글 에디터 및 첨부파일">
+        </div>
+        <div class="caption">
+          <strong>내장 웹한글 에디터 & 첨부 관리</strong><br>
+          별도 프로그램 없이 HWP 규격 공문·표 작성, 우측 카드에서 관련 참고파일 일괄 관리
+        </div>
+      </td>
+      <!-- 3단계 -->
+      <td class="grid-cell">
+        <div class="step-tag">③ 우측하단: 관련문서 & 일정 연계</div>
+        <div class="img-container">
+          <img src="new_04_work.png" alt="관련문서 및 일정 연동">
+        </div>
+        <div class="caption">
+          <strong>관련 온나라 문서 연결 & 일정 등록</strong><br>
+          해당 업무와 관련된 온나라 문서를 연계하고, 마감일을 메인 캘린더 일정으로 원클릭 등록
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- 4. 한글 에디터 특화 기능 (가로 3칸) -->
+  <div class="sec-title">□ [한글 에디터] 에디팅 편의 기능 및 AI 도우미 지원</div>
+  <div class="desc-item">- 전체화면 집중 모드, HWP 파일/폴더 드래그앤드롭, AI 이미지 생성 및 공문서 다듬기 지원</div>
+
+  <table class="grid-table">
+    <tr>
+      <!-- 전체화면 -->
+      <td class="grid-cell">
+        <div class="step-tag">기능 1. 전체화면 에디팅 모드</div>
+        <div class="img-container">
+          <img src="new_04_work.png" alt="전체화면 모드">
+        </div>
+        <div class="caption">
+          <strong>모니터 전체화면 집중 편집</strong><br>
+          상단 <code>[전체화면]</code> 버튼으로 장문 보고서 및 복잡한 서식을 넓은 화면에서 쾌적하게 작성
+        </div>
+      </td>
+      <!-- AI 생성 및 다듬기 -->
+      <td class="grid-cell">
+        <div class="step-tag">기능 2. AI 이미지 생성 & 문맥 교정</div>
+        <div class="img-container">
+          <img src="new_04b_work_ai.png" alt="AI 비서 기능">
+        </div>
+        <div class="caption">
+          <strong>AI 공문서 다듬기 & 이미지 삽입</strong><br>
+          본문 우클릭 AI로 개조식 변환·요약, "사과 일러스트 그려줘" 요청 시 즉석 생성 후 본문 자동 삽입
+        </div>
+      </td>
+      <!-- HWP 드래그앤드롭 -->
+      <td class="grid-cell">
+        <div class="step-tag">기능 3. HWP 파일·폴더 드래그&드롭</div>
+        <div class="img-container">
+          <img src="new_04_work.png" alt="HWP 드래그앤드롭">
+        </div>
+        <div class="caption">
+          <strong>탐색기에서 파일/폴더 끌어다놓기</strong><br>
+          기존 한글 문서(<code>.hwp</code>, <code>.hwpx</code>)나 이미지를 에디터로 드래그하여 즉시 열람 및 가져오기
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- 5. 보안 및 실행 안내 -->
+  <div class="info-box">
+    <strong>※ 업무망 보안 및 안정성 안내</strong><br>
+    - <strong>Windows DPAPI 2중 암호화</strong>: 모든 데이터는 Windows OS 커널 수준으로 암호화되어 로컬에만 안전하게 보관됨<br>
+    - <strong>머신 키 바인딩</strong>: 기관 정기 윈도우 계정 비밀번호 변경 시에도 복호화 오류 없이 데이터가 안전하게 유지됨<br>
+    - <strong>완전 오프라인 구동</strong>: 외부 인터넷 연결이 없는 순수 폐쇄 업무망에서도 단독 실행 파일로 즉시 사용 가능
+  </div>
+
+  <div style="margin-top: 24px; text-align: center; font-size: 13.5px; color: #555555;">
+    프로그램 실행: <strong>바로업무.exe</strong> (설치 불필요, 압축 해제 후 즉시 실행)
+  </div>
+
+</div>
+
+</body>
+</html>
