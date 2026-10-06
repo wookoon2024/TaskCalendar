@@ -115,6 +115,32 @@ def unprotect_bytes(data: bytes) -> bytes:
     raise ctypes.WinError()
 
 
+def encrypt_secret(secret_text: str) -> str:
+    """문자열 시크릿(API 키 등)을 Windows DPAPI로 암호화하여 hex 문자열로 반환"""
+    if not secret_text:
+        return ""
+    try:
+        raw = secret_text.encode("utf-8")
+        enc = protect_bytes(raw)
+        return enc.hex()
+    except Exception as e:
+        logger.error("Failed to encrypt secret: %s", e)
+        return ""
+
+
+def decrypt_secret(enc_hex: str) -> str:
+    """DPAPI로 암호화된 hex 문자열을 복호화하여 원본 문자열 반환"""
+    if not enc_hex or not isinstance(enc_hex, str):
+        return ""
+    try:
+        raw = bytes.fromhex(enc_hex.strip())
+        plain = unprotect_bytes(raw)
+        return plain.decode("utf-8")
+    except Exception as e:
+        logger.warning("Failed to decrypt secret: %s", e)
+        return ""
+
+
 def _can_deserialize_sqlite_blob(data: bytes) -> bool:
     try:
         temp_conn = sqlite3.connect(":memory:")
@@ -139,6 +165,16 @@ def _can_deserialize_sqlite_blob(data: bytes) -> bool:
 
 
 class EncryptedRepository:
+    _global_instance: EncryptedRepository | None = None
+
+    @classmethod
+    def get_global_instance(cls) -> EncryptedRepository | None:
+        return cls._global_instance
+
+    @classmethod
+    def set_global_instance(cls, repo: EncryptedRepository | None) -> None:
+        cls._global_instance = repo
+
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -158,6 +194,7 @@ class EncryptedRepository:
         except sqlite3.DatabaseError as exc:
             self._log_diagnostic("database_error_during_init", f"{exc}\n{traceback.format_exc()}")
             self._recover_from_corrupt_database()
+        EncryptedRepository._global_instance = self
 
     def _log_diagnostic(self, stage: str, detail: str) -> None:
         try:
@@ -795,6 +832,52 @@ class EncryptedRepository:
                 (key, str(value)),
             )
         self.connection.commit()
+
+    def get_ai_config(self) -> dict[str, Any]:
+        """DB의 settings 테이블에서 암호화된 AI API 연동 설정을 복호화하여 로드"""
+        provider = self.get_setting("ai_provider", "commandcode")
+        endpoint = self.get_setting("ai_endpoint", "https://api.commandcode.ai/provider/v1/chat/completions")
+        enc_key = self.get_setting("ai_api_key_enc", "")
+        api_key = decrypt_secret(enc_key)
+        model = self.get_setting("ai_model", "gpt-5.6-sol")
+        ssl_verify_str = self.get_setting("ai_ssl_verify", "1")
+        timeout_str = self.get_setting("ai_timeout_sec", "35")
+        stream_str = self.get_setting("ai_stream", "1")
+
+        try:
+            timeout_sec = int(timeout_str)
+        except ValueError:
+            timeout_sec = 35
+
+        return {
+            "provider": provider,
+            "endpoint": endpoint,
+            "api_key": api_key,
+            "model": model,
+            "ssl_verify": ssl_verify_str == "1",
+            "timeout_sec": timeout_sec,
+            "stream": stream_str == "1",
+        }
+
+    def save_ai_config(self, cfg: dict[str, Any]) -> None:
+        """AI API 연동 설정을 Windows DPAPI로 암호화하여 DB settings 테이블에 안전하게 영구 저장"""
+        if "provider" in cfg:
+            self.set_setting("ai_provider", str(cfg["provider"]))
+        if "endpoint" in cfg:
+            self.set_setting("ai_endpoint", str(cfg["endpoint"]).strip())
+        if "api_key" in cfg:
+            raw_key = str(cfg["api_key"]).strip()
+            enc_hex = encrypt_secret(raw_key) if raw_key else ""
+            self.set_setting("ai_api_key_enc", enc_hex)
+        if "model" in cfg:
+            self.set_setting("ai_model", str(cfg["model"]).strip())
+        if "ssl_verify" in cfg:
+            self.set_setting("ai_ssl_verify", "1" if cfg["ssl_verify"] else "0")
+        if "timeout_sec" in cfg:
+            self.set_setting("ai_timeout_sec", str(cfg["timeout_sec"]))
+        if "stream" in cfg:
+            self.set_setting("ai_stream", "1" if cfg["stream"] else "0")
+        self.save()
 
     def upsert_entry(self, entry: CalendarEntry) -> CalendarEntry:
         now = datetime.now().isoformat(timespec="seconds")

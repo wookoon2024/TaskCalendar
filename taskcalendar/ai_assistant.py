@@ -142,22 +142,30 @@ class TruststoreAdapter(HTTPAdapter):
 
 
 class AIConfigManager:
-    """AI API 설정 관리자 (로컬 영구 저장)"""
+    """AI API 설정 관리자 (암호화 DB 영구 저장 및 DPAPI 보안 관리)"""
 
     _config_cache: dict[str, Any] | None = None
 
     @classmethod
-    def get_config_file(cls) -> Path:
-        p = data_path("ai_config.json")
-        p.parent.mkdir(parents=True, exist_ok=True)
-        return p
+    def _get_repository(cls) -> Any:
+        try:
+            from taskcalendar.storage import EncryptedRepository
+            repo = EncryptedRepository.get_global_instance()
+            if repo is not None:
+                return repo
+            from taskcalendar.paths import runtime_root
+            db_path = runtime_root() / "db" / "taskcalendar.db.enc"
+            if db_path.exists():
+                return EncryptedRepository(db_path)
+        except Exception as e:
+            logger.warning("Failed to access EncryptedRepository for AI config: %s", e)
+        return None
 
     @classmethod
     def load(cls, force_reload: bool = False) -> dict[str, Any]:
         if not force_reload and cls._config_cache is not None:
             return dict(cls._config_cache)
 
-        cfg_file = cls.get_config_file()
         default_cfg: dict[str, Any] = {
             "provider": "commandcode",
             "endpoint": DEFAULT_AI_ENDPOINT,
@@ -168,12 +176,36 @@ class AIConfigManager:
             "stream": True,
         }
 
-        if cfg_file.exists():
+        # 1. 암호화 DB(settings 테이블)에서 로드
+        repo = cls._get_repository()
+        if repo is not None:
             try:
-                data = json.loads(cfg_file.read_text(encoding="utf-8"))
-                default_cfg.update(data)
+                db_cfg = repo.get_ai_config()
+                for k, v in db_cfg.items():
+                    if v is not None and v != "":
+                        default_cfg[k] = v
+                    elif k in ("ssl_verify", "stream"):
+                        default_cfg[k] = v
             except Exception as e:
-                logger.warning("Failed to load ai_config.json: %s", e)
+                logger.warning("Failed to load AI config from encrypted DB: %s", e)
+
+        # 2. 기존 평문 ai_config.json 파일 마이그레이션
+        try:
+            cfg_file = data_path("ai_config.json")
+            if cfg_file.exists():
+                data = json.loads(cfg_file.read_text(encoding="utf-8"))
+                # DB에 키가 없고 json에 기존 키가 남아있었다면 DB로 암호화 이전
+                if not default_cfg.get("api_key") and data.get("api_key"):
+                    default_cfg["api_key"] = str(data["api_key"]).strip()
+                    if repo is not None:
+                        repo.save_ai_config(default_cfg)
+                        logger.info("Migrated plaintext AI key to encrypted database successfully.")
+                # 보안상 평문 파일의 api_key는 영구 소멸 (빈 문자열)
+                if data.get("api_key"):
+                    data["api_key"] = ""
+                    cfg_file.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            logger.warning("Notice on legacy ai_config.json migration: %s", e)
 
         cls._config_cache = default_cfg
         return dict(cls._config_cache)
@@ -183,11 +215,23 @@ class AIConfigManager:
         cfg = cls.load(force_reload=True)
         cfg.update(new_cfg)
         cls._config_cache = cfg
-        cfg_file = cls.get_config_file()
+
+        # 1. 암호화 DB(settings 테이블)에 Windows DPAPI 암호화하여 저장
+        repo = cls._get_repository()
+        if repo is not None:
+            try:
+                repo.save_ai_config(cfg)
+            except Exception as e:
+                logger.error("Failed to save AI config to encrypted DB: %s", e)
+
+        # 2. 로컬 json 파일에는 보안상 api_key를 비워두고(빈 문자열) 비민감 설정만 유지
         try:
-            cfg_file.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+            cfg_file = data_path("ai_config.json")
+            sanitized = dict(cfg)
+            sanitized["api_key"] = ""
+            cfg_file.write_text(json.dumps(sanitized, indent=2, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
-            logger.error("Failed to save ai_config.json: %s", e)
+            logger.error("Failed to update sanitized ai_config.json: %s", e)
 
 
 class AIChatWorker(QThread):
