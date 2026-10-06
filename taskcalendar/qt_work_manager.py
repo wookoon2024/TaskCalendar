@@ -1100,7 +1100,7 @@ def check_document_drm(file_path: Path | str, raw_bytes: bytes | None = None) ->
     return False, ""
 
 
-def try_extract_via_hwp_com(file_path: Path | str, timeout_sec: float = 3.5) -> tuple[str, bytes | None]:
+def try_extract_via_hwp_com(file_path: Path | str, timeout_sec: float = 7.0) -> tuple[str, bytes | None]:
     """
     PC에 설치된 한글 프로그램(Hwp.exe)의 OLE Automation(COM)을 통해
     DRM 파일의 텍스트 또는 HWPX 변환 바이트 추출 시도 (최대 timeout_sec 초 대기).
@@ -8009,7 +8009,7 @@ class WorkManagerDialog(QDialog):
 
         if is_drm:
             # 한글(HWP) 정품 프로그램 연동 백그라운드 복호화 추출 시도
-            progress.setLabelText(f"사내 보안(DRM) 감지됨\n한글(HWP) 정품 프로그램을 통한 본문 복호화 시도 중...")
+            progress.setLabelText(f"사내 보안(DRM) 감지됨\n한글 프로그램 접근 권한 팝업이 뜨면 [허용]을 눌러주세요...")
             progress.setValue(35)
             QApplication.processEvents()
 
