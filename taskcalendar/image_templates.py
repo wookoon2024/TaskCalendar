@@ -45,7 +45,7 @@ def get_visual_templates() -> list[dict]:
     results = []
 
     # 기본 우선순위 카테고리 순서
-    known_order = ["일러스트", "장식", "이미지·카툰"]
+    known_order = ["일러스트", "장식", "이미지·카툰", "이미지카툰"]
     existing_dirs = [p for p in storage_dir.iterdir() if p.is_dir()]
     # known_order 먼저, 그 외 사용자가 추가한 폴더는 가나다 순으로 정렬
     sorted_dirs = sorted(existing_dirs, key=lambda p: (0, known_order.index(p.name)) if p.name in known_order else (1, p.name))

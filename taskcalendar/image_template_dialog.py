@@ -214,7 +214,7 @@ class ImageTemplateDialog(QDialog):
         self.templates = get_visual_templates()
 
         # 카테고리 목록 추출
-        known_order = ["일러스트", "장식", "이미지·카툰"]
+        known_order = ["일러스트", "장식", "이미지·카툰", "이미지카툰"]
         cat_counts: dict[str, int] = {}
         for it in self.templates:
             c = it["category"]
@@ -226,7 +226,7 @@ class ImageTemplateDialog(QDialog):
                 if p.is_dir() and p.name not in cat_counts:
                     cat_counts[p.name] = 0
 
-        # 정렬: 일러스트, 장식, 이미지·카툰 우선, 이후 사용자 생성 폴더
+        # 정렬: 일러스트, 장식, 이미지카툰 우선, 이후 사용자 생성 폴더
         sorted_cats = sorted(
             cat_counts.keys(),
             key=lambda c: (0, known_order.index(c)) if c in known_order else (1, c)
