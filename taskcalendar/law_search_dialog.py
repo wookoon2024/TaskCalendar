@@ -82,6 +82,18 @@ class LawSearchDialog(QDialog):
         accent = self.palette.get("accent", "#2563EB")
         button_text = self.palette.get("button_text", "#FFFFFF")
 
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {bg};
+                color: {text};
+            }}
+            QLabel {{
+                border: none;
+                background-color: transparent;
+                color: {text};
+            }}
+        """)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
@@ -93,7 +105,7 @@ class LawSearchDialog(QDialog):
             self,
         )
         lbl_desc.setWordWrap(True)
-        lbl_desc.setStyleSheet(f"color: {muted}; font-size: 11px;")
+        lbl_desc.setStyleSheet(f"color: {muted}; font-size: 11px; border: none; background: transparent;")
         layout.addWidget(lbl_desc)
 
         # 검색 입력
@@ -137,7 +149,7 @@ class LawSearchDialog(QDialog):
 
         # 상태 라벨: '현행 법령만 보기 (권장)' 오른쪽에 배치
         self.lbl_status = QLabel("", self)
-        self.lbl_status.setStyleSheet(f"color: {muted}; font-size: 11px;")
+        self.lbl_status.setStyleSheet(f"color: {muted}; font-size: 11px; border: none; background: transparent;")
         status_row.addWidget(self.lbl_status, 1)
 
         layout.addLayout(status_row)
@@ -295,6 +307,10 @@ class LawSearchDialog(QDialog):
                     background-color: #F8FAFC;
                     border: 1px solid #94A3B8;
                 }}
+                QLabel {{
+                    border: none;
+                    background-color: transparent;
+                }}
             """)
             cl = QVBoxLayout(card)
             cl.setContentsMargins(14, 9, 14, 9)
@@ -313,18 +329,18 @@ class LawSearchDialog(QDialog):
 
             title = QLabel(r.name)
             title_col = "#0F172A" if r.is_current else "#475569"
-            title.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {title_col};")
+            title.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {title_col}; border: none; background: transparent;")
             top.addWidget(title)
 
             kind = QLabel(r.law_kind or "법령")
-            kind.setStyleSheet("color: #64748B; font-size: 11px;")
+            kind.setStyleSheet("color: #64748B; font-size: 11px; border: none; background: transparent;")
             top.addWidget(kind)
 
             top.addStretch(1)
 
             enf = QLabel(f"시행 {r.enforce_date}" if r.enforce_date else "")
             enf_col = "#0284C7" if r.is_current else "#94A3B8"
-            enf.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {enf_col};")
+            enf.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {enf_col}; border: none; background: transparent;")
             top.addWidget(enf)
             cl.addLayout(top)
 
@@ -340,7 +356,7 @@ class LawSearchDialog(QDialog):
                 detail_parts.append(r.revision)
 
             sub_lbl = QLabel("  ·  ".join(detail_parts))
-            sub_lbl.setStyleSheet("color: #64748B; font-size: 11px;")
+            sub_lbl.setStyleSheet("color: #64748B; font-size: 11px; border: none; background: transparent;")
             sub.addWidget(sub_lbl)
             sub.addStretch(1)
             cl.addLayout(sub)
@@ -371,9 +387,13 @@ class LawSearchDialog(QDialog):
                             border: 1.5px solid {accent};
                             border-radius: 8px;
                         }}
+                        QLabel {{
+                            border: none;
+                            background-color: transparent;
+                        }}
                     """)
                 else:
-                    c.setStyleSheet("""
+                    c.setStyleSheet(f"""
                         QFrame#lawCard {{
                             background-color: #FFFFFF;
                             border: 1px solid #E2E8F0;
@@ -382,6 +402,10 @@ class LawSearchDialog(QDialog):
                         QFrame#lawCard:hover {{
                             background-color: #F8FAFC;
                             border: 1px solid #94A3B8;
+                        }}
+                        QLabel {{
+                            border: none;
+                            background-color: transparent;
                         }}
                     """)
 

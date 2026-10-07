@@ -1145,7 +1145,7 @@ class RhwpEditorWidget(QWidget):
                 '  </div>',
                 '  <div class="rhwp-ai-input-wrap">',
                 '    <div class="rhwp-ai-section-title" id="rhwp-ai-input-title">요청사항</div>',
-                '    <textarea id="rhwp-ai-input" rows="2" placeholder="요청할 내용이나 작성할 서식을 입력하세요... (Ctrl+Enter로 요청)"></textarea>',
+                '    <textarea id="rhwp-ai-input" rows="2" placeholder="요청할 내용이나 작성할 서식을 입력하세요... (Enter로 요청, Shift+Enter는 줄바꿈)"></textarea>',
                 '  </div>',
                 '  <div class="rhwp-ai-action-row">',
                 '    <div id="rhwp-ai-progress" style="display:none;"><div class="rhwp-ai-bar"></div></div>',
@@ -1558,9 +1558,17 @@ class RhwpEditorWidget(QWidget):
             });
 
             document.getElementById('rhwp-ai-input').addEventListener('keydown', function(e) {
-                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                if (e.key === 'Enter') {
+                    if (e.shiftKey) {
+                        // Shift+Enter는 다음 줄로 줄바꿈 허용
+                        return;
+                    }
                     e.preventDefault();
-                    if (!isGenerating) doSendRequest();
+                    if (!isGenerating) {
+                        setTimeout(function() {
+                            doSendRequest();
+                        }, 0);
+                    }
                 }
                 if (e.key === 'Escape') {
                     closePanel();

@@ -23,7 +23,7 @@ except Exception:
     pass
 
 from PySide6.QtCore import QPoint, Qt, QThread, Signal
-from PySide6.QtGui import QFont, QGuiApplication, QIcon
+from PySide6.QtGui import QFont, QGuiApplication, QIcon, QKeyEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -702,6 +702,29 @@ class AISettingsDialog(QDialog):
         self.accept()
 
 
+class PromptTextEdit(QTextEdit):
+    """엔터 입력 시 요청 실행, Shift+엔터 입력 시 줄바꿈 지원하는 프롬프트 입력창"""
+
+    returnPressed = Signal()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                # Shift+Enter는 다음 줄로 줄바꿈 허용
+                super().keyPressEvent(event)
+            else:
+                # Enter는 즉시 요청하기 트리거
+                try:
+                    QGuiApplication.inputMethod().commit()
+                except Exception:
+                    pass
+                self.returnPressed.emit()
+                event.accept()
+                return
+        else:
+            super().keyPressEvent(event)
+
+
 class AIChatDialog(QDialog):
     """
     [우클릭 ➔ AI 도우미 / 원클릭 프리셋] 플로팅 팝업
@@ -801,11 +824,12 @@ class AIChatDialog(QDialog):
         layout.addLayout(header_row)
 
         # Prompt input area
-        self.input_edit = QTextEdit(self)
+        self.input_edit = PromptTextEdit(self)
         self.input_edit.setFixedHeight(75)
-        self.input_edit.setPlaceholderText("요청할 작업이나 작성할 서식을 입력하세요 (예: 출장보고서 양식 만들어줘, 위 문장 공문서체로 수정해줘 등)")
+        self.input_edit.setPlaceholderText("요청할 작업이나 작성할 서식을 입력하세요... (Enter: 요청하기, Shift+Enter: 줄바꿈)")
         if initial_prompt:
             self.input_edit.setPlainText(initial_prompt)
+        self.input_edit.returnPressed.connect(self._on_prompt_enter_pressed)
         layout.addWidget(self.input_edit)
 
         # Action row (Submit & Progress bar)
@@ -920,6 +944,10 @@ class AIChatDialog(QDialog):
     def _open_settings(self) -> None:
         dlg = AISettingsDialog(self, palette=self.palette)
         dlg.exec()
+
+    def _on_prompt_enter_pressed(self) -> None:
+        if self.btn_send.isEnabled():
+            self._send_request()
 
     def _send_request(self) -> None:
         prompt = self.input_edit.toPlainText().strip()

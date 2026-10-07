@@ -4064,8 +4064,9 @@ class WorkManagerDialog(QDialog):
         # [중간 - 중앙 패널]: rhwp / 리치 에디터
         # -------------------------------------------------------------------------
         self.center_panel = QFrame()
+        self.center_panel.setObjectName("wmCenterPanel")
         self.center_panel.setStyleSheet(f"""
-            QFrame {{
+            QFrame#wmCenterPanel {{
                 background-color: {panel};
                 border: 1px solid {line};
                 border-radius: 8px;
@@ -4675,7 +4676,7 @@ class WorkManagerDialog(QDialog):
             if hasattr(self, "main_layout") and self.main_layout:
                 self.main_layout.setContentsMargins(0, 0, 0, 0)
             if hasattr(self, "center_panel") and self.center_panel:
-                self.center_panel.setStyleSheet("QFrame { background-color: #FFFFFF; border: none; border-radius: 0px; }")
+                self.center_panel.setStyleSheet("QFrame#wmCenterPanel { background-color: #FFFFFF; border: none; border-radius: 0px; }")
             if hasattr(self, "splitter") and self.splitter:
                 self.splitter.setHandleWidth(0)
 
@@ -4693,7 +4694,7 @@ class WorkManagerDialog(QDialog):
                 self.main_layout.setContentsMargins(12, 10, 12, 8)
             if hasattr(self, "center_panel") and self.center_panel:
                 self.center_panel.setStyleSheet(f"""
-                    QFrame {{
+                    QFrame#wmCenterPanel {{
                         background-color: {panel};
                         border: 1px solid {line};
                         border-radius: 8px;
@@ -9175,7 +9176,7 @@ class WorkManagerDialog(QDialog):
 
         if hasattr(self, "center_panel") and self.center_panel:
             self.center_panel.setStyleSheet(f"""
-                QFrame {{
+                QFrame#wmCenterPanel {{
                     background-color: {panel};
                     border: 1px solid {line};
                     border-radius: 8px;
