@@ -3744,12 +3744,12 @@ class WorkManagerDialog(QDialog):
         _rtg.setContentsMargins(0, 0, 0, 0)
         _rtg.setSpacing(6)
 
-        # 탭 우측 끝 도구: [전체화면] [이미지 템플릿] [업무 템플릿] [저장(S)] (세로 크기 및 글꼴 크기 통일)
-        self.btn_fullscreen = QPushButton("전체화면")
+        # 탭 우측 끝 도구: [전체화면(F12)] [템플릿] [저장(S)] 나란히 배치 (세로 크기 및 글꼴 크기 통일)
+        self.btn_fullscreen = QPushButton("전체화면(F12)")
         self.btn_fullscreen.setFixedHeight(30)
         self.btn_fullscreen.setAutoDefault(False)
         self.btn_fullscreen.setDefault(False)
-        self.btn_fullscreen.setToolTip("에디터 전체화면 토글 (단축키: Ctrl+Enter, F12)")
+        self.btn_fullscreen.setToolTip("에디터 전체화면 토글 (단축키: F12, Ctrl+Enter)")
         self.btn_fullscreen.setStyleSheet(self._toolbar_sub_btn_style())
         self.btn_fullscreen.clicked.connect(self._toggle_editor_fullscreen)
         _rtg.addWidget(self.btn_fullscreen, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
@@ -3763,22 +3763,6 @@ class WorkManagerDialog(QDialog):
         self.btn_template.clicked.connect(self._show_template_dropdown_menu)
         _rtg.addWidget(self.btn_template, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
 
-        # [전체화면][템플릿] 묶음만 왼쪽으로 당겨 좌측 시작점을
-        # 우측 첨부파일 카드 내부 시작점(테두리 1px + 여백 8px = x=9)에 맞춘다.
-        # [저장(S)] 은 뒤쪽에서 원래 우측 끝 위치를 그대로 유지한다.
-        bottom_layout.addWidget(self._right_tools_group, 0,
-                                alignment=Qt.AlignmentFlag.AlignVCenter)
-
-        # [전체화면][템플릿] 묶음과 [저장(S)] 사이의 고정 여백.
-        # 이 여백 덕분에 [저장(S)] 은 우측 끝에 붙어 원래 자리를 유지하고,
-        # 앞쪽 [전체화면][템플릿] 만 77px 왼쪽으로 당겨진다.
-        self._right_tools_mid_spacer = QWidget()
-        self._right_tools_mid_spacer.setFixedWidth(77)
-        self._right_tools_mid_spacer.setFixedHeight(32)
-        self._right_tools_mid_spacer.setStyleSheet("background: transparent; border: none;")
-        bottom_layout.addWidget(self._right_tools_mid_spacer, 0,
-                                alignment=Qt.AlignmentFlag.AlignVCenter)
-
         self.btn_save_work = QPushButton("저장(S)")
         self.btn_save_work.setFixedHeight(30)
         self.btn_save_work.setAutoDefault(False)
@@ -3789,7 +3773,10 @@ class WorkManagerDialog(QDialog):
         self.btn_save_work.clicked.connect(self._on_save_button_clicked)
         self._shortcut_save_alt = QShortcut(QKeySequence("Alt+S"), self)
         self._shortcut_save_alt.activated.connect(self._on_save_button_clicked)
-        bottom_layout.addWidget(self.btn_save_work, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+        _rtg.addWidget(self.btn_save_work, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        bottom_layout.addWidget(self._right_tools_group, 0,
+                                alignment=Qt.AlignmentFlag.AlignVCenter)
 
         main_layout.addWidget(self.bottom_bar)
 
@@ -4697,8 +4684,8 @@ class WorkManagerDialog(QDialog):
 
             # 버튼 상태 업데이트
             if hasattr(self, "btn_fullscreen"):
-                self.btn_fullscreen.setText("전체화면 해제")
-                self.btn_fullscreen.setToolTip("에디터 전체화면 해제 (단축키: Ctrl+Enter, F12)")
+                self.btn_fullscreen.setText("전체화면 해제(F12)")
+                self.btn_fullscreen.setToolTip("에디터 전체화면 해제 (단축키: F12, Ctrl+Enter)")
                 self.btn_fullscreen.setStyleSheet(self._primary_btn_style())
         else:
             # 1. 창 여백 및 중앙 패널 테두리 복원
@@ -4743,8 +4730,8 @@ class WorkManagerDialog(QDialog):
 
             # 버튼 상태 복원
             if hasattr(self, "btn_fullscreen"):
-                self.btn_fullscreen.setText("전체화면")
-                self.btn_fullscreen.setToolTip("에디터 전체화면 토글 (단축키: Ctrl+Enter, F12)")
+                self.btn_fullscreen.setText("전체화면(F12)")
+                self.btn_fullscreen.setToolTip("에디터 전체화면 토글 (단축키: F12, Ctrl+Enter)")
                 self.btn_fullscreen.setStyleSheet(self._toolbar_sub_btn_style())
 
     def _get_tab_text(self, sheet: WorkSheetData) -> str:
