@@ -607,21 +607,30 @@ class EncryptedRepository:
 
         tmp_path = self.db_path.with_suffix(self.db_path.suffix + ".tmp")
         bak_path = self.db_path.with_suffix(self.db_path.suffix + ".bak")
+
+        # 1. .bak 백업은 빈번한 저장 시 백신/인덱서 파일 락 경합을 방지하기 위해 60초 주기로만 갱신
+        now_ts = time.time()
+        last_bak_time = getattr(self, "_last_bak_time", 0.0)
+        if self.db_path.exists() and (now_ts - last_bak_time >= 60.0):
+            try:
+                shutil.copy2(self.db_path, bak_path)
+                self._last_bak_time = now_ts
+            except Exception:
+                pass
+
+        # 2. 임시 파일 쓰기는 루프 밖에서 1회만 수행
+        tmp_path.write_bytes(encrypted)
+
+        # 3. 원자적 파일 교체(atomic replace) 시도 (백신/인덱서 일시 락 시 빠른 재시도)
         last_exc: Exception | None = None
         for attempt in range(5):
             try:
-                tmp_path.write_bytes(encrypted)
-                if self.db_path.exists():
-                    shutil.copy2(self.db_path, bak_path)
                 tmp_path.replace(self.db_path)
                 last_exc = None
                 break
             except OSError as exc:
-                # Windows search indexers / AV scanners can hold the file briefly.
-                # Retry instead of silently dropping the edit (pythonw.exe has no console,
-                # so an unhandled exception here would vanish without a trace).
                 last_exc = exc
-                time.sleep(0.15 * (attempt + 1))
+                time.sleep(0.04 * (attempt + 1))
         if last_exc is not None:
             self._log_diagnostic(
                 "save_write_failed",

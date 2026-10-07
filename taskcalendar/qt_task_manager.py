@@ -339,6 +339,30 @@ class PillBadgeWidget(QWidget):
             self.btn.customContextMenuRequested.connect(lambda p: self.on_context(QCursor.pos()))
         layout.addWidget(self.btn)
 
+    def update_badge(self, text: str, config: dict) -> None:
+        """전체 테이블 재빌드 없이 해당 셀의 뱃지 텍스트와 색상만 즉시 갱신"""
+        cfg = config.get(text, {"bg": "#F1F5F9", "text": "#475569", "border": "#CBD5E1"})
+        bg = cfg.get("bg", "#F1F5F9")
+        color = cfg.get("text", "#475569")
+        border = cfg.get("border", "#CBD5E1")
+        self.btn.setText(f"{text}  ▾")
+        self.btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {bg};
+                color: {color};
+                border: 1px solid {border};
+                border-radius: 12px;
+                padding: 0 10px;
+                font-family: {font_family_css()};
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                border-color: {color};
+                background-color: #FFFFFF;
+            }}
+        """)
+
 
 class SimpleListManagerDialog(QDialog):
     """항목(분류, 상태 등)을 추가/삭제/관리하는 모달 창"""
@@ -2287,8 +2311,19 @@ class TaskManagerDialog(QDialog):
 
         chosen = menu.exec(btn.mapToGlobal(QPoint(0, btn.height() + 2)))
         if chosen in actions:
-            self._on_category_cell_changed(task, actions[chosen])
-            self._render_table()
+            new_cat = actions[chosen]
+            if task.memo_group != new_cat:
+                self._on_category_cell_changed(task, new_cat)
+                if hasattr(self, "category_combo") and self.category_combo.currentText() not in ("분류", "전체", ""):
+                    self._apply_filters()
+                else:
+                    r = btn.property("row_idx")
+                    if r is not None and 0 <= r < self.table.rowCount():
+                        w_cat = self.table.cellWidget(r, 1)
+                        if isinstance(w_cat, PillBadgeWidget):
+                            is_dark = self.palette.get("bg", "").lower() in ("#0a0c10", "#171b22") or self.palette.get("text", "").lower() == "#f3f6fb"
+                            cfg = CATEGORY_CONFIG_DARK if is_dark else CATEGORY_CONFIG
+                            w_cat.update_badge(new_cat, cfg)
         elif chosen == act_manage:
             self._open_category_manager()
 
@@ -2310,8 +2345,12 @@ class TaskManagerDialog(QDialog):
 
         chosen = menu.exec(btn.mapToGlobal(QPoint(0, btn.height() + 2)))
         if chosen in actions:
-            self._on_status_cell_changed(task, actions[chosen], row_idx)
-            self._render_table()
+            new_st = actions[chosen]
+            if task.status != new_st:
+                self._on_status_cell_changed(task, new_st, row_idx)
+                # 특정 상태 탭("등록", "진행", "완료") 필터가 걸려있는 경우에만 목록 재필터링
+                if self._current_tab != "all" or (hasattr(self, "status_combo") and self.status_combo.currentText() not in ("상태", "전체", "")):
+                    self._apply_filters()
         elif chosen == act_manage:
             self._open_status_manager()
 
@@ -2699,18 +2738,29 @@ class TaskManagerDialog(QDialog):
             self._update_tab_styles()
 
     def _update_row_appearance(self, row: int, task: CalendarEntry) -> None:
-        """완료 상태 변경 시 해당 행 글자 스타일(취소선/색상) 즉시 갱신"""
+        """완료 상태 변경 시 해당 행 글자 스타일(취소선/색상) 및 상태 뱃지 즉시 갱신"""
         is_done = (task.status == "완료")
         text_color = QColor(self.palette.get("muted", "#A0AEC0")) if is_done else QColor(self.palette.get("text", "#2D3748"))
         row_font = make_ui_font_like(10)
         f = QFont(row_font)
         if is_done:
             f.setStrikeOut(True)
-        for col in (0, 2, 3, 4, 6):
-            it = self.table.item(row, col)
-            if it:
-                it.setFont(f)
-                it.setForeground(text_color)
+
+        self.table.blockSignals(True)
+        try:
+            for col in (0, 2, 3, 4, 6):
+                it = self.table.item(row, col)
+                if it:
+                    it.setFont(f)
+                    it.setForeground(text_color)
+        finally:
+            self.table.blockSignals(False)
+
+        w_status = self.table.cellWidget(row, 5)
+        if isinstance(w_status, PillBadgeWidget):
+            is_dark = self.palette.get("bg", "").lower() in ("#0a0c10", "#171b22") or self.palette.get("text", "").lower() == "#f3f6fb"
+            badge_status_cfg = STATUS_CONFIG_DARK if is_dark else STATUS_CONFIG
+            w_status.update_badge(task.status or "등록", badge_status_cfg)
 
     def _parse_user_date(self, text: str) -> date | None:
         """사용자가 입력한 문자열을 날짜 객체로 변환 (YYYY-MM-DD, YYYY.MM.DD, YYYYMMDD 등 지원)"""
@@ -2744,6 +2794,8 @@ class TaskManagerDialog(QDialog):
                 self.table.blockSignals(False)
                 QMessageBox.warning(self, "날짜 형식 오류", "날짜는 'YYYY-MM-DD' 형식으로 입력해주세요.\n(예: 2026-09-13)")
                 return
+            if task.day == parsed and task.start_date == parsed:
+                return
             task.day = parsed
             task.start_date = parsed
             if task.created_at:
@@ -2762,26 +2814,35 @@ class TaskManagerDialog(QDialog):
                 self.table.blockSignals(False)
                 QMessageBox.warning(self, "입력 오류", "업무 제목은 비워둘 수 없습니다.")
                 return
+            if (task.title or "") == new_val:
+                return
             task.title = new_val
             task.updated_at = now
 
         elif col == 3:  # 부서
+            if (getattr(task, "department", "") or "") == new_val:
+                return
             task.department = new_val
             task.updated_at = now
 
         elif col == 4:  # 기안자 / 작성자
+            if (task.assignee or "") == new_val:
+                return
             task.assignee = new_val
             task.updated_at = now
 
         elif col == 6:  # 비고 / 세부내용
-            task.description = item.text()
+            raw_desc = item.text()
+            if (task.description or "") == raw_desc:
+                return
+            task.description = raw_desc
             item.setToolTip(task.description)
             task.updated_at = now
 
         self.repository.upsert_entry(task)
         self.repository.save()
         if self.main_window and hasattr(self.main_window, "refresh"):
-            self.main_window.refresh()
+            QTimer.singleShot(0, self.main_window.refresh)
 
     def _on_category_cell_changed(self, task: CalendarEntry, new_cat: str) -> None:
         """셀 내 드롭다운에서 분류 변경 시 즉시 저장"""
@@ -2792,7 +2853,7 @@ class TaskManagerDialog(QDialog):
         self.repository.upsert_entry(task)
         self.repository.save()
         if self.main_window and hasattr(self.main_window, "refresh"):
-            self.main_window.refresh()
+            QTimer.singleShot(0, self.main_window.refresh)
 
     def _on_status_cell_changed(self, task: CalendarEntry, new_status: str, row_idx: int) -> None:
         """셀 내 드롭다운에서 상태 변경 시 즉시 저장 및 스타일 반영"""
@@ -2803,7 +2864,7 @@ class TaskManagerDialog(QDialog):
         self.repository.upsert_entry(task)
         self.repository.save()
         if self.main_window and hasattr(self.main_window, "refresh"):
-            self.main_window.refresh()
+            QTimer.singleShot(0, self.main_window.refresh)
         self._update_stats_label()
         self._update_row_appearance(row_idx, task)
 
@@ -3133,9 +3194,8 @@ class TaskManagerDialog(QDialog):
         known_depts = [t.department for t in self._all_tasks if getattr(t, "department", "")]
         dlg = TaskEditDialog(self, self.repository, task, known_authors, palette=self.palette, known_depts=known_depts)
         if dlg.exec() == QDialog.Accepted:
-            self.repository.save()
             if self.main_window and hasattr(self.main_window, "refresh"):
-                self.main_window.refresh()
+                QTimer.singleShot(0, self.main_window.refresh)
             self._refresh_filter_categories()
             self._refresh_filter_statuses()
             self.reload_tasks()
