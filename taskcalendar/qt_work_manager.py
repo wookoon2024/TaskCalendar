@@ -3642,7 +3642,7 @@ class WorkManagerDialog(QDialog):
         # =========================================================================
         self.bottom_bar = QFrame()
         self.bottom_bar.setObjectName("tabBarContainer")
-        self.bottom_bar.setFixedHeight(32)
+        self.bottom_bar.setFixedHeight(34)
         self.bottom_bar.setStyleSheet("""
             QFrame#tabBarContainer {
                 background-color: transparent;
@@ -3737,34 +3737,34 @@ class WorkManagerDialog(QDialog):
         # [저장(S)] 은 원래 우측 끝 위치를 유지한다.
         self._right_tools_group = QWidget()
         self._right_tools_group.setObjectName("wmRightToolsGroup")
-        self._right_tools_group.setFixedHeight(32)
+        self._right_tools_group.setFixedHeight(34)
         self._right_tools_group.setStyleSheet(
             "#wmRightToolsGroup { background: transparent; border: none; }")
         _rtg = QHBoxLayout(self._right_tools_group)
-        _rtg.setContentsMargins(0, 0, 0, 0)
-        _rtg.setSpacing(6)
+        _rtg.setContentsMargins(0, 0, 0, 5)
+        _rtg.setSpacing(5)
 
-        # 탭 우측 끝 도구: [전체화면(F12)] [템플릿] [저장(S)] 나란히 배치 (세로 크기 및 글꼴 크기 통일)
+        # 탭 우측 끝 도구: [전체화면(F12)] [템플릿] [저장(S)] 나란히 배치 (컴팩트 높이 24px, 하단 여백 확보)
         self.btn_fullscreen = QPushButton("전체화면(F12)")
-        self.btn_fullscreen.setFixedHeight(30)
+        self.btn_fullscreen.setFixedHeight(24)
         self.btn_fullscreen.setAutoDefault(False)
         self.btn_fullscreen.setDefault(False)
         self.btn_fullscreen.setToolTip("에디터 전체화면 토글 (단축키: F12, Ctrl+Enter)")
         self.btn_fullscreen.setStyleSheet(self._toolbar_sub_btn_style())
         self.btn_fullscreen.clicked.connect(self._toggle_editor_fullscreen)
-        _rtg.addWidget(self.btn_fullscreen, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+        _rtg.addWidget(self.btn_fullscreen, 0, alignment=Qt.AlignmentFlag.AlignBottom)
 
         self.btn_template = QPushButton("템플릿")
-        self.btn_template.setFixedHeight(30)
+        self.btn_template.setFixedHeight(24)
         self.btn_template.setAutoDefault(False)
         self.btn_template.setDefault(False)
         self.btn_template.setToolTip("템플릿 (이미지 템플릿, 업무 템플릿)")
         self.btn_template.setStyleSheet(self._toolbar_sub_btn_style())
         self.btn_template.clicked.connect(self._show_template_dropdown_menu)
-        _rtg.addWidget(self.btn_template, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+        _rtg.addWidget(self.btn_template, 0, alignment=Qt.AlignmentFlag.AlignBottom)
 
         self.btn_save_work = QPushButton("저장(S)")
-        self.btn_save_work.setFixedHeight(30)
+        self.btn_save_work.setFixedHeight(24)
         self.btn_save_work.setAutoDefault(False)
         self.btn_save_work.setDefault(False)
         self.btn_save_work.setToolTip("현재 업무 문서 및 변경사항 저장 (Ctrl+S)")
@@ -3773,10 +3773,10 @@ class WorkManagerDialog(QDialog):
         self.btn_save_work.clicked.connect(self._on_save_button_clicked)
         self._shortcut_save_alt = QShortcut(QKeySequence("Alt+S"), self)
         self._shortcut_save_alt.activated.connect(self._on_save_button_clicked)
-        _rtg.addWidget(self.btn_save_work, 0, alignment=Qt.AlignmentFlag.AlignVCenter)
+        _rtg.addWidget(self.btn_save_work, 0, alignment=Qt.AlignmentFlag.AlignBottom)
 
         bottom_layout.addWidget(self._right_tools_group, 0,
-                                alignment=Qt.AlignmentFlag.AlignVCenter)
+                                alignment=Qt.AlignmentFlag.AlignBottom)
 
         main_layout.addWidget(self.bottom_bar)
 
@@ -8825,9 +8825,9 @@ class WorkManagerDialog(QDialog):
                 background-color: {accent};
                 color: {btn_text};
                 border: 1px solid {accent};
-                border-radius: 6px;
-                padding: 4px 14px;
-                font-size: 12px;
+                border-radius: 4px;
+                padding: 2px 10px;
+                font-size: 11px;
                 font-weight: 600;
             }}
             QPushButton:hover {{
@@ -8883,10 +8883,10 @@ class WorkManagerDialog(QDialog):
                 background-color: {panel_alt};
                 color: {text};
                 border: 1px solid {line};
-                border-radius: 6px;
-                padding: 4px 14px;
-                font-size: 12px;
-                font-weight: 600;
+                border-radius: 4px;
+                padding: 2px 10px;
+                font-size: 11px;
+                font-weight: 500;
             }}
             QPushButton:hover {{
                 background-color: {accent_soft};
