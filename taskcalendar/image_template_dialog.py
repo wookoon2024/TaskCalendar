@@ -250,7 +250,9 @@ class ImageTemplateDialog(QDialog):
         # 기존 선택 유지 또는 0번 선택
         if curr_row >= self.cat_list.count():
             curr_row = 0
+        self.cat_list.blockSignals(True)
         self.cat_list.setCurrentRow(curr_row)
+        self.cat_list.blockSignals(False)
         self._on_category_changed(curr_row)
 
     def _on_category_changed(self, row: int) -> None:
@@ -276,12 +278,16 @@ class ImageTemplateDialog(QDialog):
         return "일러스트"
 
     def _render_gallery(self, filter_cat: str) -> None:
-        # 기존 그리드 아이템 정리
-        while self.gallery_grid.count():
-            item = self.gallery_grid.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
+        # 기존 컨테이너 및 카드들을 완전히 제거하여 잔상/중복 렌더링 방지
+        old_content = self.gallery_area.takeWidget()
+        if old_content:
+            old_content.deleteLater()
+
+        self.gallery_content = QWidget()
+        self.gallery_grid = QGridLayout(self.gallery_content)
+        self.gallery_grid.setContentsMargins(12, 12, 12, 12)
+        self.gallery_grid.setSpacing(10)
+        self.gallery_area.setWidget(self.gallery_content)
 
         self._current_filtered_items = [
             it for it in self.templates
@@ -314,6 +320,7 @@ class ImageTemplateDialog(QDialog):
         for i, item_data in enumerate(items_to_render):
             idx = start_idx + i
             card = QFrame()
+            card.setAutoFillBackground(True)
             card.setStyleSheet(f"""
                 QFrame {{
                     background-color: {panel};
@@ -373,7 +380,10 @@ class ImageTemplateDialog(QDialog):
             self.gallery_grid.addWidget(card, row, col)
 
         self._rendered_count = end_idx
-        self.gallery_grid.setRowStretch((self._rendered_count + cols - 1) // cols, 1)
+        for r in range(self.gallery_grid.rowCount() + 2):
+            self.gallery_grid.setRowStretch(r, 0)
+        last_row = (self._rendered_count + cols - 1) // cols
+        self.gallery_grid.setRowStretch(last_row, 1)
 
     def _on_gallery_scroll(self, value: int) -> None:
         """스크롤이 85% 이상 내려가면 다음 배치 자동 로드"""
