@@ -3817,6 +3817,12 @@ class TaskExportDialog(QDialog):
                 border-bottom: 1px solid {line};
                 border-right: 1px solid {line};
             }}
+            QTableCornerButton::section {{
+                background-color: {panel_alt};
+                border: none;
+                border-bottom: 1px solid {line};
+                border-right: 1px solid {line};
+            }}
         """)
         vbox.addWidget(self.tbl_table_preview, 1)
 
@@ -4152,6 +4158,12 @@ class TaskExportDialog(QDialog):
                 font-size: 11px;
                 font-weight: bold;
                 padding: 6px;
+                border: none;
+                border-bottom: 1px solid {line};
+                border-right: 1px solid {line};
+            }}
+            QTableCornerButton::section {{
+                background-color: {panel_alt};
                 border: none;
                 border-bottom: 1px solid {line};
                 border-right: 1px solid {line};

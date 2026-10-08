@@ -54,7 +54,7 @@ from PySide6.QtWidgets import (
 )
 
 from taskcalendar.rich_text_edit import RichTextEdit
-from taskcalendar.fonts import DEFAULT_FAMILY, DEFAULT_SCALE, SCALE_OPTIONS, font_family_css, make_ui_font_like, scale_px, ui_font_family
+from taskcalendar.fonts import DEFAULT_FAMILY, DEFAULT_SCALE, SCALE_OPTIONS, font_family_css, make_ui_font, make_ui_font_like, scale_px, ui_font_family
 from taskcalendar.models import (
     ALERT_OPTIONS,
     COLOR_OPTIONS,
@@ -1043,6 +1043,7 @@ class IconPickerPopup(QDialog):
 class EntryDialog(QDialog):
     def __init__(self, parent, entry_type: EntryType, selected_day: date | None, entry: CalendarEntry | None = None, restore_mode: bool = False) -> None:
         self._owner_window = parent
+        self.entry_type = entry_type
         logger.info(f"[EntryDialog.__init__] entry_type={entry_type}, id={entry.entry_id if entry else None}, title='{entry.title if entry else ''}', restore={restore_mode}")
         if entry_type == EntryType.MEMO:
             super().__init__(None)
@@ -1053,7 +1054,6 @@ class EntryDialog(QDialog):
             super().__init__(parent)
             self.setWindowModality(Qt.WindowModality.WindowModal)
         self.palette = resolve_palette(parent)
-        self.entry_type = entry_type
         self.entry = entry
         self.result: CalendarEntry | None = None
         self.attachments = list(entry.attachments if entry else [])
@@ -3703,6 +3703,13 @@ class EntryDialog(QDialog):
             return
         super().reject()
 
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if getattr(self, "entry_type", None) == EntryType.MEMO and event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            parent = getattr(self, "_owner_window", None) or self.parent()
+            if parent and hasattr(parent, "_last_active_memo_dlg"):
+                parent._last_active_memo_dlg = self
+
     def mouseDoubleClickEvent(self, event) -> None:
         if self.entry_type == EntryType.MEMO and event.button() == Qt.MouseButton.LeftButton:
             r_dir = self._get_memo_resize_direction(event.globalPosition().toPoint())
@@ -3718,6 +3725,9 @@ class EntryDialog(QDialog):
 
     def mousePressEvent(self, event) -> None:
         if self.entry_type == EntryType.MEMO:
+            parent = getattr(self, "_owner_window", None) or self.parent()
+            if parent and hasattr(parent, "_last_active_memo_dlg"):
+                parent._last_active_memo_dlg = self
             if event.button() == Qt.MouseButton.RightButton:
                 self._show_memo_context_menu(event.globalPosition().toPoint())
                 event.accept()
@@ -5095,6 +5105,13 @@ class FloatingGroupDialog(QDialog):
         except Exception:
             pass
 
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            parent = getattr(self, "_owner_window", None) or self.parent()
+            if parent and hasattr(parent, "_last_active_memo_dlg"):
+                parent._last_active_memo_dlg = self
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._update_header_mode()
@@ -5913,7 +5930,7 @@ class EntryViewDialog(QDialog):
 
 
 class SettingsNavDelegate(QStyledItemDelegate):
-    """설정 좌측 메뉴 탭 항목 텍스트 렌더링 델리게이트 (업무분류 트리와 동일한 네이티브 ClearType 렌더링)"""
+    """설정 좌측 메뉴 탭 항목 렌더링 델리게이트 (안티앨리어싱 및 고품질 노힌팅 텍스트 렌더링)"""
 
     def __init__(self, parent=None, palette=None):
         super().__init__(parent)
@@ -5927,21 +5944,35 @@ class SettingsNavDelegate(QStyledItemDelegate):
         self.initStyleOption(opt, index)
         view = opt.widget
         is_sel = bool(view and view.selectionModel() and view.selectionModel().isSelected(index))
+        is_hover = bool(opt.state & QStyle.State_MouseOver)
 
-        opt.font.setFamily(ui_font_family())
-        opt.font.setPixelSize(13)
-        opt.font.setBold(True)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
-        text_color = self.palette.get("text", "#1F2328")
+        # 1. 배경 (선택 / 호버)
         if is_sel:
-            opt.palette.setColor(QPalette.ColorRole.Text, QColor(text_color))
-            opt.palette.setColor(QPalette.ColorRole.HighlightedText, QColor(text_color))
-        elif opt.state & QStyle.State_MouseOver:
-            opt.palette.setColor(QPalette.ColorRole.Text, QColor(text_color))
-        else:
-            opt.palette.setColor(QPalette.ColorRole.Text, QColor(text_color))
+            accent_soft = self.palette.get("accent_soft", "#E6F0EC")
+            painter.setBrush(QColor(accent_soft))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(opt.rect.adjusted(2, 2, -2, -2), 6, 6)
+        elif is_hover:
+            panel_alt = self.palette.get("panel_alt", "#F0EBE1")
+            painter.setBrush(QColor(panel_alt))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(opt.rect.adjusted(2, 2, -2, -2), 6, 6)
 
-        super().paint(painter, opt, index)
+        # 2. 텍스트
+        weight = QFont.Weight.Bold.value if is_sel else QFont.Weight.DemiBold.value
+        font = make_ui_font(13, weight=weight)
+        painter.setFont(font)
+        text_color = self.palette.get("text", "#1F2328")
+        painter.setPen(QColor(text_color))
+
+        text_rect = opt.rect.adjusted(16, 0, -8, 0)
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, opt.text or "")
+
+        painter.restore()
 
 
 class SettingsDialog(QDialog):
@@ -6049,14 +6080,14 @@ class SettingsDialog(QDialog):
         self.nav_list.setItemDelegate(SettingsNavDelegate(self.nav_list, self.palette))
         
         items = [
-            ("⚙️ 기본", 0),
-            ("📅 캘린더", 1),
-            ("📝 메모", 2),
-            ("📄 문서", 3),
-            ("📑 업무", 4),
-            ("🎨 스킨", 5),
-            ("⌨️ 단축키", 6),
-            ("💾 데이터", 7),
+            ("기본", 0),
+            ("캘린더", 1),
+            ("메모", 2),
+            ("문서", 3),
+            ("업무", 4),
+            ("스킨", 5),
+            ("단축키", 6),
+            ("데이터", 7),
         ]
         for label, idx in items:
             item = QListWidgetItem(label)

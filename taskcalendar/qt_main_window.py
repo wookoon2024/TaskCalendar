@@ -1228,6 +1228,7 @@ class MainWindow(QMainWindow):
         self._memo_card_widgets: dict[int, QWidget] = {}
         self._active_memo_dialogs: dict[int | str, EntryDialog] = {}
         self._active_group_dialogs: dict[str, QDialog] = {}
+        self._last_active_memo_dlg: QDialog | None = None
         self._calendar_clicked_since_restore = False
         self._pending_scroll_memo_id: int | None = None
         self._sticker_widgets: dict[str, StickerItem] = {}
@@ -2540,10 +2541,9 @@ class MainWindow(QMainWindow):
 
     def _toggle_window_visibility(self) -> None:
         if self.isVisible() and not self.isMinimized():
-            # 캘린더를 숨기면 Windows가 다음 창(다른 앱/바탕화면)을 활성화하면서 메모 위로 올린다.
-            # 숨기기 전에 메모를 최상위로 올려두어야 메모가 같이 사라지지 않고 그대로 떠 있는다.
-            self._set_memos_topmost(True)
             self.hide()
+            # 캘린더가 숨겨질 때 보던 메모가 다른 앱 뒤로 숨지 않도록 포그라운드 유지
+            QTimer.singleShot(0, self._maintain_memos_on_calendar_minimize)
             return
         self._restore_window_state()
 
@@ -2608,23 +2608,11 @@ class MainWindow(QMainWindow):
                 self.setGeometry(self._last_normal_geometry)
         self.activateWindow()
         self.raise_()
-        # 캘린더를 표시하면서 Windows가 캘린더를 메모/그룹 창 위로 올리므로, 캘린더만 다시 아래로 내린다.
-        self._keep_calendar_below_memos()
         QTimer.singleShot(0, self._finish_window_restore)
-        # 표시 직후 보정이 늦어지더라도 메모가 임시 최상위 상태로 남지 않게 한 번 더 되돌린다.
-        QTimer.singleShot(400, self._revert_memos_topmost)
-
-    def _revert_memos_topmost(self) -> None:
-        self._set_memos_topmost(False)
 
     def _finish_window_restore(self) -> None:
         self._suspend_window_state_tracking = False
         self._remember_window_state()
-        # 숨김 동안 다른 창에 가려지지 않도록 임시로 최상위로 올려둔 메모 상태를 되돌린다.
-        self._set_memos_topmost(False)
-        # 표시 직후 보정이 사용자가 캘린더를 클릭한 뒤에 실행되면 클릭 결과를 되돌려 버리므로 건너뛴다.
-        if not self._calendar_clicked_since_restore:
-            self._keep_calendar_below_memos()
 
     def _load_window_state(self) -> None:
         raw = self.repository.get_setting("window_state_v1", "")
@@ -6698,6 +6686,7 @@ class MainWindow(QMainWindow):
                             existing_dlg.raise_()
                             if not getattr(self, "_batch_updating_memos", False):
                                 existing_dlg.activateWindow()
+                            self._last_active_memo_dlg = existing_dlg
                             if force_top:
                                 from taskcalendar.desktop_services import force_window_to_foreground
                                 QTimer.singleShot(50, lambda d=existing_dlg: force_window_to_foreground(int(d.winId())))
@@ -6714,6 +6703,7 @@ class MainWindow(QMainWindow):
                 dialog.raise_()
                 if not restore_mode and not getattr(self, "_batch_updating_memos", False):
                     dialog.activateWindow()
+                self._last_active_memo_dlg = dialog
                 if force_top:
                     from taskcalendar.desktop_services import force_window_to_foreground
                     QTimer.singleShot(50, lambda d=dialog: force_window_to_foreground(int(d.winId())))
@@ -6975,6 +6965,41 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _maintain_memos_on_calendar_minimize(self) -> None:
+        """캘린더 최소화/숨김 시 활성 메모가 다른 외부 프로그램 창 뒤로 숨지 않도록 포그라운드 및 최상단 유지"""
+        visible_memos = [
+            dlg for dlg in list(getattr(self, "_active_memo_dialogs", {}).values()) + list(getattr(self, "_active_group_dialogs", {}).values())
+            if dlg and dlg.isVisible()
+        ]
+        if not visible_memos:
+            return
+
+        target_dlg = getattr(self, "_last_active_memo_dlg", None)
+        if target_dlg not in visible_memos:
+            target_dlg = visible_memos[-1]
+
+        try:
+            from taskcalendar.desktop_services import force_window_to_foreground
+            force_window_to_foreground(int(target_dlg.winId()))
+        except Exception:
+            target_dlg.raise_()
+            target_dlg.activateWindow()
+
+        try:
+            user32 = ctypes.windll.user32
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            for dlg in visible_memos:
+                if dlg is not target_dlg:
+                    try:
+                        h = int(dlg.winId())
+                        user32.SetWindowPos(ctypes.c_void_p(h), ctypes.c_void_p(0), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     def _keep_calendar_below_memos(self) -> None:
         """메모/그룹 창은 표시 상태/위치를 그대로 둔 채, 캘린더 창만 그 아래로 내린다.
 
@@ -7059,6 +7084,7 @@ class MainWindow(QMainWindow):
             dlg.show()
             dlg.raise_()
             dlg.activateWindow()
+            self._last_active_memo_dlg = dlg
             return dlg
 
         grp = self.repository.get_memo_group(group_id)
@@ -7070,6 +7096,7 @@ class MainWindow(QMainWindow):
         self._active_group_dialogs[group_id] = dlg
         dlg.show()
         dlg.raise_()
+        self._last_active_memo_dlg = dlg
         self._sync_open_group_ids(persist=True)
         return dlg
 
@@ -7247,6 +7274,10 @@ class MainWindow(QMainWindow):
     def changeEvent(self, event) -> None:  # noqa: N802
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange:
+            if self.isMinimized():
+                # 캘린더가 최소화될 때 작업 중이던 메모가 다른 외부 프로그램 창 뒤로 숨지 않도록 포그라운드 유지
+                QTimer.singleShot(0, self._maintain_memos_on_calendar_minimize)
+                QTimer.singleShot(50, self._maintain_memos_on_calendar_minimize)
             QTimer.singleShot(0, self._remember_window_state)
             self._schedule_calendar_rerender()
         QTimer.singleShot(80, self._stabilize_first_layout)
@@ -7348,6 +7379,9 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("topbar_window_controls", "1" if getattr(self, "_window_controls_visible", True) else "0")
             self._flush_repository_save()
             self.hide()
+            # 캘린더 창이 닫힐 때(트레이 숨김), 띄워둔 메모들이 다른 외부 창 뒤로 가려지지 않도록 포그라운드 유지
+            QTimer.singleShot(0, self._maintain_memos_on_calendar_minimize)
+            QTimer.singleShot(50, self._maintain_memos_on_calendar_minimize)
             event.ignore()
             return
         self._on_app_about_to_quit()
