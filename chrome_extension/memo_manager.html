@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>페이지 메모 관리 - 바로업무로 보내기</title>
+  <style>
+    :root {
+      --primary: #2563EB;
+      --primary-hover: #1D4ED8;
+      --border: #CBD5E1;
+      --light-blue: #EFF6FF;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Segoe UI", Roboto, sans-serif;
+      background: #F8FAFC;
+      color: #1E293B;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 900px; margin: 0 auto; padding: 22px 20px 60px; }
+
+    .page-head { margin-bottom: 16px; }
+    .page-head h1 { font-size: 20px; font-weight: 700; color: #1E293B; }
+    .page-head .sub { margin-top: 4px; color: #64748B; font-size: 12px; }
+
+    .toolbar {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+      background: #fff; border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px 14px; margin-bottom: 10px;
+    }
+    .toolbar .spacer { flex: 1; }
+    .toolbar .mode-group {
+      display: flex; align-items: center; gap: 12px;
+      background: #F1F5F9; border-radius: 6px; padding: 6px 12px;
+      font-size: 12px; color: #334155;
+    }
+    .toolbar .mode-group label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+    .toolbar .mode-group input { accent-color: var(--primary); }
+
+    .btn {
+      border-radius: 6px; padding: 8px 14px; font-size: 12px; font-weight: 700;
+      cursor: pointer; border: 1px solid var(--border); background: #fff; color: #1E293B;
+    }
+    .btn:hover { background: #F1F5F9; }
+    .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .btn-primary:hover { background: var(--primary-hover); }
+    .btn-danger { background: #FEE2E2; color: #B91C1C; border-color: #FECACA; }
+    .btn-danger:hover { background: #FCA5A5; }
+    .btn-mini { padding: 3px 9px; font-size: 11px; font-weight: 600; border-radius: 4px; }
+
+    .stats { font-size: 12px; color: #64748B; margin-bottom: 12px; }
+    .stats b { color: var(--primary); }
+
+    .empty {
+      text-align: center; color: #94A3B8; padding: 60px 20px;
+      background: #fff; border: 1px dashed var(--border); border-radius: 8px; font-size: 13px;
+    }
+
+    .pm-page {
+      background: #fff; border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px 14px; margin-bottom: 10px;
+    }
+    .pm-page-head { display: flex; align-items: flex-start; gap: 8px; }
+    .pm-url {
+      flex: 1; min-width: 0; font-family: "Consolas", monospace; font-size: 12px;
+      color: #1D4ED8; word-break: break-all;
+    }
+    .pm-badges { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 4px; }
+    .pill {
+      font-size: 10px; padding: 1px 7px; border-radius: 10px; font-weight: 600;
+    }
+    .pill-count { background: var(--light-blue); color: #1D4ED8; }
+    .pill-ignore { background: #FEF3C7; color: #B45309; }
+
+    .pm-memo {
+      border-top: 1px solid #F1F5F9; margin-top: 10px; padding-top: 10px;
+      display: flex; gap: 10px; align-items: flex-start;
+    }
+    .pm-memo:first-of-type { border-top: 1px solid #E2E8F0; }
+    .pm-memo-text {
+      flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word;
+      color: #1E293B; font-size: 13px;
+    }
+    .pm-memo-text.empty { color: #94A3B8; font-style: italic; }
+    .pm-memo-meta { font-size: 10px; color: #94A3B8; margin-top: 3px; }
+    .pm-memo-actions { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
+
+    .toast {
+      position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+      background: #1E293B; color: #fff; padding: 9px 18px; border-radius: 8px;
+      font-size: 12px; font-weight: 600; opacity: 0; pointer-events: none;
+      transition: opacity .2s ease; z-index: 50;
+    }
+    .toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="page-head">
+      <h1>🗒️ 페이지 메모 관리</h1>
+      <div class="sub">웹 페이지별로 등록한 플로팅 메모를 확인하고, 내보내기/가져오기로 다른 PC와 공유할 수 있습니다.</div>
+    </div>
+
+    <div class="toolbar">
+      <button type="button" class="btn btn-primary" id="btn-export">⬇️ 내보내기 (JSON)</button>
+      <button type="button" class="btn" id="btn-import">⬆️ 가져오기</button>
+      <input type="file" id="file-input" accept="application/json,.json" style="display:none">
+      <div class="spacer"></div>
+      <div class="mode-group">
+        <span>가져오기 방식:</span>
+        <label><input type="radio" name="importMode" value="merge" checked> 병합 (권장)</label>
+        <label><input type="radio" name="importMode" value="overwrite"> 덮어쓰기</label>
+      </div>
+    </div>
+
+    <div class="stats" id="stats"></div>
+    <div id="list"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="memo_manager.js"></script>
+</body>
+</html>

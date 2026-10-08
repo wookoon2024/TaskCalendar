@@ -6015,6 +6015,10 @@ class SettingsDialog(QDialog):
         current_doc_shortcut: str = "F5",
         current_work_shortcut: str = "F6",
         task_strikeout_completed: bool = True,
+        desktop_widget_enabled: bool = False,
+        desktop_widget_pinned: bool = True,
+        desktop_widget_locked: bool = False,
+        desktop_widget_opacity: int = 85,
     ) -> None:
         super().__init__(parent)
         self.palette = resolve_palette(parent)
@@ -6295,6 +6299,60 @@ class SettingsDialog(QDialog):
         cal_sidebar_layout.addWidget(self.calendar_sidebar_title_only_check)
 
         pg_cal_layout.addWidget(cal_sidebar_card)
+
+        # 3. 바탕화면 달력 위젯 카드
+        widget_card = QFrame()
+        widget_card.setObjectName("card")
+        widget_layout = QVBoxLayout(widget_card)
+        widget_layout.setContentsMargins(14, 12, 14, 12)
+        widget_layout.setSpacing(8)
+
+        widget_title = QLabel("바탕화면 달력 위젯")
+        widget_title.setObjectName("sectionTitle")
+        widget_layout.addWidget(widget_title)
+
+        self.desktop_widget_check = QCheckBox("바탕화면 달력 위젯 사용")
+        self.desktop_widget_check.setChecked(desktop_widget_enabled)
+        widget_layout.addWidget(self.desktop_widget_check)
+
+        widget_opts_container = QWidget()
+        w_opts_layout = QVBoxLayout(widget_opts_container)
+        w_opts_layout.setContentsMargins(20, 0, 0, 0)
+        w_opts_layout.setSpacing(6)
+
+        self.desktop_widget_pinned_check = QCheckBox("바탕화면 벽지 계층 고정 (Win+D 눌러도 사라지지 않고 유지)")
+        self.desktop_widget_pinned_check.setChecked(desktop_widget_pinned)
+        w_opts_layout.addWidget(self.desktop_widget_pinned_check)
+
+        self.desktop_widget_locked_check = QCheckBox("위젯 위치 및 크기 잠금 (실수로 마우스에 밀리지 않게 고정)")
+        self.desktop_widget_locked_check.setChecked(desktop_widget_locked)
+        w_opts_layout.addWidget(self.desktop_widget_locked_check)
+
+        w_opacity_row = QHBoxLayout()
+        w_opacity_row.setContentsMargins(0, 0, 0, 0)
+        w_opacity_row.setSpacing(8)
+        w_op_lbl = QLabel("위젯 불투명도:")
+        w_op_lbl.setObjectName("muted")
+        w_opacity_row.addWidget(w_op_lbl)
+
+        self.desktop_widget_opacity_combo = QComboBox()
+        for p in (30, 50, 70, 85, 95, 100):
+            self.desktop_widget_opacity_combo.addItem(f"{p}%", p)
+        cur_op_idx = self.desktop_widget_opacity_combo.findData(desktop_widget_opacity)
+        if cur_op_idx >= 0:
+            self.desktop_widget_opacity_combo.setCurrentIndex(cur_op_idx)
+        else:
+            self.desktop_widget_opacity_combo.setCurrentIndex(3)
+        self.desktop_widget_opacity_combo.setFixedWidth(100)
+        w_opacity_row.addWidget(self.desktop_widget_opacity_combo)
+        w_opacity_row.addStretch(1)
+        w_opts_layout.addLayout(w_opacity_row)
+
+        widget_layout.addWidget(widget_opts_container)
+        self.desktop_widget_check.toggled.connect(widget_opts_container.setEnabled)
+        widget_opts_container.setEnabled(desktop_widget_enabled)
+
+        pg_cal_layout.addWidget(widget_card)
         pg_cal_layout.addStretch(1)
 
         page_skin = QWidget()
@@ -7303,6 +7361,10 @@ class SettingsDialog(QDialog):
             "work_delete_attachments_default": self.work_delete_attachments_check.isChecked(),
             "work_default_cycle": getattr(self, "_work_default_cycle", "수시"),
             "task_strikeout_completed": self.task_strikeout_completed_check.isChecked(),
+            "desktop_widget_enabled": self.desktop_widget_check.isChecked(),
+            "desktop_widget_pinned": self.desktop_widget_pinned_check.isChecked(),
+            "desktop_widget_locked": self.desktop_widget_locked_check.isChecked(),
+            "desktop_widget_opacity": int(self.desktop_widget_opacity_combo.currentData() or 85),
         }
         self.accept()
 

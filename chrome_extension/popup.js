@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
     viewConfig: document.getElementById('view-config'),
     btnToggleConfig: document.getElementById('btn-toggle-config'),
     btnPickElement: document.getElementById('btn-pick-element'),
+    btnOpenMemoManager: document.getElementById('btn-open-memo-manager'),
     siteRuleBadge: document.getElementById('site-rule-status'),
     siteDomainLabel: document.getElementById('site-domain-label'),
     cfgDomainBadge: document.getElementById('cfg-domain-badge'),
@@ -147,6 +148,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   els.btnToggleConfig.addEventListener('click', () => switchView('config'));
   els.btnCfgCancel.addEventListener('click', () => switchView('register'));
+
+  // 🗒️ 페이지 메모 관리 페이지 열기
+  if (els.btnOpenMemoManager) {
+    els.btnOpenMemoManager.addEventListener('click', () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL('memo_manager.html') });
+      window.close();
+    });
+  }
 
   // 🎯 타겟 필드 선택 및 헤더 버튼 상태 연동
   let targetPickField = 'all';

@@ -6,6 +6,11 @@ function setupContextMenu() {
         title: "바로업무로 보내기",
         contexts: ["page", "selection", "link", "image"]
       });
+      chrome.contextMenus.create({
+        id: "taskcalendar-page-memo",
+        title: "해당 페이지 메모 등록",
+        contexts: ["page", "selection", "link", "image"]
+      });
     });
   } catch(e) {}
 }
@@ -1898,6 +1903,18 @@ function triggerCapture(tab, clickedLinkUrl, clickedSelection, fallbackUrl, targ
 
 // 1. 우클릭 컨텍스트 메뉴 클릭 (iframe 내 발생 시 info.frameId, info.frameUrl 전달)
 chrome.contextMenus.onClicked.addListener((info, tab) => {
+  if (info.menuItemId === "taskcalendar-page-memo") {
+    if (tab && tab.id) {
+      // 페이지 메모는 상단 프레임(frameId 0)에만 띄운다 (iframe 중복 방지)
+      chrome.tabs.sendMessage(
+        tab.id,
+        { action: "startPageMemo", pageUrl: info.pageUrl || tab.url || "" },
+        { frameId: 0 },
+        () => { void chrome.runtime.lastError; }
+      );
+    }
+    return;
+  }
   if (info.menuItemId !== "taskcalendar-add") return;
   triggerCapture(tab, info.linkUrl || "", info.selectionText || "", info.frameUrl || info.pageUrl || "", info.frameId);
 });

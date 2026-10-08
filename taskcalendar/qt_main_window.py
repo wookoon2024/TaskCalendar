@@ -1229,6 +1229,7 @@ class MainWindow(QMainWindow):
         self._active_memo_dialogs: dict[int | str, EntryDialog] = {}
         self._active_group_dialogs: dict[str, QDialog] = {}
         self._last_active_memo_dlg: QDialog | None = None
+        self._desktop_widget = None
         self._calendar_clicked_since_restore = False
         self._pending_scroll_memo_id: int | None = None
         self._sticker_widgets: dict[str, StickerItem] = {}
@@ -1290,6 +1291,8 @@ class MainWindow(QMainWindow):
         if app_inst:
             app_inst.aboutToQuit.connect(self._on_app_about_to_quit)
         QTimer.singleShot(50, self._prewarm_work_manager)
+        if self.repository.get_setting("desktop_widget_enabled", "0") == "1":
+            QTimer.singleShot(150, lambda: self._toggle_desktop_widget(True))
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -1474,6 +1477,10 @@ class MainWindow(QMainWindow):
 
         action_date_calc = self.service_menu.addAction("날짜 계산기")
         action_date_calc.triggered.connect(self._open_date_calculator)
+
+        self.service_menu.addSeparator()
+        action_desktop_widget = self.service_menu.addAction("🖥 바탕화면 달력 위젯 (DesktopCal)")
+        action_desktop_widget.triggered.connect(lambda: self._toggle_desktop_widget())
 
         self.service_button.clicked.connect(self._show_service_menu)
         tac_layout.addWidget(self.service_button)
@@ -2056,6 +2063,11 @@ class MainWindow(QMainWindow):
         work_open_action = menu.addAction("업무 관리 열기")
         work_open_action.triggered.connect(self._open_work_from_tray)
         menu.addSeparator()
+        self.act_desktop_widget = menu.addAction("🖥 바탕화면 달력 위젯")
+        self.act_desktop_widget.setCheckable(True)
+        self.act_desktop_widget.setChecked(self.repository.get_setting("desktop_widget_enabled", "0") == "1")
+        self.act_desktop_widget.triggered.connect(lambda: self._toggle_desktop_widget())
+        menu.addSeparator()
         settings_action = menu.addAction("환경설정")
         settings_action.triggered.connect(self._open_settings_from_tray)
         menu.addSeparator()
@@ -2581,6 +2593,8 @@ class MainWindow(QMainWindow):
             self._schedule_sticker_rebase()
         else:
             self._render_stickers()
+        if getattr(self, "_desktop_widget", None) is not None and self._desktop_widget.isVisible():
+            self._desktop_widget.refresh_calendar()
         self._calendar_rerender_pending = False
 
     def _remember_window_state(self) -> None:
@@ -4172,6 +4186,8 @@ class MainWindow(QMainWindow):
                 self._task_manager_dialog.apply_palette(self.palette)
             if getattr(self, "_work_manager_dialog", None) is not None:
                 self._work_manager_dialog.apply_palette(self.palette)
+            if getattr(self, "_desktop_widget", None) is not None and self._desktop_widget.isVisible():
+                self._desktop_widget.apply_theme()
             self.sticker_toolbar.setStyleSheet(
                 """
                 QFrame#stickerToolbar {
@@ -4318,6 +4334,8 @@ class MainWindow(QMainWindow):
         self._apply_clickable_cursor()
         if getattr(self, "_work_manager_dialog", None) is not None and self._work_manager_dialog.isVisible():
             self._work_manager_dialog._refresh_work_schedules_list()
+        if getattr(self, "_desktop_widget", None) is not None and self._desktop_widget.isVisible():
+            self._desktop_widget.refresh_calendar()
 
     def _get_calendar_task_statuses(self) -> list[str]:
         from taskcalendar.qt_task_manager import get_calendar_task_statuses
@@ -5682,6 +5700,10 @@ class MainWindow(QMainWindow):
                         child.setFont(child_font)
             except Exception:
                 pass
+        # 바탕화면 달력 위젯에도 새 폰트 및 배율 적용
+        if getattr(self, "_desktop_widget", None) is not None and self._desktop_widget.isVisible():
+            self._desktop_widget.apply_theme()
+            self._desktop_widget.refresh_calendar()
 
     def _reload_and_apply_all_settings(self, companion_settings: dict[str, str] | None = None) -> None:
         """
@@ -6296,6 +6318,10 @@ class MainWindow(QMainWindow):
             work_delete_attachments_default=self.repository.get_setting("work_delete_attachments_default", "1") != "0",
             work_default_cycle=self.repository.get_setting("work_default_cycle", "수시"),
             task_strikeout_completed=self.repository.get_setting("task_strikeout_completed", "1") == "1",
+            desktop_widget_enabled=self.repository.get_setting("desktop_widget_enabled", "0") == "1",
+            desktop_widget_pinned=self.repository.get_setting("desktop_widget_pinned", "1") == "1",
+            desktop_widget_locked=self.repository.get_setting("desktop_widget_locked", "0") == "1",
+            desktop_widget_opacity=int(self.repository.get_setting("desktop_widget_opacity", "85")),
         )
         if dialog.exec() and dialog.result is not None:
             action = str(dialog.result.get("action", "apply"))
@@ -6425,6 +6451,30 @@ class MainWindow(QMainWindow):
                     if hasattr(self._task_manager_dialog, "update_settings"):
                         self._task_manager_dialog.update_settings()
 
+            if "desktop_widget_enabled" in dialog.result:
+                new_widget_enabled = bool(dialog.result["desktop_widget_enabled"])
+                new_pinned = bool(dialog.result.get("desktop_widget_pinned", True))
+                new_locked = bool(dialog.result.get("desktop_widget_locked", False))
+                new_opacity = int(dialog.result.get("desktop_widget_opacity", 85))
+
+                self.repository.set_setting("desktop_widget_enabled", "1" if new_widget_enabled else "0")
+                self.repository.set_setting("desktop_widget_pinned", "1" if new_pinned else "0")
+                self.repository.set_setting("desktop_widget_locked", "1" if new_locked else "0")
+                self.repository.set_setting("desktop_widget_opacity", str(new_opacity))
+
+                if getattr(self, "_desktop_widget", None) is not None:
+                    self._desktop_widget.is_pinned = new_pinned
+                    self._desktop_widget.is_locked = new_locked
+                    self._desktop_widget.opacity_pct = new_opacity
+                    self._desktop_widget.btn_lock.setText("🔒" if new_locked else "🔓")
+                    if hasattr(self._desktop_widget, "slider_opacity"):
+                        self._desktop_widget.slider_opacity.setValue(new_opacity)
+                    self._desktop_widget.apply_theme()
+                    self._desktop_widget.refresh_calendar()
+                    self._desktop_widget._apply_desktop_zorder()
+
+                self._toggle_desktop_widget(new_widget_enabled)
+
             if not self._sticker_animation_enabled:
                 self._sticker_animation_state.clear()
             self.repository.save()
@@ -6493,6 +6543,40 @@ class MainWindow(QMainWindow):
                 self._work_manager_dialog.activateWindow()
         except Exception:
             logger.exception("Failed to open WorkManagerDialog")
+
+    def _toggle_desktop_widget(self, enable: bool | None = None) -> None:
+        """바탕화면 달력 위젯(DesktopCal 모드) 켜기 / 끄기 토글"""
+        try:
+            from taskcalendar.qt_desktop_widget import DesktopCalendarWidget
+
+            if getattr(self, "_desktop_widget", None) is None:
+                self._desktop_widget = DesktopCalendarWidget(self)
+
+            if enable is None:
+                should_show = not self._desktop_widget.isVisible()
+            else:
+                should_show = bool(enable)
+
+            if should_show:
+                self._desktop_widget.show()
+                self._desktop_widget.refresh_calendar()
+                self.repository.set_setting("desktop_widget_enabled", "1")
+                if getattr(self._desktop_widget, "is_pinned", True):
+                    self._desktop_widget._apply_desktop_zorder()
+            else:
+                self._desktop_widget.hide()
+                self.repository.set_setting("desktop_widget_enabled", "0")
+
+            self._flush_repository_save()
+            self._update_desktop_widget_actions()
+        except Exception:
+            logger.exception("Failed to toggle desktop widget")
+
+    def _update_desktop_widget_actions(self) -> None:
+        """트레이 및 메뉴의 위젯 체크박스 상태 동기화"""
+        is_enabled = self.repository.get_setting("desktop_widget_enabled", "0") == "1"
+        if getattr(self, "act_desktop_widget", None) is not None:
+            self.act_desktop_widget.setChecked(is_enabled)
 
     def receive_external_entry(self, data: dict) -> None:
         """Handle data received from Chrome extension via IPC protocol."""
@@ -7357,6 +7441,11 @@ class MainWindow(QMainWindow):
             if getattr(self, "_work_manager_dialog", None) is not None:
                 try:
                     self._work_manager_dialog.close()
+                except Exception:
+                    pass
+            if getattr(self, "_desktop_widget", None) is not None:
+                try:
+                    self._desktop_widget.close()
                 except Exception:
                     pass
             self._flush_repository_save()

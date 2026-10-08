@@ -63,3 +63,7 @@ generated/
 build.txt
 run.bat
 attachments/
+ocr_results*.txt
+scratch_*.ps1
+scratch_*.py
+
