@@ -3402,17 +3402,17 @@ class TaskExportDialog(QDialog):
         # Tab 1: 공문 본문 나열형
         tab_list = QWidget()
         self._setup_list_tab(tab_list)
-        self.tab_widget.addTab(tab_list, "📝  공문 본문 나열형")
+        self.tab_widget.addTab(tab_list, "공문 본문 나열형")
 
         # Tab 2: 공문 붙임 표 형식
         tab_table = QWidget()
         self._setup_table_tab(tab_table)
-        self.tab_widget.addTab(tab_table, "📊  공문 붙임 표 형식")
+        self.tab_widget.addTab(tab_table, "공문 붙임 표 형식")
 
         # Tab 3: 표준 업무관리대장
         tab_standard = QWidget()
         self._setup_standard_tab(tab_standard)
-        self.tab_widget.addTab(tab_standard, "📁  표준 업무관리대장")
+        self.tab_widget.addTab(tab_standard, "표준 업무관리대장")
 
         layout.addWidget(self.tab_widget, 1)
 
@@ -3430,7 +3430,7 @@ class TaskExportDialog(QDialog):
         btn_text = self.palette.get("button_text", "#FFFFFF")
 
         # 상단 안내 배너
-        lbl_guide = QLabel("💡 <b>공문 본문 작성 시 바로 붙여넣거나(Ctrl+V)</b> 엑셀로 저장할 수 있도록 서식에 맞춰 한 줄씩 나열합니다.")
+        lbl_guide = QLabel("<b>공문 본문 작성 시 바로 붙여넣거나(Ctrl+V)</b> 엑셀로 저장할 수 있도록 서식에 맞춰 한 줄씩 나열합니다.")
         lbl_guide.setStyleSheet(f"background: {panel_alt}; border: 1px solid {line}; border-radius: 6px; padding: 8px 10px; font-size: 12px; color: {text};")
         vbox.addWidget(lbl_guide)
 
@@ -3533,7 +3533,7 @@ class TaskExportDialog(QDialog):
         btn_bar.addWidget(self.lbl_list_status)
         btn_bar.addStretch(1)
 
-        self.btn_copy_list = QPushButton("📋  본문 텍스트 복사 (클립보드)")
+        self.btn_copy_list = QPushButton("본문 텍스트 복사 (클립보드)")
         self.btn_copy_list.setFixedHeight(32)
         self.btn_copy_list.setStyleSheet(f"""
             QPushButton {{
@@ -3552,7 +3552,7 @@ class TaskExportDialog(QDialog):
         self.btn_copy_list.clicked.connect(self._copy_list_to_clipboard)
         btn_bar.addWidget(self.btn_copy_list)
 
-        self.btn_excel_list = QPushButton("📊  엑셀로 저장 (.xlsx)")
+        self.btn_excel_list = QPushButton("엑셀로 저장 (.xlsx)")
         self.btn_excel_list.setFixedHeight(32)
         self.btn_excel_list.setStyleSheet(f"""
             QPushButton {{
@@ -3645,7 +3645,7 @@ class TaskExportDialog(QDialog):
         lines = self._generate_list_lines()
         text = "\n".join(lines)
         QApplication.clipboard().setText(text)
-        self.lbl_list_status.setText("✅ 클립보드에 복사되었습니다! 공문 본문에 바로 붙여넣기(Ctrl+V)하세요.")
+        self.lbl_list_status.setText("클립보드에 복사되었습니다. 공문 본문에 바로 붙여넣기(Ctrl+V)하세요.")
         QTimer.singleShot(3500, lambda: self.lbl_list_status.setText(""))
 
     def _export_list_to_excel(self) -> None:
@@ -3723,7 +3723,7 @@ class TaskExportDialog(QDialog):
         accent = self.palette.get("accent", "#1F7A67")
         btn_text = self.palette.get("button_text", "#FFFFFF")
 
-        lbl_guide = QLabel("💡 <b>공문서 붙임(첨부물)용 표 서식</b>의 열(Column)과 제목을 원하는 형태로 자유롭게 구성합니다.")
+        lbl_guide = QLabel("<b>공문서 붙임(첨부물)용 표 서식</b>의 열(Column)과 제목을 원하는 형태로 자유롭게 구성합니다.")
         lbl_guide.setStyleSheet(f"background: {panel_alt}; border: 1px solid {line}; border-radius: 6px; padding: 8px 10px; font-size: 12px; color: {text};")
         vbox.addWidget(lbl_guide)
 
@@ -3738,10 +3738,10 @@ class TaskExportDialog(QDialog):
         self.combo_table_preset = QComboBox()
         self.combo_table_preset.setFixedHeight(28)
         self.combo_table_preset.addItems([
-            "📌 공문 붙임 표 기본 (관련근거 | 처리내역/자료명 | 처리구분 | 요청자 | 비고)",
-            "📌 업무 처리 대장 (순번 | 등록일자 | 부서 | 업무제목 | 기안자 | 상태)",
-            "📌 간편 목록 (순번 | 업무제목 | 비고)",
-            "✏️ 사용자 직접 지정",
+            "공문 붙임 표 기본 (관련근거 | 처리내역/자료명 | 처리구분 | 요청자 | 비고)",
+            "업무 처리 대장 (순번 | 등록일자 | 부서 | 업무제목 | 기안자 | 상태)",
+            "간편 목록 (순번 | 업무제목 | 비고)",
+            "사용자 직접 지정",
         ])
         self.combo_table_preset.currentIndexChanged.connect(self._on_table_preset_changed)
         top_bar.addWidget(self.combo_table_preset, 1)
@@ -3829,7 +3829,7 @@ class TaskExportDialog(QDialog):
         btn_bar.addWidget(self.lbl_table_status)
         btn_bar.addStretch(1)
 
-        self.btn_copy_table_tsv = QPushButton("📋  표 텍스트 복사 (한글/엑셀 붙여넣기용)")
+        self.btn_copy_table_tsv = QPushButton("표 텍스트 복사 (한글/엑셀 붙여넣기용)")
         self.btn_copy_table_tsv.setFixedHeight(32)
         self.btn_copy_table_tsv.setStyleSheet(f"""
             QPushButton {{
@@ -3848,7 +3848,7 @@ class TaskExportDialog(QDialog):
         self.btn_copy_table_tsv.clicked.connect(self._copy_table_tsv)
         btn_bar.addWidget(self.btn_copy_table_tsv)
 
-        self.btn_excel_table = QPushButton("📊  엑셀로 저장 (.xlsx)")
+        self.btn_excel_table = QPushButton("엑셀로 저장 (.xlsx)")
         self.btn_excel_table.setFixedHeight(32)
         self.btn_excel_table.setStyleSheet(f"""
             QPushButton {{
@@ -4019,7 +4019,7 @@ class TaskExportDialog(QDialog):
 
         tsv_text = "\n".join(lines)
         QApplication.clipboard().setText(tsv_text)
-        self.lbl_table_status.setText("✅ 표가 복사되었습니다! 한글(HWP)이나 엑셀에 바로 붙여넣기(Ctrl+V)하세요.")
+        self.lbl_table_status.setText("표가 복사되었습니다. 한글(HWP)이나 엑셀에 바로 붙여넣기(Ctrl+V)하세요.")
         QTimer.singleShot(3500, lambda: self.lbl_table_status.setText(""))
 
     def _export_table_to_excel(self) -> None:
@@ -4128,7 +4128,7 @@ class TaskExportDialog(QDialog):
         accent = self.palette.get("accent", "#1F7A67")
         btn_text = self.palette.get("button_text", "#FFFFFF")
 
-        lbl_guide = QLabel("💡 <b>전체 8개 열</b>(번호, 상태, 등록일자, 분류, 부서, 업무제목, 기안자, 비고/세부내용)을 모두 포함하는 표준 업무관리대장 서식입니다.")
+        lbl_guide = QLabel("<b>전체 8개 열</b>(번호, 상태, 등록일자, 분류, 부서, 업무제목, 기안자, 비고/세부내용)을 모두 포함하는 표준 업무관리대장 서식입니다.")
         lbl_guide.setStyleSheet(f"background: {panel_alt}; border: 1px solid {line}; border-radius: 6px; padding: 8px 10px; font-size: 12px; color: {text};")
         vbox.addWidget(lbl_guide)
 
@@ -4187,7 +4187,7 @@ class TaskExportDialog(QDialog):
         btn_bar.setSpacing(8)
         btn_bar.addStretch(1)
 
-        btn_excel_std = QPushButton("📊  표준 대장 엑셀로 저장 (.xlsx)")
+        btn_excel_std = QPushButton("표준 대장 엑셀로 저장 (.xlsx)")
         btn_excel_std.setFixedHeight(32)
         btn_excel_std.setStyleSheet(f"""
             QPushButton {{

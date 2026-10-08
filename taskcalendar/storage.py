@@ -307,7 +307,9 @@ class EncryptedRepository:
                 updated_at TEXT NOT NULL,
                 hourly_repeat INTEGER NOT NULL DEFAULT 0,
                 hourly_interval INTEGER NOT NULL DEFAULT 1,
-                hourly_end_time TEXT NOT NULL DEFAULT ''
+                hourly_end_time TEXT NOT NULL DEFAULT '',
+                interval_minutes INTEGER NOT NULL DEFAULT 0,
+                exclude_holidays INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS work_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -384,6 +386,13 @@ class EncryptedRepository:
             self.connection.execute("ALTER TABLE alarms ADD COLUMN hourly_interval INTEGER NOT NULL DEFAULT 1")
         if "hourly_end_time" not in existing_alarms_cols:
             self.connection.execute("ALTER TABLE alarms ADD COLUMN hourly_end_time TEXT NOT NULL DEFAULT ''")
+        if "interval_minutes" not in existing_alarms_cols:
+            self.connection.execute("ALTER TABLE alarms ADD COLUMN interval_minutes INTEGER NOT NULL DEFAULT 0")
+        if "exclude_holidays" not in existing_alarms_cols:
+            self.connection.execute("ALTER TABLE alarms ADD COLUMN exclude_holidays INTEGER NOT NULL DEFAULT 0")
+        self.connection.execute(
+            "UPDATE alarms SET interval_minutes = hourly_interval * 60 WHERE hourly_repeat = 1 AND (interval_minutes IS NULL OR interval_minutes = 0)"
+        )
         existing = {row["name"] for row in self.connection.execute("PRAGMA table_info(entries)").fetchall()}
         additions = {
             "all_day": "ALTER TABLE entries ADD COLUMN all_day INTEGER NOT NULL DEFAULT 0",
@@ -1401,6 +1410,15 @@ class EncryptedRepository:
 
     @staticmethod
     def _row_to_alarm(row: sqlite3.Row) -> Alarm:
+        col_names = row.keys()
+        int_min = int(row["interval_minutes"]) if ("interval_minutes" in col_names and row["interval_minutes"]) else 0
+        if not int_min and row["hourly_repeat"]:
+            int_min = max(1, int(row["hourly_interval"])) * 60
+        if not int_min:
+            int_min = 60
+
+        exclude_holidays = bool(row["exclude_holidays"]) if "exclude_holidays" in col_names else False
+
         return Alarm(
             alarm_id=row["id"],
             title=row["title"],
@@ -1415,10 +1433,13 @@ class EncryptedRepository:
             hourly_repeat=bool(row["hourly_repeat"]),
             hourly_interval=int(row["hourly_interval"]),
             hourly_end_time=row["hourly_end_time"] or "",
+            interval_minutes=int_min,
+            exclude_holidays=exclude_holidays,
         )
 
     def upsert_alarm(self, alarm: Alarm) -> Alarm:
         now = datetime.now().isoformat(timespec="seconds")
+        interval_min = alarm.interval_minutes if alarm.interval_minutes > 0 else max(1, alarm.hourly_interval) * 60
         values = (
             alarm.title,
             alarm.start_date.isoformat() if alarm.start_date else None,
@@ -1430,6 +1451,8 @@ class EncryptedRepository:
             int(alarm.hourly_repeat),
             alarm.hourly_interval,
             alarm.hourly_end_time,
+            interval_min,
+            int(getattr(alarm, "exclude_holidays", False)),
         )
         if alarm.alarm_id is None:
             cursor = self.connection.execute(
@@ -1437,8 +1460,8 @@ class EncryptedRepository:
                 INSERT INTO alarms (
                     title, start_date, end_date, alarm_time, repeat_days_json,
                     alert_offset, enabled, hourly_repeat, hourly_interval, hourly_end_time,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    interval_minutes, exclude_holidays, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values + (now, now),
             )
@@ -1451,7 +1474,7 @@ class EncryptedRepository:
                 UPDATE alarms
                 SET title=?, start_date=?, end_date=?, alarm_time=?, repeat_days_json=?,
                     alert_offset=?, enabled=?, hourly_repeat=?, hourly_interval=?, hourly_end_time=?,
-                    updated_at=?
+                    interval_minutes=?, exclude_holidays=?, updated_at=?
                 WHERE id = ?
                 """,
                 values + (now, alarm.alarm_id),

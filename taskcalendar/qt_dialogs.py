@@ -69,6 +69,7 @@ from taskcalendar.models import (
     THEME_OPTIONS,
     Alarm,
     calculate_next_alarm_trigger,
+    calculate_upcoming_alarm_triggers,
 )
 from taskcalendar import APP_VERSION
 from taskcalendar.themes import THEME_LABELS
@@ -499,6 +500,47 @@ def clamp_rect_into_screen(avail: QRect, x: int, y: int, w: int, h: int, min_w: 
     x = max(avail.left(), min(int(x), avail.left() + max_w - w))
     y = max(avail.top(), min(int(y), avail.top() + max_h - h))
     return x, y, w, h
+
+
+class _DragSnapSession:
+    """드래그/리사이즈 도중 반복적인 OS 화면 질의 및 타 윈도우 순회 오버헤드를 방지하는 세션 캐시."""
+
+    def __init__(self, owner_dialog) -> None:
+        self.other_geos: list[QRect] = []
+        parent = getattr(owner_dialog, "_owner_window", None) or owner_dialog.parent()
+        if parent:
+            for attr in ("_active_group_dialogs", "_active_memo_dialogs"):
+                dialogs = getattr(parent, attr, None)
+                if not dialogs:
+                    continue
+                for dlg in list(dialogs.values()):
+                    if dlg is not None and dlg is not owner_dialog and dlg.isVisible():
+                        self.other_geos.append(dlg.geometry())
+        app = QApplication.instance()
+        if app is not None:
+            self.screen_geos = [s.availableGeometry() for s in app.screens()]
+            prim = app.primaryScreen()
+            self.primary_geo = prim.availableGeometry() if prim else (self.screen_geos[0] if self.screen_geos else None)
+        else:
+            self.screen_geos = []
+            self.primary_geo = None
+
+    def screen_geometry_for(self, x: int, y: int, w: int, h: int) -> QRect:
+        if self.screen_geos:
+            rect = QRect(int(x), int(y), max(1, int(w)), max(1, int(h)))
+            best_screen = None
+            best_area = -1
+            for geo in self.screen_geos:
+                inter = geo.intersected(rect)
+                area = inter.width() * inter.height()
+                if area > best_area:
+                    best_area = area
+                    best_screen = geo
+            if best_screen is not None and best_area > 0:
+                return best_screen
+            if self.primary_geo is not None:
+                return self.primary_geo
+        return _screen_geometry_for(x, y, w, h)
 
 
 def snap_window_rect(current_geo: QRect, other_geos: list[QRect], screen_geo: QRect, threshold: int = 16) -> QPoint:
@@ -2445,8 +2487,12 @@ class EntryDialog(QDialog):
             geom.setWidth(new_w)
             geom.setHeight(max(150, geom.height() + delta.y()))
 
-        other_geos = self._other_window_geometries()
-        screen_geo = _screen_geometry_for(geom.x(), geom.y(), geom.width(), geom.height())
+        session = getattr(self, "_drag_session", None)
+        if session is None:
+            session = _DragSnapSession(self)
+            self._drag_session = session
+        other_geos = session.other_geos
+        screen_geo = session.screen_geometry_for(geom.x(), geom.y(), geom.width(), geom.height())
         snapped_geom = snap_resize_rect(geom, self._resize_dir, other_geos, screen_geo, threshold=16)
 
         if snapped_geom.width() < 180:
@@ -2495,10 +2541,13 @@ class EntryDialog(QDialog):
                     self._resize_dir = r_dir
                     self._initial_geometry = self.geometry()
                     self._initial_mouse_pos = event.globalPosition().toPoint()
+                    self._drag_session = _DragSnapSession(self)
                     return True
             elif event.type() == QEvent.Type.MouseButtonRelease and event.button() == Qt.MouseButton.LeftButton:
                 if getattr(self, "_resize_dir", None):
                     self._resize_dir = None
+                    if hasattr(self, "_drag_session"):
+                        delattr(self, "_drag_session")
                     self._debounced_save_memo_geometry(250)
                     return True
         return super().eventFilter(watched, event)
@@ -3432,6 +3481,8 @@ class EntryDialog(QDialog):
         if hasattr(self, "_drag_origin"):
             moved = self.pos() != self._drag_origin
             delattr(self, "_drag_origin")
+        if hasattr(self, "_drag_session"):
+            delattr(self, "_drag_session")
         avail = _screen_geometry_for(self.x(), self.y(), self.width(), self.height())
         # 기준 모서리는 사용자가 창을 '실제로 옮겼을 때'만 다시 정한다.
         # 제목줄을 단순히 클릭하거나 접기/펼치기만 해도 재계산되면, 펼친 뒤 판정이
@@ -3447,6 +3498,7 @@ class EntryDialog(QDialog):
     def _start_window_drag(self, global_pos: QPoint) -> None:
         self._drag_position = global_pos - self.frameGeometry().topLeft()
         self._drag_origin = self.pos()
+        self._drag_session = _DragSnapSession(self)
 
     def _other_window_geometries(self) -> list[QRect]:
         geos: list[QRect] = []
@@ -3466,8 +3518,12 @@ class EntryDialog(QDialog):
         if hasattr(self, "_drag_position"):
             target_pos = global_pos - self._drag_position
             curr_geo = QRect(target_pos, self.size())
-            other_geos = self._other_window_geometries()
-            screen_geo = _screen_geometry_for(target_pos.x(), target_pos.y(), self.width(), self.height())
+            session = getattr(self, "_drag_session", None)
+            if session is None:
+                session = _DragSnapSession(self)
+                self._drag_session = session
+            other_geos = session.other_geos
+            screen_geo = session.screen_geometry_for(target_pos.x(), target_pos.y(), self.width(), self.height())
             snapped_pos = snap_window_rect(curr_geo, other_geos, screen_geo, threshold=16)
             self.move(snapped_pos)
 
@@ -3599,6 +3655,7 @@ class EntryDialog(QDialog):
                 self.close()
                 return
             try:
+                self._save_memo_geometry(persist=False)
                 self._auto_save_to_db(persist_disk=False, refresh_parent=False)
             except Exception:
                 pass
@@ -3610,16 +3667,12 @@ class EntryDialog(QDialog):
                     if hasattr(parent, "_sync_open_memo_ids"):
                         parent._sync_open_memo_ids(persist=True)
             if not getattr(parent, "_batch_updating_memos", False):
-                if parent and hasattr(parent, "_render_sidebar"):
-                    try:
-                        parent._render_sidebar()
-                    except Exception:
-                        pass
+                if parent and hasattr(parent, "_debounced_render_sidebar"):
+                    parent._debounced_render_sidebar(50)
+                elif parent and hasattr(parent, "_render_sidebar"):
+                    QTimer.singleShot(0, lambda: parent._render_sidebar() if hasattr(parent, "_render_sidebar") else None)
                 if parent and hasattr(parent, "_refresh_all_group_dialogs"):
-                    try:
-                        parent._refresh_all_group_dialogs(status_only=True)
-                    except Exception:
-                        pass
+                    QTimer.singleShot(0, lambda: parent._refresh_all_group_dialogs(status_only=True) if hasattr(parent, "_refresh_all_group_dialogs") else None)
         self.close()
 
     def closeEvent(self, event) -> None:
@@ -3631,13 +3684,13 @@ class EntryDialog(QDialog):
         if self.entry_type == EntryType.MEMO:
             parent = getattr(self, "_owner_window", None) or self.parent()
             is_quitting = bool(parent and getattr(parent, "_is_app_quitting", False))
-            is_batch = bool(parent and getattr(parent, "_batch_updating_memos", False))
-            self._save_memo_geometry(persist=not (is_quitting or is_batch))
+            if not getattr(self, "_closing", False):
+                self._close_memo()
+            else:
+                self._save_memo_geometry(persist=False)
             if is_quitting:
                 super().closeEvent(event)
                 return
-            if not getattr(self, "_closing", False):
-                self._close_memo()
         super().closeEvent(event)
 
     def reject(self) -> None:
@@ -3675,6 +3728,7 @@ class EntryDialog(QDialog):
                     self._resize_dir = r_dir
                     self._initial_geometry = self.geometry()
                     self._initial_mouse_pos = event.globalPosition().toPoint()
+                    self._drag_session = _DragSnapSession(self)
                     event.accept()
                     return
 
@@ -3715,6 +3769,8 @@ class EntryDialog(QDialog):
         if self.entry_type == EntryType.MEMO:
             was_resizing = getattr(self, "_resize_dir", None) is not None
             self._resize_dir = None
+            if hasattr(self, "_drag_session"):
+                delattr(self, "_drag_session")
             self._end_window_drag()
             if was_resizing:
                 self._debounced_save_memo_geometry(250)
@@ -5073,13 +5129,19 @@ class FloatingGroupDialog(QDialog):
     def _start_window_drag(self, global_pos: QPoint) -> None:
         self._drag_pos = global_pos - self.frameGeometry().topLeft()
         self._drag_origin = self.pos()
+        self._drag_session = _DragSnapSession(self)
 
     def _perform_window_drag(self, global_pos: QPoint) -> None:
         if hasattr(self, "_drag_pos") and self._drag_pos is not None:
             target_pos = global_pos - self._drag_pos
             curr_geo = QRect(target_pos, self.size())
-            screen_geo = _screen_geometry_for(target_pos.x(), target_pos.y(), self.width(), self.height())
-            snapped_pos = snap_window_rect(curr_geo, self._other_window_geometries(), screen_geo, threshold=16)
+            session = getattr(self, "_drag_session", None)
+            if session is None:
+                session = _DragSnapSession(self)
+                self._drag_session = session
+            other_geos = session.other_geos
+            screen_geo = session.screen_geometry_for(target_pos.x(), target_pos.y(), self.width(), self.height())
+            snapped_pos = snap_window_rect(curr_geo, other_geos, screen_geo, threshold=16)
             self.move(snapped_pos)
 
     def _end_window_drag(self) -> None:
@@ -5089,6 +5151,8 @@ class FloatingGroupDialog(QDialog):
         if hasattr(self, "_drag_origin"):
             moved = self.pos() != self._drag_origin
             delattr(self, "_drag_origin")
+        if hasattr(self, "_drag_session"):
+            delattr(self, "_drag_session")
         # 기준 모서리는 창을 '실제로 옮겼을 때'만 다시 정한다(제목줄 단순 클릭/접기·펼치기 제외).
         if moved:
             avail = _screen_geometry_for(self.x(), self.y(), max(1, self.width()), max(1, self.height()))
@@ -5155,11 +5219,17 @@ class FloatingGroupDialog(QDialog):
             geom.setWidth(new_w)
             geom.setHeight(max(180, geom.height() + delta.y()))
 
+        session = getattr(self, "_drag_session", None)
+        if session is None:
+            session = _DragSnapSession(self)
+            self._drag_session = session
+        other_geos = session.other_geos
+        screen_geo = session.screen_geometry_for(geom.x(), geom.y(), geom.width(), geom.height())
         geom = snap_resize_rect(
             geom,
             self._resize_dir,
-            self._other_window_geometries(),
-            self._screen_geometry(),
+            other_geos,
+            screen_geo,
             threshold=16,
         )
         if geom.width() < 250:
@@ -5209,12 +5279,15 @@ class FloatingGroupDialog(QDialog):
                     self._resize_dir = r_dir
                     self._initial_geometry = self.geometry()
                     self._initial_mouse_pos = event.globalPosition().toPoint()
+                    self._drag_session = _DragSnapSession(self)
                     return True
 
         elif event.type() == QEvent.Type.MouseButtonRelease:
             if event.button() == Qt.MouseButton.LeftButton:
                 if self._resize_dir:
                     self._resize_dir = None
+                    if hasattr(self, "_drag_session"):
+                        delattr(self, "_drag_session")
                     self._debounced_save(250)
                     return True
 
@@ -5288,6 +5361,7 @@ class FloatingGroupDialog(QDialog):
                 self._resize_dir = r_dir
                 self._initial_geometry = self.geometry()
                 self._initial_mouse_pos = event.globalPosition().toPoint()
+                self._drag_session = _DragSnapSession(self)
                 event.accept()
                 return
 
@@ -5324,6 +5398,8 @@ class FloatingGroupDialog(QDialog):
     def mouseReleaseEvent(self, event) -> None:
         was_resizing = self._resize_dir is not None
         self._resize_dir = None
+        if hasattr(self, "_drag_session"):
+            delattr(self, "_drag_session")
         self._end_window_drag()
         if was_resizing:
             self._debounced_save(250)
@@ -7770,7 +7846,7 @@ class AlarmEditDialog(QDialog):
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowTitle("알람 등록" if alarm is None else "알람 수정")
         self.setWindowIcon(_dialog_icon())
-        self.resize(500, 440)
+        self.resize(500, 470)
         self.setFixedWidth(500)
         
         self.setStyleSheet(dialog_stylesheet(self.palette))
@@ -7789,6 +7865,7 @@ class AlarmEditDialog(QDialog):
         # 1. Alarm Title
         title_layout = QHBoxLayout()
         title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(6)
         title_lbl_muted = QLabel("알람 제목")
         title_lbl_muted.setObjectName("muted")
         title_lbl_muted.setFixedWidth(70)
@@ -7803,14 +7880,15 @@ class AlarmEditDialog(QDialog):
         # 1.5 Alarm Type (Radio buttons)
         type_layout = QHBoxLayout()
         type_layout.setContentsMargins(0, 0, 0, 0)
+        type_layout.setSpacing(6)
         type_lbl_muted = QLabel("알람 유형")
         type_lbl_muted.setObjectName("muted")
         type_lbl_muted.setFixedWidth(70)
         type_layout.addWidget(type_lbl_muted)
         
-        self.type_regular_radio = QRadioButton("일반 알람")
+        self.type_regular_radio = QRadioButton("일반 알람 (지정 시간)")
         self.type_regular_radio.toggled.connect(self._on_type_changed)
-        self.type_interval_radio = QRadioButton("시간 간격 반복")
+        self.type_interval_radio = QRadioButton("주기적 반복 알람")
         self.type_interval_radio.toggled.connect(self._on_type_changed)
         
         type_layout.addWidget(self.type_regular_radio)
@@ -7819,13 +7897,16 @@ class AlarmEditDialog(QDialog):
         card_layout.addLayout(type_layout)
         
         # 2. Time
-        time_layout = QHBoxLayout()
+        self.time_row = QWidget()
+        time_layout = QHBoxLayout(self.time_row)
         time_layout.setContentsMargins(0, 0, 0, 0)
+        time_layout.setSpacing(6)
         self.time_lbl_muted = QLabel("알람 시간")
         self.time_lbl_muted.setObjectName("muted")
         self.time_lbl_muted.setFixedWidth(70)
         self.time_edit = QTimeEdit()
         self.time_edit.setDisplayFormat("HH:mm")
+        self.time_edit.setFixedWidth(130)
         if alarm and alarm.alarm_time:
             h, m = map(int, alarm.alarm_time.split(":"))
             self.time_edit.setTime(QTime(h, m))
@@ -7834,17 +7915,19 @@ class AlarmEditDialog(QDialog):
         time_layout.addWidget(self.time_lbl_muted)
         time_layout.addWidget(self.time_edit)
         time_layout.addStretch(1)
-        card_layout.addLayout(time_layout)
+        card_layout.addWidget(self.time_row)
 
         # 2.5 End Time Row
         self.end_time_row = QWidget()
         end_time_layout = QHBoxLayout(self.end_time_row)
         end_time_layout.setContentsMargins(0, 0, 0, 0)
+        end_time_layout.setSpacing(6)
         end_time_lbl_muted = QLabel("종료 시간")
         end_time_lbl_muted.setObjectName("muted")
         end_time_lbl_muted.setFixedWidth(70)
         self.end_time_edit = QTimeEdit()
         self.end_time_edit.setDisplayFormat("HH:mm")
+        self.end_time_edit.setFixedWidth(130)
         if alarm and alarm.hourly_end_time:
             eh, em = map(int, alarm.hourly_end_time.split(":"))
             self.end_time_edit.setTime(QTime(eh, em))
@@ -7859,29 +7942,62 @@ class AlarmEditDialog(QDialog):
         self.interval_row = QWidget()
         interval_layout = QHBoxLayout(self.interval_row)
         interval_layout.setContentsMargins(0, 0, 0, 0)
-        interval_lbl_muted = QLabel("반복 간격")
+        interval_layout.setSpacing(6)
+        interval_lbl_muted = QLabel("반복 주기")
         interval_lbl_muted.setObjectName("muted")
         interval_lbl_muted.setFixedWidth(70)
         self.interval_combo = QComboBox()
-        self.interval_combo.addItem("1시간 간격", 1)
-        self.interval_combo.addItem("2시간 간격", 2)
-        self.interval_combo.addItem("3시간 간격", 3)
-        self.interval_combo.addItem("4시간 간격", 4)
-        self.interval_combo.addItem("6시간 간격", 6)
-        self.interval_combo.addItem("8시간 간격", 8)
-        self.interval_combo.addItem("12시간 간격", 12)
-        if alarm and alarm.hourly_interval:
-            idx = self.interval_combo.findData(alarm.hourly_interval)
-            if idx >= 0:
-                self.interval_combo.setCurrentIndex(idx)
+        self.interval_combo.addItem("5분마다", 5)
+        self.interval_combo.addItem("10분마다", 10)
+        self.interval_combo.addItem("15분마다", 15)
+        self.interval_combo.addItem("20분마다", 20)
+        self.interval_combo.addItem("30분마다", 30)
+        self.interval_combo.addItem("45분마다", 45)
+        self.interval_combo.addItem("1시간마다 (60분)", 60)
+        self.interval_combo.addItem("1시간 30분마다 (90분)", 90)
+        self.interval_combo.addItem("2시간마다 (120분)", 120)
+        self.interval_combo.addItem("3시간마다 (180분)", 180)
+        self.interval_combo.addItem("4시간마다 (240분)", 240)
+        self.interval_combo.addItem("직접 입력 (분 단위)", -1)
+
+        self.interval_spin = QSpinBox()
+        self.interval_spin.setRange(1, 720)
+        self.interval_spin.setSuffix(" 분마다")
+        self.interval_spin.setFixedWidth(110)
+        self.interval_spin.setValue(5)
+        self.interval_spin.valueChanged.connect(self._on_interval_spin_changed)
+
+        self.interval_combo.currentIndexChanged.connect(self._on_interval_combo_changed)
+
+        init_min = 5
+        if alarm:
+            if getattr(alarm, "interval_minutes", 0) > 0:
+                init_min = alarm.interval_minutes
+            elif getattr(alarm, "hourly_interval", 0) > 0:
+                init_min = alarm.hourly_interval * 60
+
+        idx = self.interval_combo.findData(init_min)
+        if idx >= 0:
+            self.interval_combo.setCurrentIndex(idx)
+            self.interval_spin.setValue(init_min)
+            self.interval_spin.setVisible(False)
+        else:
+            custom_idx = self.interval_combo.findData(-1)
+            if custom_idx >= 0:
+                self.interval_combo.setCurrentIndex(custom_idx)
+            self.interval_spin.setValue(init_min)
+            self.interval_spin.setVisible(True)
+
         interval_layout.addWidget(interval_lbl_muted)
         interval_layout.addWidget(self.interval_combo)
+        interval_layout.addWidget(self.interval_spin)
         interval_layout.addStretch(1)
         card_layout.addWidget(self.interval_row)
         
         # 3. Repeat Weekdays
         weekday_layout = QHBoxLayout()
         weekday_layout.setContentsMargins(0, 0, 0, 0)
+        weekday_layout.setSpacing(6)
         weekday_lbl_muted = QLabel("요일 반복")
         weekday_lbl_muted.setObjectName("muted")
         weekday_lbl_muted.setFixedWidth(70)
@@ -7908,7 +8024,7 @@ class AlarmEditDialog(QDialog):
         # 4. Period
         period_layout = QHBoxLayout()
         period_layout.setContentsMargins(0, 0, 0, 0)
-        period_layout.setSpacing(8)
+        period_layout.setSpacing(6)
         
         self.period_checkbox = QCheckBox("기간")
         self.period_checkbox.setStyleSheet(f"color: {self.palette['muted']}; font-size: 12px; font-weight: 600;")
@@ -7948,6 +8064,7 @@ class AlarmEditDialog(QDialog):
         # 5. Alert Offset
         offset_layout = QHBoxLayout()
         offset_layout.setContentsMargins(0, 0, 0, 0)
+        offset_layout.setSpacing(6)
         offset_lbl_muted = QLabel("알림 시점")
         offset_lbl_muted.setObjectName("muted")
         offset_lbl_muted.setFixedWidth(70)
@@ -7968,6 +8085,24 @@ class AlarmEditDialog(QDialog):
         offset_layout.addStretch(1)
         card_layout.addLayout(offset_layout)
         
+        # 6. Options Row
+        option_layout = QHBoxLayout()
+        option_layout.setContentsMargins(0, 0, 0, 0)
+        option_layout.setSpacing(6)
+        option_lbl_muted = QLabel("옵션")
+        option_lbl_muted.setObjectName("muted")
+        option_lbl_muted.setFixedWidth(70)
+        self.exclude_holidays_checkbox = QCheckBox("공휴일 제외")
+        self.exclude_holidays_checkbox.setToolTip("법정 공휴일 및 대체공휴일에는 알람이 울리지 않습니다")
+        if alarm:
+            self.exclude_holidays_checkbox.setChecked(bool(getattr(alarm, "exclude_holidays", False)))
+        else:
+            self.exclude_holidays_checkbox.setChecked(False)
+        option_layout.addWidget(option_lbl_muted)
+        option_layout.addWidget(self.exclude_holidays_checkbox)
+        option_layout.addStretch(1)
+        card_layout.addLayout(option_layout)
+        
         card_layout.addStretch(1)
         
         root.addWidget(card)
@@ -7975,7 +8110,13 @@ class AlarmEditDialog(QDialog):
         # Buttons
         actions_layout = QHBoxLayout()
         actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(8)
         actions_layout.addStretch(1)
+
+        self.preview_btn = QPushButton("미리보기")
+        self.preview_btn.setToolTip("설정된 일정으로 울릴 알람 시간들을 미리 확인합니다")
+        self.preview_btn.clicked.connect(self._on_preview)
+        actions_layout.addWidget(self.preview_btn)
         
         self.cancel_btn = QPushButton("취소")
         self.cancel_btn.clicked.connect(self.reject)
@@ -8002,6 +8143,28 @@ class AlarmEditDialog(QDialog):
         self.end_time_row.setVisible(is_interval)
         self.interval_row.setVisible(is_interval)
 
+    def _on_interval_combo_changed(self) -> None:
+        val = self.interval_combo.currentData()
+        if val == -1:
+            self.interval_spin.setVisible(True)
+            self.interval_spin.setFocus()
+        else:
+            self.interval_spin.blockSignals(True)
+            self.interval_spin.setValue(val)
+            self.interval_spin.blockSignals(False)
+            self.interval_spin.setVisible(False)
+
+    def _on_interval_spin_changed(self, val: int) -> None:
+        idx = self.interval_combo.findData(val)
+        self.interval_combo.blockSignals(True)
+        if idx >= 0:
+            self.interval_combo.setCurrentIndex(idx)
+        else:
+            custom_idx = self.interval_combo.findData(-1)
+            if custom_idx >= 0:
+                self.interval_combo.setCurrentIndex(custom_idx)
+        self.interval_combo.blockSignals(False)
+
     def _on_period_toggled(self, checked: bool) -> None:
         if not checked:
             self.start_date_edit.blockSignals(True)
@@ -8015,7 +8178,7 @@ class AlarmEditDialog(QDialog):
     def _on_date_changed(self) -> None:
         self.period_checkbox.setChecked(True)
 
-    def _on_save(self) -> None:
+    def _create_alarm_from_inputs(self) -> tuple[Alarm | None, str | None]:
         title = self.title_input.text().strip()
         if not title:
             title = "알람"
@@ -8023,15 +8186,22 @@ class AlarmEditDialog(QDialog):
         alarm_time = self.time_edit.time().toString("HH:mm")
         
         hourly_repeat = self.type_interval_radio.isChecked()
-        hourly_interval = self.interval_combo.currentData() if hourly_repeat else 1
-        hourly_end_time = self.end_time_edit.time().toString("HH:mm") if hourly_repeat else ""
-        
         if hourly_repeat:
+            c_data = self.interval_combo.currentData()
+            if c_data == -1:
+                interval_minutes = max(1, self.interval_spin.value())
+            else:
+                interval_minutes = max(1, int(c_data))
+            hourly_interval = max(1, round(interval_minutes / 60))
+            hourly_end_time = self.end_time_edit.time().toString("HH:mm")
             qstart_t = self.time_edit.time()
             qend_t = self.end_time_edit.time()
             if qstart_t >= qend_t:
-                QMessageBox.warning(self, "오류", "종료 시간이 시작 시간보다 늦어야 합니다.")
-                return
+                return None, "종료 시간이 시작 시간보다 늦어야 합니다."
+        else:
+            interval_minutes = 5
+            hourly_interval = 1
+            hourly_end_time = ""
 
         repeat_days = []
         for i, btn in enumerate(self.weekday_buttons):
@@ -8041,22 +8211,21 @@ class AlarmEditDialog(QDialog):
         if self.period_checkbox.isChecked():
             qstart = self.start_date_edit.date()
             qend = self.end_date_edit.date()
-            start_date = date(qstart.year(), qstart.month(), qstart.day())
-            end_date = date(qend.year(), qend.month(), qend.day())
-            if start_date > end_date:
-                QMessageBox.warning(self, "오류", "시작일이 종료일보다 늦을 수 없습니다.")
-                return
+            start_date_val = date(qstart.year(), qstart.month(), qstart.day())
+            end_date_val = date(qend.year(), qend.month(), qend.day())
+            if start_date_val > end_date_val:
+                return None, "시작일이 종료일보다 늦을 수 없습니다."
         else:
-            start_date = None
-            end_date = None
+            start_date_val = None
+            end_date_val = None
             
         alert_offset = self.offset_combo.currentData()
         
         temp_alarm = Alarm(
             alarm_id=self.alarm.alarm_id if self.alarm else None,
             title=title,
-            start_date=start_date,
-            end_date=end_date,
+            start_date=start_date_val,
+            end_date=end_date_val,
             alarm_time=alarm_time,
             repeat_days=repeat_days,
             alert_offset=alert_offset,
@@ -8065,8 +8234,28 @@ class AlarmEditDialog(QDialog):
             hourly_repeat=hourly_repeat,
             hourly_interval=hourly_interval,
             hourly_end_time=hourly_end_time,
+            interval_minutes=interval_minutes,
+            exclude_holidays=self.exclude_holidays_checkbox.isChecked(),
         )
-        
+        return temp_alarm, None
+
+    def _on_preview(self) -> None:
+        temp_alarm, err_msg = self._create_alarm_from_inputs()
+        if err_msg:
+            QMessageBox.warning(self, "오류", err_msg)
+            return
+        if temp_alarm:
+            dlg = AlarmSchedulePreviewDialog(self, temp_alarm)
+            dlg.exec()
+
+    def _on_save(self) -> None:
+        temp_alarm, err_msg = self._create_alarm_from_inputs()
+        if err_msg:
+            QMessageBox.warning(self, "오류", err_msg)
+            return
+        if not temp_alarm:
+            return
+            
         next_trigger = calculate_next_alarm_trigger(temp_alarm, datetime.now())
         if next_trigger is None:
             QMessageBox.warning(self, "오류", "유효한 알람 실행 시간을 계산할 수 없습니다. 설정을 확인해 주세요.")
@@ -8076,6 +8265,199 @@ class AlarmEditDialog(QDialog):
         self.accept()
 
 
+class AlarmSchedulePreviewDialog(QDialog):
+    """앞으로 울릴 알람 일정을 미리 보여주는 다이얼로그"""
+    def __init__(self, parent, alarm: Alarm) -> None:
+        super().__init__(parent)
+        self.alarm = alarm
+        self.palette = resolve_palette(parent)
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self.setWindowTitle("알람 실행 예정 미리보기")
+        self.setWindowIcon(_dialog_icon())
+        self.resize(540, 580)
+        self.setMinimumSize(460, 420)
+        self.setStyleSheet(dialog_stylesheet(self.palette))
+        
+        accent_color = self.palette.get("accent", "#1a73e8")
+        muted_color = self.palette.get("muted", "#70757a")
+        
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(12)
+        
+        # Header Card
+        header_card = QFrame()
+        header_card.setObjectName("card")
+        h_layout = QVBoxLayout(header_card)
+        h_layout.setContentsMargins(14, 12, 14, 12)
+        h_layout.setSpacing(6)
+        
+        title_row = QHBoxLayout()
+        title_lbl = QLabel(f"'{alarm.title or '알람'}'")
+        title_lbl.setObjectName("title")
+        title_row.addWidget(title_lbl)
+        title_row.addStretch(1)
+        
+        status_lbl = QLabel("활성" if alarm.enabled else "비활성 (꺼짐)")
+        if alarm.enabled:
+            status_lbl.setStyleSheet(
+                "font-weight: bold; font-size: 11px; padding: 2px 8px; border-radius: 4px; "
+                "background: rgba(30, 142, 62, 0.15); color: #137333;"
+            )
+        else:
+            status_lbl.setStyleSheet(
+                "font-weight: bold; font-size: 11px; padding: 2px 8px; border-radius: 4px; "
+                "background: rgba(217, 48, 37, 0.15); color: #c5221f;"
+            )
+        title_row.addWidget(status_lbl)
+        h_layout.addLayout(title_row)
+        
+        desc_lbl = QLabel(self._build_alarm_summary(alarm))
+        desc_lbl.setObjectName("subtitle")
+        desc_lbl.setWordWrap(True)
+        h_layout.addWidget(desc_lbl)
+        root.addWidget(header_card)
+        
+        # List Section
+        now = datetime.now()
+        triggers = calculate_upcoming_alarm_triggers(alarm, now, count=30)
+        
+        section_row = QHBoxLayout()
+        count_lbl = QLabel(f"앞으로 울릴 알람 ({len(triggers)}개 예정)")
+        count_lbl.setObjectName("sectionTitle")
+        section_row.addWidget(count_lbl)
+        section_row.addStretch(1)
+        now_lbl = QLabel(f"기준: {now.strftime('%H:%M:%S')}")
+        now_lbl.setObjectName("subtitle")
+        section_row.addWidget(now_lbl)
+        root.addLayout(section_row)
+        
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet("background: transparent;")
+        s_layout = QVBoxLayout(scroll_content)
+        s_layout.setContentsMargins(0, 0, 0, 0)
+        s_layout.setSpacing(6)
+        
+        if not triggers:
+            empty_card = QFrame()
+            empty_card.setObjectName("card")
+            e_layout = QVBoxLayout(empty_card)
+            e_layout.setContentsMargins(20, 28, 20, 28)
+            e_lbl = QLabel("앞으로 예정된 알람 일정이 없습니다.\n(설정된 기간이 만료되었거나 반복 조건에 해당하는 일정이 없습니다.)")
+            e_lbl.setAlignment(Qt.AlignCenter)
+            e_lbl.setObjectName("subtitle")
+            e_layout.addWidget(e_lbl)
+            s_layout.addWidget(empty_card)
+        else:
+            weekday_kr = ["월", "화", "수", "목", "금", "토", "일"]
+            for idx, trig in enumerate(triggers, start=1):
+                item_card = QFrame()
+                item_card.setObjectName("alarmItem")
+                i_layout = QHBoxLayout(item_card)
+                i_layout.setContentsMargins(14, 9, 14, 9)
+                i_layout.setSpacing(12)
+                
+                badge_lbl = QLabel(f"#{idx}")
+                badge_lbl.setFixedWidth(36)
+                badge_lbl.setStyleSheet(f"font-weight: bold; color: {muted_color}; font-size: 12px;")
+                i_layout.addWidget(badge_lbl)
+                
+                w_day = weekday_kr[trig.weekday()]
+                date_str = trig.strftime(f"%Y년 %m월 %d일 ({w_day})")
+                time_str = trig.strftime("%H:%M")
+                
+                dt_lbl = QLabel(f"{date_str}  {time_str}")
+                dt_lbl.setStyleSheet("font-weight: bold; font-size: 13px;")
+                i_layout.addWidget(dt_lbl)
+                i_layout.addStretch(1)
+                
+                diff = trig - now
+                rel_str = self._format_relative_time(diff)
+                rel_lbl = QLabel(rel_str)
+                rel_lbl.setStyleSheet(f"color: {accent_color}; font-weight: 600; font-size: 12px;")
+                i_layout.addWidget(rel_lbl)
+                
+                s_layout.addWidget(item_card)
+                
+        s_layout.addStretch(1)
+        scroll.setWidget(scroll_content)
+        root.addWidget(scroll, 1)
+        
+        # Bottom Buttons
+        bottom_layout = QHBoxLayout()
+        bottom_layout.addStretch(1)
+        close_btn = QPushButton("닫기")
+        close_btn.clicked.connect(self.accept)
+        bottom_layout.addWidget(close_btn)
+        root.addLayout(bottom_layout)
+
+    def _build_alarm_summary(self, alarm: Alarm) -> str:
+        parts = []
+        if alarm.repeat_days:
+            if len(alarm.repeat_days) == 7:
+                rep = "매일"
+            elif sorted(alarm.repeat_days) == [1, 2, 3, 4, 5]:
+                rep = "평일"
+            elif sorted(alarm.repeat_days) == [0, 6]:
+                rep = "주말"
+            else:
+                weekday_labels = ["일", "월", "화", "수", "목", "금", "토"]
+                rep = ", ".join(weekday_labels[d] for d in sorted(alarm.repeat_days)) + "요일"
+            parts.append(f"반복: {rep}")
+        else:
+            parts.append("반복: 1회성")
+            
+        if alarm.hourly_repeat:
+            int_min = alarm.interval_minutes if alarm.interval_minutes > 0 else max(1, alarm.hourly_interval) * 60
+            if int_min < 60:
+                interval_str = f"{int_min}분 간격"
+            elif int_min % 60 == 0:
+                interval_str = f"{int_min // 60}시간 간격"
+            else:
+                interval_str = f"{int_min // 60}시간 {int_min % 60}분 간격"
+            parts.append(f"시간: {alarm.alarm_time} ~ {alarm.hourly_end_time} ({interval_str})")
+        else:
+            parts.append(f"시간: {alarm.alarm_time}")
+            
+        if alarm.start_date and alarm.end_date:
+            parts.append(f"기간: {alarm.start_date.strftime('%Y.%m.%d')} ~ {alarm.end_date.strftime('%Y.%m.%d')}")
+            
+        offset_labels = {
+            "at_start": "정시",
+            "5m": "5분 전",
+            "10m": "10분 전",
+            "30m": "30분 전",
+            "1h": "1시간 전",
+        }
+        parts.append(f"알림 시점: {offset_labels.get(alarm.alert_offset, '정시')}")
+        if getattr(alarm, "exclude_holidays", False):
+            parts.append("공휴일 제외")
+        return " | ".join(parts)
+
+    @staticmethod
+    def _format_relative_time(diff: timedelta) -> str:
+        total_sec = max(0, int(diff.total_seconds()))
+        if total_sec < 60:
+            return "1분 이내"
+        total_mins = total_sec // 60
+        if total_mins < 60:
+            return f"{total_mins}분 뒤"
+        total_hours = total_mins // 60
+        rem_mins = total_mins % 60
+        if total_hours < 24:
+            if rem_mins == 0:
+                return f"{total_hours}시간 뒤"
+            return f"{total_hours}시간 {rem_mins}분 뒤"
+        days = total_hours // 24
+        rem_hours = total_hours % 24
+        if rem_hours == 0:
+            return f"{days}일 뒤"
+        return f"{days}일 {rem_hours}시간 뒤"
+
+
 class AlarmManagerDialog(QDialog):
     def __init__(self, parent, repository) -> None:
         super().__init__(parent)
@@ -8083,8 +8465,8 @@ class AlarmManagerDialog(QDialog):
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowTitle("알람 설정")
         self.setWindowIcon(_dialog_icon())
-        self.resize(600, 500)
-        self.setFixedWidth(600)
+        self.resize(680, 520)
+        self.setFixedWidth(680)
         
         self.palette = resolve_palette(parent)
         
@@ -8112,6 +8494,7 @@ class AlarmManagerDialog(QDialog):
         # Scroll Area for Alarms List
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll_content = QWidget()
         self.scroll_content.setStyleSheet("background: transparent;")
         self.scroll_layout = QVBoxLayout(self.scroll_content)
@@ -8185,16 +8568,26 @@ class AlarmManagerDialog(QDialog):
         repeat_str = self._format_repeat(alarm)
         info_lbl = QLabel(repeat_str)
         info_lbl.setObjectName("alarmInfo")
+        info_lbl.setWordWrap(True)
         info_layout.addWidget(info_lbl)
         
         layout.addLayout(info_layout, 1)
         
+        btn_style = "min-width: 52px; max-width: 68px; padding: 4px 6px; font-size: 12px;"
+        
+        preview_btn = QPushButton("미리보기")
+        preview_btn.setStyleSheet(btn_style)
+        preview_btn.clicked.connect(lambda _=False, a=alarm: self._on_preview_alarm(a))
+        layout.addWidget(preview_btn)
+        
         edit_btn = QPushButton("수정")
+        edit_btn.setStyleSheet(btn_style)
         edit_btn.clicked.connect(lambda: self._on_edit_alarm(alarm))
         layout.addWidget(edit_btn)
         
         del_btn = QPushButton("삭제")
         del_btn.setObjectName("danger")
+        del_btn.setStyleSheet(btn_style)
         del_btn.clicked.connect(lambda: self._on_delete_alarm(alarm))
         layout.addWidget(del_btn)
         
@@ -8234,9 +8627,18 @@ class AlarmManagerDialog(QDialog):
             parts.append(period_str)
             
         if alarm.hourly_repeat:
-            parts.append(f"{alarm.hourly_interval}시간 간격 ({alarm.alarm_time} ~ {alarm.hourly_end_time})")
+            int_min = alarm.interval_minutes if alarm.interval_minutes > 0 else max(1, alarm.hourly_interval) * 60
+            if int_min < 60:
+                interval_str = f"{int_min}분마다"
+            elif int_min % 60 == 0:
+                interval_str = f"{int_min // 60}시간마다"
+            else:
+                interval_str = f"{int_min // 60}시간 {int_min % 60}분마다"
+            parts.append(f"{interval_str} ({alarm.alarm_time} ~ {alarm.hourly_end_time})")
             
         parts.append(f"알림: {offset_str}")
+        if getattr(alarm, "exclude_holidays", False):
+            parts.append("공휴일 제외")
         return " | ".join(parts)
 
     def _on_toggle_alarm(self, alarm: Alarm, checked: bool) -> None:
@@ -8264,6 +8666,10 @@ class AlarmManagerDialog(QDialog):
             dialog.saved_alarm.alarm_id = alarm.alarm_id
             self.repository.upsert_alarm(dialog.saved_alarm)
             self._load_alarms()
+
+    def _on_preview_alarm(self, alarm: Alarm) -> None:
+        dlg = AlarmSchedulePreviewDialog(self, alarm)
+        dlg.exec()
 
     def _on_delete_alarm(self, alarm: Alarm) -> None:
         reply = QMessageBox.question(

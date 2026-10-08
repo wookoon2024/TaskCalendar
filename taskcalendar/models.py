@@ -166,9 +166,63 @@ class Alarm:
     hourly_repeat: bool = False
     hourly_interval: int = 1
     hourly_end_time: str = ""
+    interval_minutes: int = 5
+    exclude_holidays: bool = False
+
+
+_HOLIDAY_JSON_CACHE: tuple[float, dict[str, str], dict[str, str]] | None = None
+
+
+def _get_holiday_json_data() -> tuple[dict[str, str], dict[str, str]]:
+    global _HOLIDAY_JSON_CACHE
+    try:
+        from taskcalendar.paths import data_path
+        path = data_path("holidays_kr.json")
+        if not path.exists():
+            return {}, {}
+        mtime = path.stat().st_mtime
+        if _HOLIDAY_JSON_CACHE is not None and _HOLIDAY_JSON_CACHE[0] == mtime:
+            return _HOLIDAY_JSON_CACHE[1], _HOLIDAY_JSON_CACHE[2]
+        import json
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        fixed: dict[str, str] = {}
+        yearly: dict[str, str] = {}
+        if isinstance(raw, dict):
+            for k, v in raw.get("fixed", {}).items():
+                fixed[str(k).strip()] = str(v).strip()
+            for k, v in raw.get("yearly", {}).items():
+                yearly[str(k).strip()] = str(v).strip()
+        _HOLIDAY_JSON_CACHE = (mtime, fixed, yearly)
+        return fixed, yearly
+    except Exception:
+        return {}, {}
+
+
+def is_korean_holiday(target_date: date) -> tuple[bool, str]:
+    """공휴일 여부 및 공휴일 명칭 반환 (holidays_kr.json 및 lunar 모듈 종합)"""
+    fixed, yearly = _get_holiday_json_data()
+    iso = target_date.isoformat()
+    if iso in yearly:
+        return True, yearly[iso]
+    mmdd = target_date.strftime("%m-%d")
+    if mmdd in fixed:
+        return True, fixed[mmdd]
+    try:
+        from taskcalendar.lunar import get_korean_holiday_name
+        name = get_korean_holiday_name(target_date)
+        if name:
+            return True, name
+    except Exception:
+        pass
+    return False, ""
 
 
 def calculate_next_alarm_trigger(alarm: Alarm, now: datetime) -> datetime | None:
+    triggers = calculate_upcoming_alarm_triggers(alarm, now, count=1)
+    return triggers[0] if triggers else None
+
+
+def calculate_upcoming_alarm_triggers(alarm: Alarm, now: datetime, count: int = 30) -> list[datetime]:
     offset_map = {
         "at_start": timedelta(),
         "5m": timedelta(minutes=5),
@@ -198,15 +252,18 @@ def calculate_next_alarm_trigger(alarm: Alarm, now: datetime) -> datetime | None
         occurrences = []
         curr_dt = datetime.combine(date.today(), st)
         end_dt = datetime.combine(date.today(), et)
-        interval_hours = max(1, alarm.hourly_interval)
+        interval_min = alarm.interval_minutes if alarm.interval_minutes > 0 else max(1, alarm.hourly_interval) * 60
+        interval_min = max(1, interval_min)
         while curr_dt <= end_dt:
             occurrences.append(curr_dt.time())
-            curr_dt += timedelta(hours=interval_hours)
+            curr_dt += timedelta(minutes=interval_min)
         return occurrences
 
     occurrence_times = get_occurrence_times()
     if not occurrence_times:
-        return None
+        return []
+
+    results: list[datetime] = []
 
     if not alarm.start_date and not alarm.repeat_days:
         # One-time alarm: valid for 24 hours from creation/reference time
@@ -215,22 +272,30 @@ def calculate_next_alarm_trigger(alarm: Alarm, now: datetime) -> datetime | None
         tomorrow_date = today_date + timedelta(days=1)
         
         for d in [today_date, tomorrow_date]:
+            if alarm.exclude_holidays and is_korean_holiday(d)[0]:
+                continue
             for t in occurrence_times:
                 alarm_dt = datetime.combine(d, t)
                 trigger_dt = alarm_dt - offset_delta
                 if now < trigger_dt <= created_at + timedelta(days=1):
-                    return trigger_dt
-        return None
+                    results.append(trigger_dt)
+                    if len(results) >= count:
+                        return results
+        return results
         
     start_date = alarm.start_date or now.date()
     end_date = alarm.end_date
     
-    check_date = start_date
+    check_date = max(start_date, now.date())
     limit_date = now.date() + timedelta(days=366)
     if end_date and limit_date > end_date:
         limit_date = end_date
         
     while check_date <= limit_date:
+        if alarm.exclude_holidays and is_korean_holiday(check_date)[0]:
+            check_date += timedelta(days=1)
+            continue
+
         py_weekday = check_date.weekday()
         alarm_weekday = (py_weekday + 1) % 7
         
@@ -241,8 +306,10 @@ def calculate_next_alarm_trigger(alarm: Alarm, now: datetime) -> datetime | None
                 if trigger_dt > now:
                     if end_date and check_date > end_date:
                         continue
-                    return trigger_dt
+                    results.append(trigger_dt)
+                    if len(results) >= count:
+                        return results
         check_date += timedelta(days=1)
         
-    return None
+    return results
 

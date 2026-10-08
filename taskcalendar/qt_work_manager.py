@@ -2723,7 +2723,7 @@ class WorkExportWizardDialog(QDialog):
         self._populate_tree()
         s1_layout.addWidget(self.tree, 1)
 
-        self.cb_include_attachments = QCheckBox("📎 첨부파일도 함께 내보내기 (문서별 첨부파일 폴더로 자동 구성)")
+        self.cb_include_attachments = QCheckBox("첨부파일도 함께 내보내기 (문서별 첨부파일 폴더로 자동 구성)")
         self.cb_include_attachments.setChecked(True)
         s1_layout.addWidget(self.cb_include_attachments)
         self.stacked.addWidget(step1_widget)
@@ -2841,7 +2841,7 @@ class WorkExportWizardDialog(QDialog):
         dir_h.addWidget(btn_browse)
         d_layout.addLayout(dir_h)
 
-        self.cb_subfolders = QCheckBox("📁 업무 분류(카테고리)별로 하위 폴더를 생성하여 정리")
+        self.cb_subfolders = QCheckBox("업무 분류(카테고리)별로 하위 폴더를 생성하여 정리")
         self.cb_subfolders.setChecked(True)
         d_layout.addWidget(self.cb_subfolders)
         s2_layout.addWidget(dir_group_box)
@@ -3240,7 +3240,7 @@ class WorkDocSelectDialog(QDialog):
                 d_str = f" ({tgt_d.strftime('%m.%d')})"
 
             display_txt = f"[{cat}] {task.title}{author}{d_str}"
-            item = QListWidgetItem(f"📄 {display_txt}")
+            item = QListWidgetItem(display_txt)
             item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsUserCheckable)
             is_checked = task.entry_id in self.selected_entry_ids
             item.setCheckState(Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked)

@@ -2241,10 +2241,11 @@ class MainWindow(QMainWindow):
             occurrences = []
             curr_dt = datetime.combine(date.today(), st)
             end_dt = datetime.combine(date.today(), et)
-            interval_hours = max(1, alarm.hourly_interval)
+            interval_min = alarm.interval_minutes if alarm.interval_minutes > 0 else max(1, alarm.hourly_interval) * 60
+            interval_min = max(1, interval_min)
             while curr_dt <= end_dt:
                 occurrences.append(curr_dt.time())
-                curr_dt += timedelta(hours=interval_hours)
+                curr_dt += timedelta(minutes=interval_min)
             return occurrences
 
         occurrence_times = get_occurrence_times()
@@ -2259,6 +2260,9 @@ class MainWindow(QMainWindow):
             "1h": timedelta(hours=1),
         }
         offset_delta = offset_map.get(alarm.alert_offset, timedelta())
+
+        if getattr(alarm, "exclude_holidays", False) and self._holiday_name_for_day(d):
+            return []
 
         if not alarm.start_date and not alarm.repeat_days:
             created_at = alarm.created_at or datetime.now()
@@ -4590,6 +4594,13 @@ class MainWindow(QMainWindow):
                 )
                 cell.items_layout.addWidget(more)
 
+    def _debounced_render_sidebar(self, delay_ms: int = 50) -> None:
+        if not hasattr(self, "_sidebar_render_timer"):
+            self._sidebar_render_timer = QTimer(self)
+            self._sidebar_render_timer.setSingleShot(True)
+            self._sidebar_render_timer.timeout.connect(self._render_sidebar)
+        self._sidebar_render_timer.start(delay_ms)
+
     def _render_sidebar(self) -> None:
         while self.sidebar_layout.count() > 1:
             item = self.sidebar_layout.takeAt(0)
@@ -6793,7 +6804,20 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    def _sync_open_memo_ids(self, persist: bool = True) -> None:
+    def _debounced_save_repository(self, delay_ms: int = 400) -> None:
+        if not hasattr(self, "_repo_save_timer"):
+            self._repo_save_timer = QTimer(self)
+            self._repo_save_timer.setSingleShot(True)
+            self._repo_save_timer.timeout.connect(self._flush_repository_save)
+        self._repo_save_timer.start(delay_ms)
+
+    def _flush_repository_save(self) -> None:
+        if hasattr(self, "_repo_save_timer") and self._repo_save_timer.isActive():
+            self._repo_save_timer.stop()
+        if hasattr(self, "repository"):
+            self.repository.save()
+
+    def _sync_open_memo_ids(self, persist: bool = True, immediate: bool = False) -> None:
         open_ids: list[str] = []
         for k, dlg in list(self._active_memo_dialogs.items()):
             if dlg is not None and dlg.entry and dlg.entry.entry_id is not None:
@@ -6808,10 +6832,13 @@ class MainWindow(QMainWindow):
                     self.repository.set_setting(f"memo_collapsed_{dlg.entry.entry_id}", "1" if getattr(dlg, "_is_collapsed", False) else "0")
                     if hasattr(dlg, "attachment_bar"):
                         self.repository.set_setting(f"memo_show_attach_{dlg.entry.entry_id}", "1" if dlg.attachment_bar.isVisible() else "0")
-        logger.info(f"[_sync_open_memo_ids] open_ids={open_ids}, persist={persist}")
+        logger.info(f"[_sync_open_memo_ids] open_ids={open_ids}, persist={persist}, immediate={immediate}")
         self.repository.set_setting("open_memo_ids", ",".join(open_ids))
         if persist:
-            self.repository.save()
+            if immediate:
+                self._flush_repository_save()
+            else:
+                self._debounced_save_repository(400)
 
     def _restore_open_memos(self) -> None:
         self._memos_restored = True
@@ -7107,7 +7134,7 @@ class MainWindow(QMainWindow):
             if dlg and dlg.isVisible() and hasattr(dlg, "update_memo_content"):
                 dlg.update_memo_content(entry)
 
-    def _sync_open_group_ids(self, persist: bool = True) -> None:
+    def _sync_open_group_ids(self, persist: bool = True, immediate: bool = False) -> None:
         if not hasattr(self, "_active_group_dialogs"):
             return
         open_ids = []
@@ -7118,7 +7145,10 @@ class MainWindow(QMainWindow):
                     dlg._save_group_state()
         self.repository.set_setting("open_group_ids", ",".join(open_ids))
         if persist:
-            self.repository.save()
+            if immediate:
+                self._flush_repository_save()
+            else:
+                self._debounced_save_repository(400)
 
     def _restore_open_groups(self) -> None:
         raw = self.repository.get_setting("open_group_ids", "")
@@ -7272,8 +7302,8 @@ class MainWindow(QMainWindow):
         try:
             self._remember_window_state()
             self._persist_window_state()
-            self._sync_open_memo_ids(persist=True)
-            self._sync_open_group_ids(persist=True)
+            self._sync_open_memo_ids(persist=True, immediate=True)
+            self._sync_open_group_ids(persist=True, immediate=True)
             if hasattr(self, "sidebar_panel") and self.sidebar_panel.isVisible():
                 w = self.sidebar_panel.width()
                 if 220 <= w <= 700:
@@ -7298,7 +7328,7 @@ class MainWindow(QMainWindow):
                     self._work_manager_dialog.close()
                 except Exception:
                     pass
-            self.repository.save()
+            self._flush_repository_save()
         except Exception:
             pass
 
@@ -7309,14 +7339,14 @@ class MainWindow(QMainWindow):
         if self.tray_icon is not None and not self._force_exit:
             self._remember_window_state()
             self._persist_window_state()
-            self._sync_open_memo_ids(persist=True)
-            self._sync_open_group_ids(persist=True)
+            self._sync_open_memo_ids(persist=True, immediate=True)
+            self._sync_open_group_ids(persist=True, immediate=True)
             self.repository.set_setting("sidebar_visible", "1" if getattr(self, "_sidebar_visible", True) else "0")
             self.repository.set_setting("topbar_visible", "1" if getattr(self, "_topbar_visible", True) else "0")
             self.repository.set_setting("window_opacity", str(int(getattr(self, "_window_opacity_pct", 100))))
             self.repository.set_setting("always_on_top", "1" if getattr(self, "_always_on_top", False) else "0")
             self.repository.set_setting("topbar_window_controls", "1" if getattr(self, "_window_controls_visible", True) else "0")
-            self.repository.save()
+            self._flush_repository_save()
             self.hide()
             event.ignore()
             return
