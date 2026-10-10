@@ -99,6 +99,7 @@ from taskcalendar.qt_rhwp_editor import RhwpEditorWidget
 from taskcalendar.rich_text_edit import RichTextEdit
 from taskcalendar.models import CalendarEntry, EntryType, RecurrenceType
 from taskcalendar.storage import EncryptedRepository
+from taskcalendar import work_files
 
 logger = logging.getLogger(__name__)
 
@@ -2558,56 +2559,8 @@ def export_sheet_to_hwpx(sheet: WorkSheetData, dest_path: Path | str) -> bool:
             dest_p.write_bytes(sheet.hwpx_blob)
             return True
 
-        # 2. hwpx 스킬 베이스 템플릿을 활용하여 완전한 HWPX 패키지 조립
-        base_tmpl = Path(os.path.expanduser("~")) / ".gemini" / "config" / "skills" / "hwpx-skill" / "templates" / "base"
-        if base_tmpl.exists() and (base_tmpl / "Contents" / "section0.xml").exists():
-            import html
-
-            def xml_escape(val: str) -> str:
-                return html.escape(str(val or ""), quote=True).replace("'", "&apos;")
-
-            text = sheet.content_text or sheet.title or ""
-            p_xmls = []
-            title_esc = xml_escape(sheet.title or "무제 업무")
-            p_xmls.append(f'<hp:p id="1" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>[{title_esc}]</hp:t></hp:run></hp:p>')
-            p_xmls.append(f'<hp:p id="2" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>분류: {xml_escape(sheet.category or "-")} | 담당: {xml_escape(sheet.assignee or "-")} | 주기: {xml_escape(sheet.cycle or "-")}</hp:t></hp:run></hp:p>')
-            p_xmls.append('<hp:p id="3" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t></hp:t></hp:run></hp:p>')
-
-            for idx, line in enumerate(text.splitlines(), start=10):
-                line_esc = xml_escape(line)
-                p_xmls.append(f'<hp:p id="{idx}" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="0"><hp:t>{line_esc}</hp:t></hp:run></hp:p>')
-
-            body_xml = "\n".join(p_xmls)
-
-            sec0_path = base_tmpl / "Contents" / "section0.xml"
-            sec0_text = sec0_path.read_text(encoding="utf-8")
-            # <hs:sec ...> 태그 내부의 문단 교체
-            sec_open = sec0_text.split("<hp:p")[0]
-            # 기본 첫 번째 문단 안에 secPr(용지 설정) 보존
-            if "</hp:secPr>" in sec0_text:
-                sec_pr_part = sec0_text.split("</hp:secPr>")[0] + "</hp:secPr></hp:run></hp:p>"
-                new_sec0 = f"{sec_pr_part}\n{body_xml}\n</hs:sec>"
-            else:
-                new_sec0 = f"{sec_open}\n{body_xml}\n</hs:sec>"
-
-            with zipfile.ZipFile(dest_p, "w") as zf:
-                # OCF 규격: mimetype 파일은 무압축(ZIP_STORED)
-                mimetype_p = base_tmpl / "mimetype"
-                if mimetype_p.exists():
-                    zf.write(mimetype_p, "mimetype", compress_type=zipfile.ZIP_STORED)
-
-                for item in base_tmpl.rglob("*"):
-                    if item.is_file():
-                        rel = item.relative_to(base_tmpl).as_posix()
-                        if rel == "mimetype":
-                            continue
-                        if rel == "Contents/section0.xml":
-                            zf.writestr(rel, new_sec0.encode("utf-8"), compress_type=zipfile.ZIP_DEFLATED)
-                        else:
-                            zf.write(item, rel, compress_type=zipfile.ZIP_DEFLATED)
-            return True
-
-        # 3. 폴백: 텍스트 파일 저장
+        # 2. HWPX blob이 없는 문서(HWP 형식이 아니거나 텍스트 문서)는 텍스트 파일로 저장
+        #    (HWPX 생성은 rhwp 에디터 저장 경로가 담당한다. 별도 템플릿 조립은 사용하지 않음)
         txt_path = dest_p.with_suffix(".txt")
         txt_content = f"[{sheet.title}]\n분류: {sheet.category} | 담당: {sheet.assignee} | 주기: {sheet.cycle}\n\n{sheet.content_text}"
         txt_path.write_text(txt_content, encoding="utf-8")
@@ -2615,6 +2568,295 @@ def export_sheet_to_hwpx(sheet: WorkSheetData, dest_path: Path | str) -> bool:
     except Exception as e:
         logger.exception("Failed to export sheet to HWPX: %s", e)
         return False
+
+
+class WorkFileSyncDialog(QDialog):
+    """
+    work/ 폴더와 DB 업무문서가 어긋난 항목을 순차(2단계)로 처리하는 대화상자.
+    1단계: DB에는 있지만 파일이 없음 → 무시 / 삭제 / 파일로 생성 / 폴더로 생성 / 기존 항목과 연결
+    2단계: 파일은 있지만 DB에 없음 → 무시 / 새 업무로 등록 / 기존 업무에 연결
+    상단 '전체 적용'으로 여러 항목을 한 번에 같은 처리로 지정할 수 있다.
+    """
+
+    def __init__(self, parent=None, missing_docs=None, new_files=None, palette=None, tabs=None, categories=None):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QComboBox, QDialogButtonBox, QScrollArea, QStackedWidget
+
+        self._missing = missing_docs or []
+        self._new = new_files or []
+        self._doc_combos: dict = {}
+        self._file_combos: dict = {}
+        self._step = 0
+        self._tab_list = list(tabs or [])
+        self._tabs = {str(t.get("id")): str(t.get("name") or t.get("id")) for t in self._tab_list}
+        cats = list(categories or [])
+        self._cat_by_name = {c.get("name"): c for c in cats}
+        self._cat_by_id = {c.get("id"): c for c in cats}
+
+        self.setWindowTitle("업무 파일 동기화")
+        self.setMinimumWidth(760)
+        self.setMinimumHeight(600)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 16, 20, 14)
+        root.setSpacing(10)
+
+        self._stack = QStackedWidget()
+        both = bool(self._missing) and bool(self._new)
+        self._pages = []
+        if self._missing:
+            lbl = "1단계 · DB에는 있지만 파일이 없음" if both else "DB에는 있지만 파일이 없음"
+            self._pages.append(self._build_missing_page(QComboBox, lbl))
+        if self._new:
+            lbl = "2단계 · 파일은 있지만 DB에 없음" if both else "파일은 있지만 DB에 없음"
+            self._pages.append(self._build_new_page(QComboBox, lbl))
+        if not self._pages:  # 이론상 없음(불일치가 있어야 창이 뜸)
+            self._pages.append(self._build_missing_page(QComboBox, "DB에는 있지만 파일이 없음"))
+        for _w in self._pages:
+            self._stack.addWidget(_w)
+        root.addWidget(self._stack, 1)
+        for _cb in self._doc_combos.values():
+            _cb.currentIndexChanged.connect(self._refresh_all_link_options)
+        self._refresh_all_link_options()
+
+        nav = QHBoxLayout()
+        self._btn_prev = QPushButton("← 이전")
+        self._btn_prev.clicked.connect(lambda: self._goto(self._step - 1))
+        self._btn_next = QPushButton("다음 →")
+        self._btn_next.clicked.connect(lambda: self._goto(self._step + 1))
+        nav.addWidget(self._btn_prev)
+        nav.addWidget(self._btn_next)
+        nav.addStretch(1)
+        btns = QDialogButtonBox()
+        btns.addButton("적용", QDialogButtonBox.ButtonRole.AcceptRole)
+        btns.addButton("나중에", QDialogButtonBox.ButtonRole.RejectRole)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        nav.addWidget(btns)
+        root.addLayout(nav)
+        self._goto(0)
+
+    def _make_action_combo(self, QComboBox, kind: str, fpath: str = "", is_dir: bool = False):
+        cb = QComboBox()
+        cb.setMinimumWidth(220)
+        cb.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        cb.setMinimumContentsLength(16)
+        if kind == "missing":
+            # 업무문서(파일) 전용 → '파일로 생성'만. (폴더를 파일로/파일을 폴더로 금지)
+            cb.addItem("무시(그대로 두기)", ("ignore", None))
+            cb.addItem("삭제 처리", ("delete", None))
+            cb.addItem("파일로 생성", ("create_file", None))
+            for f in self._new:
+                if not f.get("is_dir"):  # 파일 ↔ 파일만 연결
+                    cb.addItem(f"→ 연결: 📄 {f['stem']}{f['ext']}", ("link", str(f["path"])))
+        else:
+            cb.addItem("무시", ("ignore", None))
+            cb.addItem("새 업무로 등록", ("register", fpath))
+            if not is_dir:  # 파일만 기존 업무(파일)에 연결
+                for doc in self._missing:
+                    cb.addItem(f"→ 연결: {doc.get('title')}", ("link_doc", doc.get("id")))
+        return cb
+
+    def _cat_levels(self, name_or_path: str) -> list:
+        """분류명 또는 경로 문자열 → 단계 이름 목록([최상위 … 해당 분류])."""
+        s = (name_or_path or "").strip()
+        if not s:
+            return ["-"]
+        if "/" in s:  # 스캔이 준 경로(예: '재무/예산 편성')는 그대로 단계로 분해
+            return [p for p in s.split("/") if p] or ["-"]
+        row = self._cat_by_name.get(s)
+        if not row:
+            return [s]
+        out, seen = [], set()
+        cur = row
+        while cur and cur.get("id") not in seen:
+            seen.add(cur.get("id"))
+            out.append(str(cur.get("name")))
+            cur = self._cat_by_id.get(cur.get("parent_id")) if cur.get("parent_id") else None
+        out.reverse()
+        return out or [s]
+
+    def _build_tree(self, entries: list, kind: str, QComboBox):
+        """그룹은 탭으로, 분류는 상위 폴더까지 중첩 트리로 표시(좌측 업무분류와 같은 순서)."""
+        from PySide6.QtWidgets import QTabWidget
+
+        tabs = QTabWidget()
+        tab_list = self._tab_list or [{"id": None, "name": "전체"}]
+        for t in tab_list:
+            tid = t.get("id")
+            if tid is None:
+                ents = list(entries)
+            else:
+                ents = [e for e in entries if str(e.get("group") or "1") == str(tid)]
+            if not ents:
+                continue
+            tree = QTreeWidget()
+            tree.setColumnCount(2)
+            tree.setHeaderLabels(["분류 / 업무", "처리"])
+            tree.setColumnWidth(0, 360)
+            tree.header().setStretchLastSection(True)
+            nodes: dict = {}
+            for e in ents:
+                catname = e.get("category_name") or e.get("category") or "-"
+                parent_item = None
+                key_path = ""
+                for lvl in self._cat_levels(catname):
+                    key_path = f"{key_path}/{lvl}".strip("/")
+                    if key_path not in nodes:
+                        item = QTreeWidgetItem([f"📁 {lvl}", ""])
+                        if parent_item is None:
+                            tree.addTopLevelItem(item)
+                        else:
+                            parent_item.addChild(item)
+                        nodes[key_path] = item
+                    parent_item = nodes[key_path]
+                if kind == "missing":
+                    it = QTreeWidgetItem([f"📄 {e.get('title')}", ""])
+                    combo = self._make_action_combo(QComboBox, "missing")
+                    # 같은 파일명이 있으면 기본으로 연결 지정
+                    want = work_files.sheet_file_stem(e.get("title") or "")
+                    for i in range(combo.count()):
+                        d = combo.itemData(i)
+                        if d and d[0] == "link" and Path(d[1]).stem == want:
+                            combo.setCurrentIndex(i)
+                            break
+                    self._doc_combos[e.get("id")] = combo
+                else:
+                    icon = "📁" if e.get("is_dir") else "📄"
+                    it = QTreeWidgetItem([f"{icon} {e['stem']}{e['ext']}", ""])
+                    combo = self._make_action_combo(QComboBox, "new", str(e["path"]), bool(e.get("is_dir")))
+                    self._file_combos[str(e["path"])] = combo
+                (parent_item or tree.invisibleRootItem()).addChild(it)
+                tree.setItemWidget(it, 1, combo)
+            tree.expandAll()
+            tabs.addTab(tree, str(t.get("name") or tid))
+        return tabs
+
+    def _build_missing_page(self, QComboBox, label: str = "DB에는 있지만 파일이 없음"):
+        page = QWidget()
+        v = QVBoxLayout(page)
+        head = QLabel(f"■ {label} ({len(self._missing)})")
+        head.setStyleSheet("font-weight: bold;")
+        v.addWidget(head)
+        v.addWidget(QLabel("'파일로 생성' / '삭제' 하거나, 이름이 바뀐 경우 '연결'로 지정하세요. (업무문서는 파일)"))
+        bulk = QHBoxLayout()
+        bulk.addWidget(QLabel("전체 적용:"))
+        self._bulk_missing = QComboBox()
+        for label, data in (("— 선택 —", None), ("전체 무시", ("ignore", None)), ("전체 삭제", ("delete", None)),
+                            ("전체 파일로 생성", ("create_file", None))):
+            self._bulk_missing.addItem(label, data)
+        b_btn = QPushButton("적용")
+        b_btn.clicked.connect(lambda: self._apply_bulk(self._doc_combos, self._bulk_missing))
+        bulk.addWidget(self._bulk_missing)
+        bulk.addWidget(b_btn)
+        bulk.addStretch(1)
+        v.addLayout(bulk)
+        if self._missing:
+            v.addWidget(self._build_tree(self._missing, "missing", QComboBox), 1)
+        else:
+            v.addWidget(QLabel("(해당 없음)"), 1)
+        return page
+
+    def _build_new_page(self, QComboBox, label: str = "파일은 있지만 DB에 없음"):
+        page = QWidget()
+        v = QVBoxLayout(page)
+        head = QLabel(f"■ {label} ({len(self._new)})")
+        head.setStyleSheet("font-weight: bold;")
+        v.addWidget(head)
+        v.addWidget(QLabel("새 업무로 등록하거나, 이름이 바뀐 경우 기존 업무에 연결하세요. (📄 파일 / 📁 폴더)"))
+        bulk = QHBoxLayout()
+        bulk.addWidget(QLabel("전체 적용:"))
+        self._bulk_new = QComboBox()
+        for label, data in (("— 선택 —", None), ("전체 무시", ("ignore", None)), ("전체 새 업무로 등록", ("register", None))):
+            self._bulk_new.addItem(label, data)
+        b_btn = QPushButton("적용")
+        b_btn.clicked.connect(lambda: self._apply_bulk(self._file_combos, self._bulk_new))
+        bulk.addWidget(self._bulk_new)
+        bulk.addWidget(b_btn)
+        bulk.addStretch(1)
+        v.addLayout(bulk)
+        if self._new:
+            v.addWidget(self._build_tree(self._new, "new", QComboBox), 1)
+        else:
+            v.addWidget(QLabel("(해당 없음)"), 1)
+        return page
+
+    def _apply_bulk(self, combos, bulk_combo):
+        action = bulk_combo.currentData()
+        if not action:
+            return
+        want = action[0]
+        for cb in combos.values():
+            for i in range(cb.count()):
+                data = cb.itemData(i)
+                if data and data[0] == want:
+                    cb.setCurrentIndex(i)
+                    break
+
+    def _refresh_all_link_options(self) -> None:
+        """연결 후보 중복 제거 — 한 행에서 고른 파일은 다른 행의 후보에서 빠진다."""
+        claimed: set = set()
+        for did, cb in self._doc_combos.items():
+            cur = cb.currentData()
+            cur_path = cur[1] if (cur and cur[0] == "link") else None
+            own = cur_path if (cur_path and cur_path not in claimed) else None
+            if own:
+                claimed.add(own)
+            cb.blockSignals(True)
+            cb.clear()
+            cb.addItem("무시(그대로 두기)", ("ignore", None))
+            cb.addItem("삭제 처리", ("delete", None))
+            cb.addItem("파일로 생성", ("create_file", None))
+            for f in self._new:
+                if f.get("is_dir"):
+                    continue
+                p = str(f["path"])
+                if p in claimed and p != own:
+                    continue
+                cb.addItem(f"→ 연결: 📄 {f['stem']}{f['ext']}", ("link", p))
+            target = ("link", own) if own else (cur if (cur and cur[0] != "link") else ("ignore", None))
+            for i in range(cb.count()):
+                if cb.itemData(i) == target:
+                    cb.setCurrentIndex(i)
+                    break
+            cb.blockSignals(False)
+
+    def _goto(self, step: int) -> None:
+        multi = len(self._pages) > 1
+        n = max(1, len(self._pages))
+        step = max(0, min(n - 1, step))
+        self._step = step
+        self._stack.setCurrentIndex(step)
+        self._btn_prev.setVisible(multi)
+        self._btn_next.setVisible(multi)
+        self._btn_prev.setEnabled(multi and step > 0)
+        self._btn_next.setEnabled(multi and step < n - 1)
+
+    def get_result(self) -> dict:
+        links: dict = {}
+        deleted: list = []
+        create_file: list = []
+        create_folder: list = []
+        register: list = []
+        for doc_id, cb in self._doc_combos.items():
+            action, payload = cb.currentData() or ("ignore", None)
+            if action == "delete":
+                deleted.append(doc_id)
+            elif action == "create_file":
+                create_file.append(doc_id)
+            elif action == "create_folder":
+                create_folder.append(doc_id)
+            elif action == "link" and payload:
+                links[doc_id] = payload
+        for fpath, cb in self._file_combos.items():
+            action, payload = cb.currentData() or ("ignore", None)
+            if action == "register" and payload:
+                register.append(payload)
+            elif action == "link_doc" and payload is not None and payload not in links:
+                links[payload] = fpath
+        linked = set(links.values())
+        register = [r for r in register if r not in linked]
+        return {"links": links, "deleted": deleted, "create_file": create_file,
+                "create_folder": create_folder, "register": register}
 
 
 class WorkExportWizardDialog(QDialog):
@@ -2625,11 +2867,12 @@ class WorkExportWizardDialog(QDialog):
     - 실행: QProgressDialog 연동 및 저장 폴더 열기 안내
     """
 
-    def __init__(self, parent=None, sheets: list[WorkSheetData] | None = None, categories: list[dict] | None = None, palette: dict | None = None):
+    def __init__(self, parent=None, sheets: list[WorkSheetData] | None = None, categories: list[dict] | None = None, palette: dict | None = None, tabs: list[dict] | None = None):
         super().__init__(parent)
         self.sheets = sheets or []
         self.categories = categories or []
         self.palette = palette or {}
+        self.tabs = tabs or []
 
         self.setWindowTitle("업무 및 편람 내보내기 마법사")
         self.setMinimumWidth(560)
@@ -2637,6 +2880,21 @@ class WorkExportWizardDialog(QDialog):
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         self._init_ui()
+
+    def _group_name(self, category_name: str) -> str:
+        """분류가 속한 그룹(하단 탭)의 표시 이름. 내보내기 폴더명 복원에 사용."""
+        try:
+            tid = None
+            for c in self.categories:
+                if c.get("name") == category_name:
+                    tid = c.get("tab_id")
+                    break
+            for t in self.tabs:
+                if t.get("id") == tid:
+                    return str(t.get("name") or "")
+        except Exception:
+            pass
+        return ""
 
     def _init_ui(self) -> None:
         bg = self.palette.get("bg", "#F8FAFC")
@@ -3024,6 +3282,25 @@ class WorkExportWizardDialog(QDialog):
         dest_root = Path(dest_dir_str)
         try:
             dest_root.mkdir(parents=True, exist_ok=True)
+            # 내보내기 전용 구조/매핑 정의 파일(work.json) — 불러오기에서 이걸로 그룹/분류/문서를 복원한다
+            try:
+                wj = {
+                    "version": 1,
+                    "groups": [{"id": t.get("id"), "name": t.get("name")} for t in self.tabs],
+                    "categories": [
+                        {"name": c.get("name"), "parent": c.get("parent_name"), "group": c.get("tab_id")}
+                        for c in self.categories
+                    ],
+                    "documents": [
+                        {"title": s.title, "category": s.category, "group": self._group_name(s.category)}
+                        for s in self.sheets
+                    ],
+                }
+                (dest_root / "work.json").write_text(
+                    json.dumps(wj, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            except Exception as e:
+                logger.warning("Failed to write work.json: %s", e)
         except Exception as e:
             QMessageBox.critical(self, "폴더 오류", f"저장 폴더를 생성할 수 없습니다:\n{e}")
             return
@@ -3055,7 +3332,8 @@ class WorkExportWizardDialog(QDialog):
             # 대상 서브폴더 결정
             if use_subfolders:
                 clean_cat = "".join(c for c in (s.category or "일반") if c not in r'\/:*?"<>|').strip() or "일반"
-                target_dir = dest_root / clean_cat
+                grp = "".join(c for c in self._group_name(s.category) if c not in r'\/:*?"<>|').strip()
+                target_dir = (dest_root / grp / clean_cat) if grp else (dest_root / clean_cat)
             else:
                 target_dir = dest_root
             target_dir.mkdir(parents=True, exist_ok=True)
@@ -4790,6 +5068,7 @@ class WorkManagerDialog(QDialog):
                     hwpx_blob=sheet.hwpx_blob,
                     sort_order=self._all_sheets.index(sheet) if sheet in self._all_sheets else 0,
                 )
+            self._persist_sheet_file(sheet)
         except Exception as e:
             logger.exception("Failed to save sheet sync: %s", e)
         finally:
@@ -5384,6 +5663,9 @@ class WorkManagerDialog(QDialog):
         if not getattr(self, "_first_show_prompt_done", False):
             self._first_show_prompt_done = True
             QTimer.singleShot(350, self._check_first_time_context_menu_prompt)
+        if not getattr(self, "_work_migration_checked", False):
+            self._work_migration_checked = True
+            QTimer.singleShot(500, self._work_startup_sync)
 
     def _apply_restored_panel_sizes(self) -> None:
         """창이 표시된 뒤 저장된 좌·우 패널 폭을 확정적으로 적용한다."""
@@ -5430,6 +5712,16 @@ class WorkManagerDialog(QDialog):
         self.meta_assignee_input.setText(sheet.assignee)
         self.meta_deadline_input.setText(sheet.deadline)
 
+        # work/ 파일이 있으면 파일 내용을 우선 반영(한글 등 외부 편집 반영 = 파일이 원본)
+        try:
+            wf_path = work_files.find_sheet_file(self._group_no(sheet.category), self._cat_path(sheet.category), sheet.title or "무제 업무")
+            if wf_path and work_files.is_native_file(wf_path):
+                data = wf_path.read_bytes()
+                if data and data != sheet.hwpx_blob:
+                    sheet.hwpx_blob = data
+        except Exception:
+            pass
+
         # rhwp 에디터로 본문 로드 (HWPX 바이너리가 있으면 무손실 원본 로드, 없으면 텍스트로 로드)
         self.editor.load_document(
             title=sheet.title,
@@ -5437,8 +5729,8 @@ class WorkManagerDialog(QDialog):
             hwpx_bytes=sheet.hwpx_blob,
         )
 
-        # 우측 첨부파일 갱신
-        self._refresh_attachments_list(sheet.attachments)
+        # 우측 첨부파일 갱신 (폴더 스캔 기반: 폴더가 진실, DB는 자동 보정)
+        self._sync_attachments_from_disk(sheet)
 
         # 우측 관련 일정 목록 갱신
         self._refresh_work_schedules_list(sheet)
@@ -5529,6 +5821,7 @@ class WorkManagerDialog(QDialog):
                         hwpx_blob=current.hwpx_blob,
                         sort_order=self._all_sheets.index(current) if current in self._all_sheets else 0,
                     )
+                    self._persist_sheet_file(current)
                 current.is_dirty = False
                 self._update_tab_title(current)
                 self._refresh_category_tree()
@@ -6135,9 +6428,678 @@ class WorkManagerDialog(QDialog):
         """좌측 트리 문서 더블클릭 시 에디터로 열기 (폴더 더블클릭 시 펼침/접힘 토글)"""
         sheet = item.data(0, Qt.UserRole)
         if isinstance(sheet, WorkSheetData):
-            self.open_sheet(sheet)
+            self._open_sheet_or_external(sheet)
         else:
             item.setExpanded(not item.isExpanded())
+
+    def _group_no(self, category_name: str) -> str:
+        """분류가 속한 그룹(하단 탭)의 폴더 번호. work/<번호>/<분류>/ … (탭 이름 매핑은 DB에 저장)"""
+        try:
+            for c in self._category_rows:
+                if c.get("name") == category_name:
+                    return str(c.get("tab_id", 1) or 1)
+        except Exception:
+            pass
+        return "1"
+
+    def _cat_path(self, category_name: str) -> str:
+        """분류명 → '상위/분류' 계층 경로(좌측 트리와 동일). work/<그룹>/<이 경로>/<파일>"""
+        try:
+            chain, seen = [], set()
+            cur = next((c for c in self._category_rows if c.get("name") == category_name), None)
+            while cur and cur.get("id") not in seen:
+                seen.add(cur.get("id"))
+                chain.append(str(cur.get("name")))
+                pid = cur.get("parent_id")
+                cur = next((c for c in self._category_rows if c.get("id") == pid), None) if pid else None
+            chain.reverse()
+            if chain:
+                return "/".join(chain)
+        except Exception:
+            pass
+        return category_name or "미분류"
+
+    def _sheet_work_file_path(self, sheet: "WorkSheetData") -> Path:
+        """업무문서의 work/ 파일 경로 (그룹/분류계층/제목 기준, 파일명 정제 적용)"""
+        grp = self._group_no(sheet.category)
+        return work_files.sheet_hwpx_path(grp, self._cat_path(sheet.category), sheet.title or "무제 업무")
+
+    def _export_sheet_to_work_file(self, sheet: "WorkSheetData") -> Path | None:
+        """업무문서 현재 내용을 work/ 폴더에 .hwpx 파일로 내보낸다(항상 최신으로 덮어씀)."""
+        try:
+            if sheet in self._open_sheets and self._open_sheets.index(sheet) == self._active_sheet_index:
+                try:
+                    self._save_current_sheet_data()
+                except Exception:
+                    pass
+            dest = self._sheet_work_file_path(sheet)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if not export_sheet_to_hwpx(sheet, dest):
+                return None
+            if dest.exists():
+                return dest
+            txt = dest.with_suffix(".txt")
+            if txt.exists():
+                return txt
+            return None
+        except Exception as e:
+            logger.exception("Failed to export sheet to work file: %s", e)
+            return None
+
+    def _open_sheet_in_hangul(self, sheet: "WorkSheetData") -> None:
+        """업무문서를 work/ 파일로 내보내 OS 기본 프로그램(한글 등)으로 연다."""
+        path = self._export_sheet_to_work_file(sheet)
+        if not path:
+            QMessageBox.warning(self, "한글로 열기", "문서를 파일로 내보내지 못했습니다.")
+            return
+        if not work_files.open_path_with_os(path):
+            QMessageBox.information(self, "한글로 열기", f"파일 위치:\n{path}")
+
+    def _reveal_sheet_file(self, sheet: "WorkSheetData") -> None:
+        """업무문서를 work/ 파일로 내보낸 뒤 탐색기에서 선택 표시한다."""
+        path = self._export_sheet_to_work_file(sheet)
+        if not path:
+            QMessageBox.warning(self, "탐색기에서 열기", "문서를 파일로 내보내지 못했습니다.")
+            return
+        work_files.reveal_in_explorer(path)
+
+    def _persist_sheet_file(self, sheet: "WorkSheetData") -> None:
+        """업무문서 내용을 work/ 아래 실제 .hwpx 파일로 저장(파일화)."""
+        if not sheet or not sheet.hwpx_blob:
+            return
+        try:
+            dest = work_files.sheet_hwpx_path(self._group_no(sheet.category), self._cat_path(sheet.category), sheet.title or "무제 업무")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(sheet.hwpx_blob)
+        except Exception as e:
+            logger.warning("Failed to persist work file: %s", e)
+
+    def _open_sheet_or_external(self, sheet: "WorkSheetData") -> None:
+        """업무파일 열기: 에디터로 열 수 있으면 에디터, 아니면 안내 후 OS 기본 프로그램."""
+        f = None
+        try:
+            f = work_files.find_sheet_file(self._group_no(sheet.category), self._cat_path(sheet.category), sheet.title or "무제 업무")
+        except Exception:
+            f = None
+        if f and work_files.is_text_file(f):
+            # 텍스트(txt/md 등): 에디터로 열고 '한글 파일로 변환' 여부를 묻는다(원본 유지)
+            try:
+                sheet.content_text = f.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+            if QMessageBox.question(
+                self, "한글로 변환",
+                f"'{f.name}' 은(는) 텍스트 문서입니다.\n한글 파일(.hwpx)로 변환할까요?\n\n※ 원본은 첨부파일로 보관되고, 작업 폴더에는 .hwpx만 남습니다.",
+                QMessageBox.Yes | QMessageBox.No,
+            ) == QMessageBox.Yes:
+                self.open_sheet(sheet)
+                self._convert_text_to_hwpx(sheet, f)  # 원본은 첨부로, 작업 폴더엔 .hwpx만
+                return
+            # 아니요 → 에디터로 열지 않고 윈도우 기본 프로그램으로 바로 연다 (에디터는 .hwp/.hwpx 전용)
+            work_files.open_path_with_os(f)
+            return
+        if f and not work_files.is_editor_openable(f):
+            self._open_file_external_with_notice(f)
+            return
+        self.open_sheet(sheet)
+
+    def _convert_text_to_hwpx(self, sheet: "WorkSheetData", src_path: Path) -> None:
+        """텍스트 원본을 첨부로 옮겨 보존하고, 에디터 내용을 .hwpx로 저장(변환)."""
+        import shutil
+
+        try:
+            if self.repository and sheet.db_id:
+                base = self._attach_base_for(sheet)
+                base.mkdir(parents=True, exist_ok=True)
+                dest = work_files.unique_path(base / src_path.name)
+                shutil.move(str(src_path), str(dest))
+                try:
+                    sz = dest.stat().st_size
+                except Exception:
+                    sz = 0
+                self.repository.add_work_attachment(
+                    work_id=sheet.db_id, file_name=dest.name, file_path=str(dest),
+                    file_size=work_files._fmt_size(sz), file_type=dest.suffix.lower(), folder_path="",
+                )
+        except Exception as e:
+            logger.warning("text->attach move failed: %s", e)
+        try:
+            self._attach_watch_set(self._attach_base_for(sheet))
+        except Exception:
+            pass
+        QTimer.singleShot(1500, self._on_save_button_clicked)  # 에디터 로드 후 .hwpx로 저장
+
+    def _open_file_external_with_notice(self, path: Path) -> None:
+        """에디터로 못 여는 파일: 안내 후 기본 프로그램으로 연다('다시 열지 않음' 지원)."""
+        key = "work_open_external_notice_disabled"
+        suppressed = False
+        if self.repository:
+            try:
+                suppressed = self.repository.get_setting(key, "") == "1"
+            except Exception:
+                suppressed = False
+        if not suppressed:
+            from PySide6.QtWidgets import QCheckBox
+
+            box = QMessageBox(self)
+            box.setWindowTitle("다른 프로그램으로 열기")
+            box.setIcon(QMessageBox.Icon.Information)
+            box.setText(
+                f"'{Path(path).name}' 파일은 편집기에서 열 수 없는 형식입니다.\n"
+                "윈도우 기본 프로그램으로 엽니다."
+            )
+            cb = QCheckBox("다시 열지 않음")
+            box.setCheckBox(cb)
+            box.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+            if box.exec() != QMessageBox.StandardButton.Ok:
+                return
+            if cb.isChecked() and self.repository:
+                try:
+                    self.repository.set_setting(key, "1")
+                except Exception:
+                    pass
+        work_files.open_path_with_os(path)
+
+    def _work_startup_sync(self) -> None:
+        """업무문서 파일화·첨부 이관 후 work/ 폴더와 DB 동기화를 점검."""
+        self._maybe_migrate_work_to_files()
+        self._maybe_migrate_attachments()
+        self._check_work_file_sync()
+
+    def _maybe_migrate_attachments(self) -> None:
+        """기존 첨부파일을 work/ 트리로 1회 이관(파일 이동 + DB 경로 갱신)."""
+        if not self.repository:
+            return
+        flag = "work_attachment_migration_v2"
+        try:
+            if self.repository.get_setting(flag, "") == "1":
+                return
+        except Exception:
+            return
+        try:
+            n = self.repository.migrate_work_attachments_into_work_tree()
+        except Exception as e:
+            logger.warning("attachment migration failed: %s", e)
+            return
+        try:
+            self.repository.set_setting(flag, "1")
+        except Exception:
+            pass
+        if n:
+            try:
+                self.show_floating_toast(f"첨부파일 {n}건을 work 폴더로 옮겼습니다.")
+            except Exception:
+                pass
+
+    def _check_work_file_sync(self) -> None:
+        """work/ 폴더와 DB 업무문서의 차이를 점검(내용 해시 기반 rename 인식 포함)."""
+        if not self.repository:
+            return
+        try:
+            if self.repository.get_setting("work_file_migration_v2", "") != "1":
+                return  # 이관 전에는 점검 생략
+            import hashlib
+
+            db_items = []
+            for it in self.repository.list_work_items():
+                blob = it.get("hwpx_blob")
+                db_items.append({
+                    "id": it.get("id"),
+                    "title": it.get("title"),
+                    "category_name": it.get("category_name"),
+                    "group": self._group_no(it.get("category_name")),
+                    "cat_path": self._cat_path(it.get("category_name")),
+                    "sha1": hashlib.sha1(blob).hexdigest() if blob else None,
+                    "hwpx_blob": blob,
+                })
+            known_cats = {c.get("name") for c in self._category_rows if c.get("name")}
+            plan = work_files.plan_reconcile(db_items, work_files.scan_work_files(known_cats))
+        except Exception as e:
+            logger.warning("work file sync check failed: %s", e)
+            return
+
+        # 이름만 바뀐 문서(내용 동일)는 파일명 기준으로 DB 제목을 갱신
+        renamed_applied = 0
+        for db, f in plan["renamed"]:
+            try:
+                if db.get("id"):
+                    self.repository.update_work_item_title(db["id"], f["stem"])
+                    renamed_applied += 1
+            except Exception:
+                pass
+        if renamed_applied:
+            try:
+                self._refresh_category_tree()
+            except Exception:
+                pass
+
+        # 애매한 항목(파일 없음/새 파일)은 대화형 매핑 팝업으로 처리
+        if not (plan["missing"] or plan["new"]):
+            return
+        dlg = WorkFileSyncDialog(
+            self,
+            missing_docs=plan["missing"],
+            new_files=plan["new"],
+            palette=self.palette,
+            tabs=self._category_tabs,
+            categories=self._category_rows,
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._apply_work_sync(dlg.get_result(), db_items)
+
+    def _apply_work_sync(self, result: dict, db_items: list[dict]) -> None:
+        """동기화 팝업 결과 적용: 연결(이름 변경) / 삭제 / 새 업무 등록."""
+        if not self.repository:
+            return
+        cats = {d.get("id"): (d.get("category_name") or "미분류") for d in db_items}
+        cpaths = {d.get("id"): (d.get("cat_path") or d.get("category_name") or "미분류") for d in db_items}
+        grps = {d.get("id"): (d.get("group") or "1") for d in db_items}
+        for doc_id, fpath in (result.get("links") or {}).items():
+            f = Path(fpath)
+            try:
+                self.repository.update_work_item_title(doc_id, f.stem)
+                cat = cats.get(doc_id) or "미분류"
+                canonical = work_files.category_dir(grps.get(doc_id, "1"), cpaths.get(doc_id, cat)) / f"{work_files.sheet_file_stem(f.stem)}{f.suffix}"
+                if f.resolve() != canonical.resolve():
+                    canonical.parent.mkdir(parents=True, exist_ok=True)
+                    if canonical.exists():
+                        canonical = work_files.unique_path(canonical)
+                    f.rename(canonical)
+            except Exception as e:
+                logger.warning("work sync link failed: %s", e)
+        for doc_id in (result.get("deleted") or []):
+            try:
+                target = next((s for s in self._all_sheets if s.db_id == doc_id), None)
+                if target is not None:
+                    self._remove_sheet(target)  # DB + 메모리 목록/탭까지 함께 제거(즉시 반영)
+                else:
+                    self.repository.delete_work_item(doc_id)
+            except Exception as e:
+                logger.warning("work sync delete failed: %s", e)
+        for doc_id in (result.get("create_file") or []):
+            try:
+                doc = next((d for d in db_items if d.get("id") == doc_id), None)
+                if not doc:
+                    continue
+                cat = cats.get(doc_id, "미분류")
+                dest = work_files.sheet_hwpx_path(grps.get(doc_id, "1"), cpaths.get(doc_id, cat), doc.get("title") or "무제 업무")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                blob = doc.get("hwpx_blob")
+                if blob:
+                    dest.write_bytes(blob)
+                else:
+                    dest.with_suffix(".txt").write_text(f"[{doc.get('title')}]\n분류: {cat}\n", encoding="utf-8")
+            except Exception as e:
+                logger.warning("work sync create_file failed: %s", e)
+        for doc_id in (result.get("create_folder") or []):
+            try:
+                doc = next((d for d in db_items if d.get("id") == doc_id), None)
+                if not doc:
+                    continue
+                folder = work_files.category_dir(grps.get(doc_id, "1"), cpaths.get(doc_id, cats.get(doc_id, "미분류"))) / work_files.sheet_file_stem(doc.get("title") or "무제 업무")
+                folder.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                logger.warning("work sync create_folder failed: %s", e)
+        for fpath in (result.get("register") or []):
+            f = Path(fpath)
+            try:
+                text, blob = extract_document_content(f)
+            except Exception:
+                text, blob = "", None
+            try:
+                grp = 1
+                try:
+                    rel = f.relative_to(work_files.work_root())
+                    if rel.parts and str(rel.parts[0]).isdigit():
+                        grp = int(rel.parts[0])
+                except Exception:
+                    pass
+                cat = f.parent.name or "일반 업무"
+                cid = next((c.get("id") for c in self._category_rows if c.get("name") == cat), None)
+                if cid is None and self.repository:
+                    cid = self.repository.add_work_category(cat, sort_order=len(self._category_rows) + 1, tab_id=grp)
+                self.repository.upsert_work_item(
+                    work_id=None,
+                    title=f.stem,
+                    category_name=cat,
+                    category_id=cid,
+                    content_text=text or "",
+                    hwpx_blob=blob,
+                    sort_order=len(self._all_sheets),
+                )
+            except Exception as e:
+                logger.warning("work sync register failed: %s", e)
+        # 새 업무가 트리에 바로 보이도록 목록을 다시 읽는다
+        try:
+            self._load_data_from_db()
+        except Exception:
+            pass
+        try:
+            self._refresh_category_combos()
+        except Exception:
+            pass
+        try:
+            self._refresh_category_tree()
+        except Exception:
+            pass
+
+    def _on_import_work_folder(self) -> None:
+        """내보낸 폴더를 불러와 그룹/분류/문서를 복원한다(work.json 우선, 없으면 폴더명 기준)."""
+        if not self.repository:
+            return
+        from PySide6.QtWidgets import QFileDialog
+
+        d = QFileDialog.getExistingDirectory(self, "불러올 폴더 선택 (내보낸 폴더 또는 work 폴더)")
+        if not d:
+            return
+        root = Path(d)
+        data = None
+        wj_path = root / "work.json"
+        if wj_path.exists():
+            try:
+                data = json.loads(wj_path.read_text(encoding="utf-8"))
+            except Exception:
+                data = None
+
+        # 1) 그룹(탭) 복원
+        if data and data.get("groups"):
+            try:
+                tabs = []
+                for i, g in enumerate(data["groups"]):
+                    tid = int(g.get("id") or (i + 1))
+                    tabs.append({"id": tid, "name": str(g.get("name") or tid)})
+                if tabs:
+                    self._category_tabs = tabs
+                    self._active_category_tab_id = tabs[0]["id"]
+                    self.repository.set_setting("work_category_tabs", json.dumps(tabs, ensure_ascii=False))
+            except Exception as e:
+                logger.warning("import groups failed: %s", e)
+
+        # 2) 복원할 문서/분류 목록 수집
+        group_of_cat: dict[str, str] = {}
+        docs: list[tuple[str, str]] = []
+        if data and data.get("categories"):
+            for c in data["categories"]:
+                nm = (c.get("name") or "").strip()
+                if nm:
+                    group_of_cat[nm] = str(c.get("group") or "1")
+        if data and data.get("documents"):
+            for doc in data["documents"]:
+                title = (doc.get("title") or "").strip()
+                if title:
+                    cat = (doc.get("category") or "").strip() or "일반 업무"
+                    docs.append((title, cat))
+                    if doc.get("group"):
+                        group_of_cat.setdefault(cat, str(doc.get("group")))
+        if not docs:
+            for p in sorted(root.rglob("*")):
+                if not p.is_file() or p.name == "work.json":
+                    continue
+                parts = p.relative_to(root).parts
+                if any(part.endswith("_첨부파일") for part in parts[:-1]):
+                    continue
+                cat = parts[-2] if len(parts) >= 2 else "일반 업무"
+                docs.append((p.stem, cat))
+
+        # 3) 분류 생성(중복 방지)
+        existing_cats = {c.get("name") for c in self._category_rows}
+        added_cat = 0
+        for _, cat in list(docs) + [(None, nm) for nm in group_of_cat]:
+            if cat and cat not in existing_cats:
+                try:
+                    self.repository.add_work_category(cat, sort_order=len(existing_cats) + 1,
+                                                      tab_id=int(group_of_cat.get(cat) or 1))
+                    existing_cats.add(cat)
+                    added_cat += 1
+                except Exception:
+                    pass
+
+        # 4) 문서 생성 + 원본 파일을 work/ 트리로 복사
+        existing_titles = {s.title for s in self._all_sheets}
+        added_doc = 0
+        for title, cat in docs:
+            if title in existing_titles:
+                continue
+            try:
+                self.repository.upsert_work_item(
+                    work_id=None, title=title, category_name=cat,
+                    content_text="", hwpx_blob=None, sort_order=len(existing_titles) + 1,
+                )
+                existing_titles.add(title)
+                added_doc += 1
+            except Exception as e:
+                logger.warning("import doc failed: %s", e)
+            try:
+                src = next((p for p in root.rglob(f"{title}.*") if p.is_file() and p.name != "work.json"), None)
+                if src is not None:
+                    work_files.copy_into_work_tree(group_of_cat.get(cat, "1"), cat, src.name, src)
+            except Exception:
+                pass
+
+        self._load_categories_from_db()
+        self._refresh_category_tree()
+        self._refresh_category_combos()
+        QMessageBox.information(
+            self, "불러오기 완료",
+            f"분류 {added_cat}개, 문서 {added_doc}건을 가져왔습니다."
+            + ("\n(work.json 기준으로 복원)" if data else "\n(폴더 구조 기준으로 복원)"),
+        )
+
+    def _maybe_migrate_work_to_files(self) -> None:
+        """기존 DB blob 업무문서를 work/ 파일로 1회 이관(동의 팝업 후 진행)."""
+        if not self.repository:
+            return
+        flag = "work_file_migration_v2"
+        try:
+            if self.repository.get_setting(flag, "") == "1":
+                return
+        except Exception:
+            return
+        try:
+            items = self.repository.list_work_items()
+        except Exception:
+            return
+        targets = [{**it, "group": self._group_no(it.get("category_name")),
+                    "cat_path": self._cat_path(it.get("category_name"))} for it in items if it.get("title")]
+        if not targets:
+            try:
+                self.repository.set_setting(flag, "1")
+            except Exception:
+                pass
+            return
+
+        box = QMessageBox(self)
+        box.setWindowTitle("업무문서 저장 방식 변경 안내")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(
+            "업무문서 저장 방식이 [DB 내부 저장] → [파일(.hwpx) 저장] 으로 바뀝니다.\n\n"
+            f"기존 업무문서 {len(targets)}건을 work 폴더에 .hwpx 파일로 변환합니다.\n\n"
+            "※ 변환된 문서는 한글로 열 수 있는 대신 암호화되지 않습니다."
+        )
+        box.setStandardButtons(QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel)
+        if box.exec() != QMessageBox.StandardButton.Ok:
+            return  # 취소 시 다음 실행에 다시 안내
+
+        from PySide6.QtWidgets import QProgressDialog
+
+        prog = QProgressDialog("업무문서를 파일로 변환하는 중...", "취소", 0, len(targets), self)
+        prog.setWindowModality(Qt.WindowModality.WindowModal)
+        prog.setMinimumDuration(0)
+
+        def _cb(i: int, total: int):
+            prog.setValue(i)
+            try:
+                QApplication.processEvents()
+            except Exception:
+                pass
+            return not prog.wasCanceled()
+
+        import types
+
+        def _writer(item, dest):
+            """blob이 있으면 그대로, 없으면 텍스트로 HWPX를 생성해 저장."""
+            sh = types.SimpleNamespace(
+                hwpx_blob=item.get("hwpx_blob"),
+                content_text=item.get("content_text") or "",
+                title=item.get("title") or "무제 업무",
+                category=item.get("category_name") or "미분류",
+                assignee=item.get("assignee") or "",
+                cycle=item.get("cycle") or "수시",
+            )
+            return export_sheet_to_hwpx(sh, dest)
+
+        done = work_files.migrate_items_to_files(targets, _writer, _cb)
+        prog.setValue(len(targets))
+        if prog.wasCanceled():
+            return
+        try:
+            self.repository.set_setting(flag, "1")
+        except Exception:
+            pass
+        try:
+            self.show_floating_toast(f"업무문서 {done}건을 파일로 변환했습니다.")
+        except Exception:
+            pass
+
+    def _work_link_counts(self, sheet: "WorkSheetData") -> tuple[int, int]:
+        """업무문서에 연결된 (일정 수, 관련 문서 수). 첨부로 이동 시 해제 안내에 사용."""
+        if not self.repository or not sheet or not sheet.db_id:
+            return (0, 0)
+        n_sched = n_docs = 0
+        try:
+            n_sched = len(self.repository.list_entries_for_work(work_id=sheet.db_id, work_title=sheet.title))
+        except Exception:
+            pass
+        try:
+            n_docs = len(self.repository.list_linked_entries_for_work(work_id=sheet.db_id, entry_type="task"))
+        except Exception:
+            pass
+        return (n_sched, n_docs)
+
+    def _remove_sheet(self, target: "WorkSheetData") -> None:
+        """업무문서를 확인 없이 제거(DB 삭제 + 탭/목록 정리). 활성 시트가 아니면 활성 시트를 유지."""
+        if self.repository and target.db_id:
+            self.repository.delete_work_item(target.db_id)
+        if target in self._all_sheets:
+            self._all_sheets.remove(target)
+        if target in self._open_sheets:
+            idx = self._open_sheets.index(target)
+            was_active = idx == self._active_sheet_index
+            self._open_sheets.pop(idx)
+            self.sheet_tab_bar.blockSignals(True)
+            self.sheet_tab_bar.removeTab(idx)
+            self.sheet_tab_bar.blockSignals(False)
+            if was_active:
+                if self._open_sheets:
+                    new_idx = min(idx, len(self._open_sheets) - 1)
+                    self.sheet_tab_bar.setCurrentIndex(new_idx)
+                    self._active_sheet_index = new_idx
+                    self._load_sheet_to_editor(new_idx)
+                else:
+                    self._active_sheet_index = -1
+                    self._clear_editor_view()
+            elif idx < self._active_sheet_index:
+                self._active_sheet_index -= 1
+
+    def _demote_sheet_to_attachment(self, sheet: "WorkSheetData") -> None:
+        """업무문서를 현재 열려 있는 업무의 첨부파일로 이동(연결은 해제됨)."""
+        if not self.repository:
+            return
+        target = self._get_current_sheet()
+        if not target or target is sheet:
+            QMessageBox.information(self, "첨부파일로 이동", "이 문서를 첨부할 대상 업무를 먼저 열어주세요.")
+            return
+        if not target.db_id:
+            self._save_sheet_sync(target)
+        if not target.db_id:
+            QMessageBox.warning(self, "첨부파일로 이동", "대상 업무를 저장할 수 없어 이동할 수 없습니다.")
+            return
+
+        n_sched, n_docs = self._work_link_counts(sheet)
+        msg = f"'{sheet.title}' 문서를 '{target.title}' 업무의 첨부파일로 이동합니다."
+        if n_sched or n_docs:
+            msg += f"\n\n⚠ 연결된 일정 {n_sched}건, 관련 문서 {n_docs}건의 연결이 해제됩니다."
+        msg += "\n\n계속할까요?"
+        if QMessageBox.question(self, "첨부파일로 이동", msg, QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+
+        path = self._export_sheet_to_work_file(sheet)
+        if not path:
+            QMessageBox.warning(self, "첨부파일로 이동", "문서를 파일로 내보내지 못했습니다.")
+            return
+        try:
+            dest_path, size_str, dest_name = self.repository.copy_work_attachment_file(target.db_id, path)
+            att_id = self.repository.add_work_attachment(
+                work_id=target.db_id,
+                file_name=dest_name,
+                file_path=dest_path,
+                file_size=size_str,
+                file_type=path.suffix.lower(),
+                folder_path="",
+            )
+        except Exception as e:
+            logger.exception("Failed to demote sheet to attachment: %s", e)
+            QMessageBox.warning(self, "첨부파일로 이동", f"첨부파일 등록 중 오류: {e}")
+            return
+
+        self._remove_sheet(sheet)
+        target.attachments.append({
+            "id": att_id, "name": dest_name, "path": dest_path,
+            "size": size_str, "folder_path": "", "file_type": path.suffix.lower(), "type": "file",
+        })
+        self._refresh_attachments_list(target.attachments)
+        self._refresh_work_schedules_list(target)
+        self._refresh_category_tree()
+
+    def _promote_attachment_to_sheet(self, att: dict) -> None:
+        """첨부파일을 현재 업무의 분류에 새 업무파일(업무문서)로 승격."""
+        if not self.repository or not att or att.get("type") != "file":
+            return
+        src = Path(att.get("path") or "")
+        if not src.exists():
+            QMessageBox.warning(self, "업무파일로 이동", "첨부파일을 찾을 수 없습니다.")
+            return
+        target = self._get_current_sheet()
+        if not target or not target.db_id:
+            QMessageBox.information(self, "업무파일로 이동", "첨부가 속한 업무를 먼저 열어주세요.")
+            return
+        title = src.stem
+        if QMessageBox.question(
+            self, "업무파일로 이동",
+            f"'{att.get('name', src.name)}' 파일을 '{target.category}' 분류의 새 업무로 등록할까요?",
+            QMessageBox.Yes | QMessageBox.No,
+        ) != QMessageBox.Yes:
+            return
+        try:
+            text, blob = extract_document_content(src)
+        except Exception:
+            text, blob = "", (src.read_bytes() if src.suffix.lower() in (".hwp", ".hwpx") else None)
+        try:
+            self.repository.upsert_work_item(
+                work_id=None,
+                title=title,
+                category_name=target.category or "일반 업무",
+                category_id=target.category_id,
+                content_text=text or "",
+                hwpx_blob=blob,
+                sort_order=len(self._all_sheets),
+            )
+        except Exception as e:
+            logger.exception("Failed to promote attachment to sheet: %s", e)
+            QMessageBox.warning(self, "업무파일로 이동", f"업무 등록 중 오류: {e}")
+            return
+        # work/ 트리에 파일 사본을 남기고 원본 첨부는 정리
+        try:
+            work_files.copy_into_work_tree(self._group_no(target.category), self._cat_path(target.category), src.name, src)
+        except Exception:
+            pass
+        try:
+            self.repository.delete_work_attachment(att.get("id"), delete_file=True)
+        except Exception:
+            pass
+        target.attachments = [a for a in target.attachments if a.get("id") != att.get("id")]
+        self._refresh_attachments_list(target.attachments)
+        self._refresh_category_tree()
 
     def _on_tree_context_menu(self, pos: QPoint) -> None:
         """좌측 트리 항목 우클릭 컨텍스트 메뉴 (폴더추가, 문서추가, 이름변경, 삭제)"""
@@ -6147,16 +7109,23 @@ class WorkManagerDialog(QDialog):
         if not item:
             act_add_cat = menu.addAction("📁 새 분류(폴더) 추가")
             act_add_doc = menu.addAction("📄 새 업무 추가")
+            menu.addSeparator()
+            act_import = menu.addAction("📥 불러오기 (내보낸 폴더)")
             action = menu.exec(self.category_tree.mapToGlobal(pos))
             if action == act_add_cat:
                 self._on_add_category()
             elif action == act_add_doc:
                 self._on_add_new_sheet()
+            elif action == act_import:
+                self._on_import_work_folder()
             return
 
         sheet = item.data(0, Qt.UserRole)
         if isinstance(sheet, WorkSheetData):
             act_open = menu.addAction("📄 열기")
+            act_open_hwp = menu.addAction("📝 한글로 열기")
+            act_reveal = menu.addAction("📂 탐색기에서 열기")
+            act_demote = menu.addAction("📎 첨부파일로 이동")
             act_rename = menu.addAction("✏️ 이름 바꾸기")
             act_dup = menu.addAction("📋 복제")
 
@@ -6180,12 +7149,28 @@ class WorkManagerDialog(QDialog):
                 self._move_sheet_to_tab(sheet, doc_tab_actions[action])
             elif action == act_open:
                 self.open_sheet(sheet)
+            elif action == act_open_hwp:
+                self._open_sheet_in_hangul(sheet)
+            elif action == act_reveal:
+                self._reveal_sheet_file(sheet)
+            elif action == act_demote:
+                self._demote_sheet_to_attachment(sheet)
             elif action == act_reg_cal:
                 self._register_sheet_to_calendar(sheet)
             elif action == act_rename:
                 new_title, ok = get_input_text(self, "업무 이름 변경", "새 이름:", text=sheet.title)
                 if ok and new_title.strip():
+                    old_title = sheet.title
                     sheet.title = new_title.strip()
+                    try:
+                        grp = self._group_no(sheet.category)
+                        catp = self._cat_path(sheet.category)
+                        work_files.rename_sheet_file(grp, catp, old_title, sheet.title)
+                        moved = work_files.rename_attachment_dir(grp, catp, old_title, sheet.title)
+                        if moved and self.repository:
+                            self.repository.update_attachment_paths_under(str(moved[0]), str(moved[1]))
+                    except Exception:
+                        pass
                     if self.repository and sheet.db_id:
                         self.repository.upsert_work_item(
                             work_id=sheet.db_id,
@@ -6466,6 +7451,19 @@ class WorkManagerDialog(QDialog):
                                 content_html=s.content_html,
                                 hwpx_blob=s.hwpx_blob,
                             )
+            # 디스크 폴더도 함께 이동 (본문 폴더 + 첨부 폴더)
+            try:
+                grp = self._group_no(old_cat)
+                old_path = self._cat_path(old_cat)
+                new_path = "/".join((old_path.split("/")[:-1] if old_path else []) + [c])
+                m1 = work_files.move_dir(work_files.category_dir(grp, old_path), work_files.category_dir(grp, new_path))
+                m2 = work_files.move_dir(work_files.attach_base(grp, old_path), work_files.attach_base(grp, new_path))
+                if self.repository:
+                    for m in (m1, m2):
+                        if m:
+                            self.repository.update_attachment_paths_under(str(m[0]), str(m[1]))
+            except Exception as e:
+                logger.warning("category rename move failed: %s", e)
             self._load_categories_from_db()
             self._refresh_category_combos()
             self._refresh_category_tree()
@@ -6591,8 +7589,20 @@ class WorkManagerDialog(QDialog):
                     if db_key:
                         seen_ids.add(db_key)
 
+                    old_category = sheet.category
                     sheet.category = cat_name
                     sheet.category_id = cat_id
+                    if old_category and old_category != cat_name:
+                        try:
+                            moves = work_files.move_sheet_files(
+                                self._group_no(old_category), self._cat_path(old_category),
+                                self._group_no(cat_name), self._cat_path(cat_name), sheet.title,
+                            )
+                            if self.repository:
+                                for m in moves:
+                                    self.repository.update_attachment_paths_under(str(m[0]), str(m[1]))
+                        except Exception as e:
+                            logger.warning("sheet category move failed: %s", e)
                     new_all_sheets.append(sheet)
                     doc_sort_order += 1
                     if self.repository and sheet.db_id:
@@ -6650,6 +7660,97 @@ class WorkManagerDialog(QDialog):
             self._load_categories_from_db()
             self._refresh_category_combos()
             self._refresh_category_tree()
+
+    def _attach_base_for(self, sheet: "WorkSheetData") -> Path:
+        grp = self._group_no(sheet.category)
+        return work_files.attach_dir(grp, self._cat_path(sheet.category), sheet.title or "무제 업무")
+
+    def _sync_attachments_from_disk(self, sheet: "WorkSheetData") -> None:
+        """첨부 폴더를 스캔해 목록을 만들고 DB 행을 자동 보정(폴더가 진실)."""
+        if not sheet:
+            return
+        try:
+            base = self._attach_base_for(sheet)
+        except Exception:
+            base = None
+        items = work_files.scan_attach_tree(base) if base else []
+        if self.repository and sheet.db_id:
+            try:
+                rows = self.repository.list_work_attachments(sheet.db_id)
+            except Exception:
+                rows = []
+            disk_paths = {it["path"] for it in items if it["type"] == "file"}
+            row_by_path = {str(r.get("file_path")): r for r in rows}
+            for r in rows:  # 없어진 파일 행 제거(파일은 디스크에서 사라졌으므로 유지 안 함)
+                if r.get("file_path") and str(r["file_path"]) not in disk_paths:
+                    try:
+                        self.repository.delete_work_attachment(int(r["id"]), delete_file=False)
+                    except Exception:
+                        pass
+            for it in items:  # 새 파일 행 추가 + id 부여
+                if it["type"] != "file":
+                    continue
+                r = row_by_path.get(it["path"])
+                if r:
+                    it["id"] = r.get("id")
+                    it["size"] = r.get("file_size") or it["size"]
+                else:
+                    try:
+                        it["id"] = self.repository.add_work_attachment(
+                            work_id=sheet.db_id, file_name=it["name"], file_path=it["path"],
+                            file_size=it["size"], file_type=it["file_type"], folder_path=it["folder_path"],
+                        )
+                    except Exception:
+                        it["id"] = None
+        sheet.attachments = items
+        self._refresh_attachments_list(items)
+        self._attach_watch_set(base)
+
+    def _attach_watch_set(self, base: Path | None) -> None:
+        """첨부 폴더(하위 포함)를 감시해 변경 시 바로 반영."""
+        try:
+            from PySide6.QtCore import QFileSystemWatcher
+
+            w = getattr(self, "_attach_watcher", None)
+            if w is None:
+                w = QFileSystemWatcher(self)
+                w.directoryChanged.connect(self._on_attach_dir_changed)
+                w.fileChanged.connect(self._on_attach_dir_changed)
+                self._attach_watcher = w
+            want: set = set()
+            if base is not None and base.is_dir():
+                want.add(str(base))
+                for d in base.rglob("*"):
+                    if d.is_dir():
+                        want.add(str(d))
+            for p in w.directories():
+                if str(p) not in want:
+                    w.removePath(str(p))
+            for p in sorted(want):
+                if p not in w.directories():
+                    w.addPath(p)
+        except Exception as e:
+            logger.warning("attach watch failed: %s", e)
+
+    def _on_attach_dir_changed(self, _path: str = "") -> None:
+        try:
+            t = getattr(self, "_attach_debounce", None)
+            if t is None:
+                t = QTimer(self)
+                t.setSingleShot(True)
+                t.timeout.connect(self._on_attach_debounce_fire)
+                self._attach_debounce = t
+            t.start(400)
+        except Exception:
+            pass
+
+    def _on_attach_debounce_fire(self) -> None:
+        try:
+            sheet = self._get_current_sheet()
+            if sheet:
+                self._sync_attachments_from_disk(sheet)
+        except Exception:
+            pass
 
     def _refresh_attachments_list(self, files: list[dict] | None = None) -> None:
         """우측 첨부파일 트리 재구성 (폴더 트리 계층 구조 및 파일 목록)"""
@@ -7854,6 +8955,33 @@ class WorkManagerDialog(QDialog):
         self._mark_active_sheet_dirty()
         self._refresh_attachments_list(curr.attachments)
 
+    def _on_rename_attachment_file(self, data: dict) -> None:
+        """첨부 파일 이름 변경(실제 파일 + DB + 메모리 목록)."""
+        if not self.repository or not data or data.get("type") != "file":
+            return
+        cur_name = data.get("name") or Path(data.get("path") or "").name
+        new_name, ok = get_input_text(self, "파일 이름 변경", "새 파일 이름:", text=cur_name)
+        if not (ok and new_name.strip() and new_name.strip() != cur_name):
+            return
+        try:
+            newp = self.repository.rename_work_attachment(int(data.get("id")), new_name.strip())
+        except Exception as e:
+            logger.exception("rename attachment failed: %s", e)
+            newp = ""
+        if not newp:
+            QMessageBox.warning(self, "파일 이름 변경", "이름을 바꾸지 못했습니다.")
+            return
+        try:
+            if 0 <= self._active_sheet_index < len(self._open_sheets):
+                cur = self._open_sheets[self._active_sheet_index]
+                for a in cur.attachments:
+                    if a.get("id") == data.get("id"):
+                        a["name"] = Path(newp).name
+                        a["path"] = newp
+                self._refresh_attachments_list(cur.attachments)
+        except Exception:
+            pass
+
     def _on_attachment_context_menu(self, pos: QPoint) -> None:
         """우측 첨부파일 트리 우클릭 컨텍스트 메뉴"""
         items = self.file_list.selectedItems()
@@ -7889,6 +9017,8 @@ class WorkManagerDialog(QDialog):
                 else:
                     act_open_file = menu.addAction("📄 파일 열기")
                     act_open_folder = menu.addAction("📁 폴더 열기 (탐색기에서 보기)")
+                    act_promote = menu.addAction("📄 업무파일로 이동")
+                    act_rename_f = menu.addAction("✏️ 파일 이름 변경...")
                     menu.addSeparator()
                     act_delete = menu.addAction("🗑️ 파일 삭제")
                     menu.addSeparator()
@@ -7899,6 +9029,10 @@ class WorkManagerDialog(QDialog):
                         self._open_selected_attachment()
                     elif action == act_open_folder:
                         self._open_selected_folder()
+                    elif action == act_promote:
+                        self._promote_attachment_to_sheet(data)
+                    elif action == act_rename_f:
+                        self._on_rename_attachment_file(data)
                     elif action == act_delete:
                         self._delete_selected_attachment()
                     elif action == act_add_file:
@@ -8069,6 +9203,21 @@ class WorkManagerDialog(QDialog):
                 hwpx_blob=hwpx_blob,
                 sort_order=len(self._all_sheets) + 1,
             )
+
+        # 4-1. 등록 즉시 work/ 에 업무파일 생성 (드래그하자마자 폴더에 파일이 생기도록)
+        if self.repository:
+            try:
+                grp = self._group_no(chosen_cat)
+                catp = self._cat_path(chosen_cat)
+                if work_files.is_native_file(p) and hwpx_blob:
+                    dest = work_files.sheet_hwpx_path(grp, catp, chosen_title)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(hwpx_blob)
+                else:
+                    # HWP 원본(blob 없음)·텍스트·기타는 원본 파일을 그대로 보관(변환 없이)
+                    work_files.copy_into_work_tree(grp, catp, f"{chosen_title}{p.suffix}", p)
+            except Exception as e:
+                logger.warning("Failed to create work file on import: %s", e)
 
         # 5. 첨부파일 저장
         attachments = []
@@ -8430,6 +9579,7 @@ class WorkManagerDialog(QDialog):
             sheets=self._all_sheets,
             categories=self._category_rows,
             palette=self.palette,
+            tabs=self._category_tabs,
         )
         dlg.exec()
 

@@ -1756,6 +1756,14 @@ class EncryptedRepository:
         self.save()
         return work_id
 
+    def update_work_item_title(self, work_id: int, title: str) -> None:
+        """업무문서 제목만 변경(파일명 기반 rename 자동 반영용)"""
+        self.connection.execute(
+            "UPDATE work_items SET title = ?, updated_at = ? WHERE id = ?",
+            (title, datetime.now().isoformat(), work_id),
+        )
+        self.save()
+
     def delete_work_item(self, work_id: int) -> None:
         self.delete_all_work_attachment_files(work_id)
         self.connection.execute("DELETE FROM work_items WHERE id = ?", (work_id,))
@@ -1767,15 +1775,93 @@ class EncryptedRepository:
             pass
         self.save()
 
+    def _category_chain_name(self, name: str, parent_id) -> str:
+        """분류명 + parent_id → '상위/분류' 계층 경로 문자열"""
+        chain, seen = [], set()
+        cur_name, cur_pid = name, parent_id
+        while cur_name and cur_pid not in seen:
+            seen.add(cur_pid)
+            chain.append(cur_name)
+            row = (
+                self.connection.execute(
+                    "SELECT name, parent_id FROM work_categories WHERE id = ?", (cur_pid,)
+                ).fetchone()
+                if cur_pid
+                else None
+            )
+            cur_name = row["name"] if row else None
+            cur_pid = row["parent_id"] if row else None
+        chain.reverse()
+        return "/".join(chain) if chain else (name or "미분류")
+
     def get_work_attachments_dir(self, work_id: int, subfolder: str = "") -> Path:
-        """업무 문서별 전용 첨부파일 디렉토리 반환 (attachments/work/work_{work_id}/{subfolder})"""
-        d = self.attachments_root / "work" / f"work_{work_id}"
+        """업무 첨부 디렉토리: work/<그룹>/<분류경로>/<업무명>_첨부파일/<subfolder> (본문과 같은 공간)"""
+        from taskcalendar import work_files
+
+        row = self.connection.execute(
+            "SELECT w.title AS title, c.name AS cat, c.tab_id AS tab, c.parent_id AS pid "
+            "FROM work_items w LEFT JOIN work_categories c ON w.category_id = c.id WHERE w.id = ?",
+            (int(work_id),),
+        ).fetchone()
+        title = ((row["title"] if row else "") or "무제 업무")
+        catpath = self._category_chain_name(row["cat"], row["pid"]) if row and row["cat"] else "미분류"
+        grp = str((row["tab"] if row else None) or 1)
+        d = work_files.attach_dir(grp, catpath, title)
         if subfolder:
             clean_sub = Path(subfolder.strip().replace("\\", "/")).as_posix().strip("/")
             if clean_sub and ".." not in clean_sub:
                 d = d / clean_sub
         d.mkdir(parents=True, exist_ok=True)
         return d
+
+    def update_attachment_paths_under(self, old_dir: str, new_dir: str) -> int:
+        """지정 폴더 하위 첨부의 file_path를 새 폴더 기준으로 갱신(업무 이름 변경 시)."""
+        rows = self.connection.execute("SELECT id, file_path FROM work_attachments").fetchall()
+        n = 0
+        for r in rows:
+            p = str(r["file_path"] or "")
+            if p and p.startswith(old_dir):
+                self.connection.execute(
+                    "UPDATE work_attachments SET file_path = ? WHERE id = ?",
+                    (new_dir + p[len(old_dir):], r["id"]),
+                )
+                n += 1
+        if n:
+            self.save()
+        return n
+
+    def migrate_work_attachments_into_work_tree(self) -> int:
+        """기존 첨부(db/attachments/work/work_{id}/…)를 work/ 트리로 1회 이관(파일 이동 + DB 경로 갱신)."""
+        import shutil
+        from taskcalendar import work_files
+
+        attach_root_str = str(work_files.work_root() / work_files.ATTACH_ROOT)
+        rows = self.connection.execute(
+            "SELECT id, work_id, file_path, folder_path FROM work_attachments"
+        ).fetchall()
+        moved = 0
+        for r in rows:
+            try:
+                old = Path(r["file_path"] or "")
+                if not old.exists() or not old.is_file():
+                    continue
+                if attach_root_str in str(old):  # 이미 work/attach/ 안에 있음
+                    continue
+                target_dir = self.get_work_attachments_dir(int(r["work_id"]), (r["folder_path"] or "").strip())
+                dest = target_dir / old.name
+                if dest.exists() and dest.resolve() != old.resolve():
+                    dest = work_files.unique_path(dest)
+                if dest.resolve() != old.resolve():
+                    shutil.move(str(old), str(dest))
+                self.connection.execute(
+                    "UPDATE work_attachments SET file_path = ? WHERE id = ?", (str(dest), r["id"])
+                )
+                moved += 1
+            except Exception as e:
+                logger.warning("attach migration failed (id=%s): %s", r.get("id"), e)
+        if moved:
+            self.save()
+        return moved
 
     def copy_work_attachment_file(self, work_id: int, source_path: Path | str, subfolder: str = "") -> tuple[str, str, str]:
         """
@@ -1846,6 +1932,37 @@ class EncryptedRepository:
         att_id = cursor.lastrowid
         self.save()
         return att_id
+
+    def rename_work_attachment(self, att_id: int, new_name: str) -> str:
+        """첨부 파일의 실제 이름을 바꾸고 DB(file_name/file_path)를 갱신. 새 경로 반환(실패 시 "")."""
+        from taskcalendar import work_files
+
+        row = self.connection.execute(
+            "SELECT file_path, file_name FROM work_attachments WHERE id = ?", (int(att_id),)
+        ).fetchone()
+        if not row:
+            return ""
+        old = Path(row["file_path"] or "")
+        if not old.exists() or not old.is_file():
+            return ""
+        safe = work_files.sanitize_component((new_name or "").strip(), old.stem)
+        if not Path(safe).suffix:
+            safe = safe + old.suffix
+        dest = old.parent / safe
+        if dest.exists() and dest.resolve() != old.resolve():
+            dest = work_files.unique_path(dest)
+        if dest.resolve() != old.resolve():
+            try:
+                old.rename(dest)
+            except Exception as e:
+                logger.warning("attachment rename failed: %s", e)
+                return ""
+        self.connection.execute(
+            "UPDATE work_attachments SET file_name = ?, file_path = ? WHERE id = ?",
+            (dest.name, str(dest), int(att_id)),
+        )
+        self.save()
+        return str(dest)
 
     def delete_work_attachment(self, att_id: int, delete_file: bool = True) -> None:
         """첨부파일 DB 삭제 및 (선택 시) 디스크 상의 실제 보관 파일 영구 삭제"""
@@ -1922,14 +2039,29 @@ class EncryptedRepository:
         self.save()
 
     def delete_all_work_attachment_files(self, work_id: int) -> None:
-        """업무 삭제 시 해당 업무에 보관된 모든 첨부파일 디렉토리 및 파일 물리 삭제"""
-        work_dir = self.attachments_root / "work" / f"work_{work_id}"
-        if work_dir.exists():
-            import shutil
+        """업무 삭제 시 첨부 디렉토리 물리 삭제 (옛 위치 + work/attach/<그룹>/<분류>/<업무명>)"""
+        import shutil
+        from taskcalendar import work_files
+
+        targets = [self.attachments_root / "work" / f"work_{work_id}"]
+        try:
+            row = self.connection.execute(
+                "SELECT w.title AS title, c.name AS cat, c.tab_id AS tab, c.parent_id AS pid "
+                "FROM work_items w LEFT JOIN work_categories c ON w.category_id = c.id WHERE w.id = ?",
+                (int(work_id),),
+            ).fetchone()
+            if row and row["title"]:
+                catpath = self._category_chain_name(row["cat"], row["pid"]) if row["cat"] else "미분류"
+                grp = str(row["tab"] or 1)
+                targets.append(work_files.attach_dir(grp, catpath, row["title"]))
+        except Exception:
+            pass
+        for d in targets:
             try:
-                shutil.rmtree(work_dir, ignore_errors=True)
+                if d.exists():
+                    shutil.rmtree(d, ignore_errors=True)
             except Exception as e:
-                logger.warning(f"Could not delete work attachment directory {work_dir}: {e}")
+                logger.warning(f"Could not delete work attachment directory {d}: {e}")
 
     def _update_work_rag_index(self, work_id: int, title: str, category: str, content_text: str) -> None:
         """업무 문서의 본문을 청킹하여 RAG 및 FTS 색인 테이블에 등록"""
