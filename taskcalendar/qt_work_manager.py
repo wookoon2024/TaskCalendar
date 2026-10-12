@@ -62,6 +62,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -83,6 +84,8 @@ from PySide6.QtWidgets import (
     QStyleFactory,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QTableWidget,
+    QTableWidgetItem,
     QTabBar,
     QToolTip,
     QToolButton,
@@ -963,13 +966,15 @@ def extract_document_content(file_path: Path | str) -> tuple[str, bytes | None]:
                 try:
                     import zipfile
                     import re
+                    import html as _html
                     with zipfile.ZipFile(path, "r") as z:
                         for name in z.namelist():
                             if name.startswith("Contents/section") and name.endswith(".xml"):
                                 xml_data = z.read(name).decode("utf-8", errors="ignore")
-                                text_nodes = re.findall(r"<[^:]+:t[^>]*>(.*?)</[^:]+:t>", xml_data)
+                                text_nodes = re.findall(r"<(?:[^:>]+:)?t(?:\s[^>]*)?>(.*?)</(?:[^:>]+:)?t>", xml_data)
                                 if text_nodes:
-                                    extracted_text += "\n".join(t for t in text_nodes if t.strip()) + "\n"
+                                    cleaned = [_html.unescape(re.sub(r"<[^>]+>", "", t)).strip() for t in text_nodes]
+                                    extracted_text += "\n".join(c for c in cleaned if c) + "\n"
                 except Exception:
                     pass
             return extracted_text.strip(), raw_bytes
@@ -1316,7 +1321,7 @@ class WorkDrmWarningDialog(QDialog):
 
 
 class WorkDocumentImportDialog(QDialog):
-    """외부 문서 파일 드래그앤드롭 또는 탐색기 우클릭 등록 시 표시되는 확인 및 분류 선택 모달"""
+    """외부 문서 파일 드래그앤드롭 또는 탐색기 우클릭 등록 시 표시되는 확인 및 분류 선택 모달 (AI 자동분류기 포함)"""
 
     def __init__(
         self,
@@ -1327,8 +1332,8 @@ class WorkDocumentImportDialog(QDialog):
         palette: dict | None = None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("업무 등록")
-        self.setFixedWidth(500)
+        self.setWindowTitle("업무 등록 (파일 드래그 앤 드롭)")
+        self.setFixedWidth(530)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         self.path = Path(file_path)
@@ -1336,8 +1341,10 @@ class WorkDocumentImportDialog(QDialog):
         if not self.categories:
             self.categories = ["일반 업무"]
         self.default_category = default_category if default_category in self.categories else self.categories[0]
+        self._ai_worker = None
+        self._palette = palette or resolve_palette(False)
 
-        pal = palette or resolve_palette(False)
+        pal = self._palette
         bg = pal.get("bg", "#F8FAFC")
         panel = pal.get("panel", "#FFFFFF")
         text = pal.get("text", "#1E293B")
@@ -1349,9 +1356,9 @@ class WorkDocumentImportDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(14)
+        layout.setSpacing(12)
 
-        # 상단 안내 카드 (이모티콘 없이 전체 폭을 활용하여 파일명과 전체 경로를 시원하게 표시)
+        # 상단 안내 카드 (파일명과 전체 경로 표시)
         header_frame = QFrame()
         header_frame.setStyleSheet(f"background-color: {panel}; border: 1px solid {line}; border-radius: 6px;")
         info_layout = QVBoxLayout(header_frame)
@@ -1393,9 +1400,59 @@ class WorkDocumentImportDialog(QDialog):
         f_layout.setContentsMargins(14, 14, 14, 14)
         f_layout.setSpacing(10)
 
+        # 업무 분류 헤더 + AI 자동분류 버튼
+        cat_top_row = QHBoxLayout()
+        cat_top_row.setSpacing(6)
         cat_lbl = QLabel("업무 분류:")
         cat_lbl.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {text}; border: none;")
-        f_layout.addWidget(cat_lbl)
+        cat_top_row.addWidget(cat_lbl)
+        cat_top_row.addStretch(1)
+
+        self.btn_ai_classify = QPushButton("AI 자동분류 추천")
+        self.btn_ai_classify.setFixedHeight(26)
+        self.btn_ai_classify.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_ai_classify.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {panel};
+                color: {accent};
+                border: 1px solid {accent};
+                border-radius: 4px;
+                padding: 2px 10px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: #EFF6FF;
+            }}
+            QPushButton:disabled {{
+                background-color: #F1F5F9;
+                color: #94A3B8;
+                border-color: #CBD5E1;
+            }}
+        """)
+        self.btn_ai_classify.clicked.connect(self._on_ai_auto_classify_clicked)
+        cat_top_row.addWidget(self.btn_ai_classify)
+
+        self.btn_ai_cfg = QPushButton("AI 설정")
+        self.btn_ai_cfg.setFixedHeight(26)
+        self.btn_ai_cfg.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_ai_cfg.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {panel};
+                color: {text_muted};
+                border: 1px solid {line};
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: #F1F5F9;
+                color: {text};
+            }}
+        """)
+        self.btn_ai_cfg.clicked.connect(self._open_ai_settings)
+        cat_top_row.addWidget(self.btn_ai_cfg)
+        f_layout.addLayout(cat_top_row)
 
         self.cat_combo = QComboBox()
         self.cat_combo.addItems(self.categories)
@@ -1411,6 +1468,25 @@ class WorkDocumentImportDialog(QDialog):
             }}
         """)
         f_layout.addWidget(self.cat_combo)
+
+        # AI 연결 상태 및 외부 유료 AI 과금 안내 박스
+        self.ai_notice_frame = QFrame()
+        ai_notice_layout = QVBoxLayout(self.ai_notice_frame)
+        ai_notice_layout.setContentsMargins(10, 8, 10, 8)
+        ai_notice_layout.setSpacing(4)
+
+        self.lbl_ai_notice = QLabel("")
+        self.lbl_ai_notice.setWordWrap(True)
+        self.lbl_ai_notice.setStyleSheet("font-size: 11px; border: none; line-height: 1.4;")
+        ai_notice_layout.addWidget(self.lbl_ai_notice)
+
+        self.lbl_ai_result = QLabel("")
+        self.lbl_ai_result.setWordWrap(True)
+        self.lbl_ai_result.setVisible(False)
+        self.lbl_ai_result.setStyleSheet(f"font-size: 11.5px; font-weight: bold; color: {accent}; border: none; margin-top: 2px;")
+        ai_notice_layout.addWidget(self.lbl_ai_result)
+
+        f_layout.addWidget(self.ai_notice_frame)
 
         title_lbl = QLabel("업무 제목:")
         title_lbl.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {text}; border: none;")
@@ -1482,6 +1558,180 @@ class WorkDocumentImportDialog(QDialog):
         btn_layout.addWidget(btn_ok)
 
         layout.addLayout(btn_layout)
+        self._refresh_ai_status_ui()
+
+    def _refresh_ai_status_ui(self) -> None:
+        from taskcalendar.work_smart_tools import get_ai_connection_status
+        st = get_ai_connection_status()
+        connected = st.get("connected", False)
+        is_paid = st.get("is_external_paid", False)
+        notice = st.get("notice_text", "")
+
+        self.lbl_ai_notice.setText(notice)
+        if not connected:
+            self.ai_notice_frame.setStyleSheet(
+                "QFrame { background-color: #F8FAFC; border: 1px dashed #CBD5E1; border-radius: 6px; }"
+            )
+            self.lbl_ai_notice.setStyleSheet("font-size: 11px; color: #64748B; border: none;")
+            self.btn_ai_classify.setEnabled(False)
+            self.btn_ai_classify.setToolTip("외부 AI가 연결되어 있을 때만 사용 가능합니다. 우측 [AI 설정]에서 연결해 주세요.")
+            self.btn_ai_classify.setStyleSheet("""
+                QPushButton {
+                    background-color: #E2E8F0;
+                    color: #94A3B8;
+                    border: 1px solid #CBD5E1;
+                    border-radius: 4px;
+                    padding: 2px 10px;
+                    font-size: 11.5px;
+                    font-weight: bold;
+                }
+            """)
+        else:
+            if is_paid:
+                self.ai_notice_frame.setStyleSheet(
+                    "QFrame { background-color: #FFFBEB; border: 1px solid #FDE68A; border-radius: 6px; }"
+                )
+                self.lbl_ai_notice.setStyleSheet("font-size: 11px; color: #B45309; border: none;")
+            else:
+                self.ai_notice_frame.setStyleSheet(
+                    "QFrame { background-color: #F0F9FF; border: 1px solid #BAE6FD; border-radius: 6px; }"
+                )
+                self.lbl_ai_notice.setStyleSheet("font-size: 11px; color: #0369A1; border: none;")
+
+            self.btn_ai_classify.setEnabled(True)
+            self.btn_ai_classify.setToolTip("업무명과 파일 내용을 분석하여 어떤 분류에 들어가면 좋을지 AI가 추천합니다.")
+            self.btn_ai_classify.setStyleSheet("""
+                QPushButton {
+                    background-color: #EFF6FF;
+                    color: #1D4ED8;
+                    border: 1px solid #93C5FD;
+                    border-radius: 4px;
+                    padding: 2px 10px;
+                    font-size: 11.5px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #DBEAFE;
+                }
+            """)
+
+    def _open_ai_settings(self) -> None:
+        from taskcalendar.ai_assistant import AISettingsDialog
+        dlg = AISettingsDialog(self, palette=self._palette)
+        if dlg.exec():
+            self._refresh_ai_status_ui()
+
+    def _extract_quick_snippet(self) -> str:
+        """파일에서 분류 판단용 앞부분 텍스트 스니펫을 빠르게 추출 (최대 500자)"""
+        try:
+            if not self.path.exists() or self.path.stat().st_size > 8 * 1024 * 1024:
+                return ""
+            ext = self.path.suffix.lower()
+            if ext in (".txt", ".md", ".csv", ".json"):
+                return self.path.read_text(encoding="utf-8", errors="ignore")[:500]
+            if ext == ".hwpx":
+                import zipfile
+                import xml.etree.ElementTree as ET
+                with zipfile.ZipFile(self.path, "r") as zf:
+                    for name in sorted(zf.namelist()):
+                        if name.startswith("Contents/section") and name.endswith(".xml"):
+                            xml_bytes = zf.read(name)
+                            root = ET.fromstring(xml_bytes)
+                            texts = [t.strip() for t in root.itertext() if t and t.strip()]
+                            return " ".join(texts)[:500]
+        except Exception:
+            pass
+        return ""
+
+    def _on_ai_auto_classify_clicked(self) -> None:
+        from taskcalendar.ai_assistant import AIConfigManager, AIChatWorker
+        from taskcalendar.work_smart_tools import (
+            get_ai_connection_status,
+            build_auto_classify_messages,
+            parse_auto_classify_response,
+            classify_folder_files_heuristic,
+        )
+
+        st = get_ai_connection_status()
+        if not st.get("connected"):
+            QMessageBox.information(
+                self,
+                "AI 연결 필요",
+                "AI 자동분류기는 AI가 연결되어 있을 때만 사용할 수 있습니다.\n우측 [AI 설정] 버튼을 눌러 AI를 먼저 연결해 주세요.",
+            )
+            return
+
+        if self._ai_worker and self._ai_worker.isRunning():
+            return
+
+        def _apply_category(rec_cat: str, reason: str, prefix: str = "• AI 추천 분류") -> None:
+            rec_cat = (rec_cat or "").strip()
+            reason = (reason or "").strip()
+            if rec_cat:
+                idx = self.cat_combo.findText(rec_cat)
+                if idx < 0:
+                    self.cat_combo.addItem(rec_cat)
+                    idx = self.cat_combo.findText(rec_cat)
+                if idx >= 0:
+                    self.cat_combo.setCurrentIndex(idx)
+                self.lbl_ai_result.setText(f"{prefix}: [{rec_cat}] — {reason}")
+            else:
+                self.lbl_ai_result.setText(f"• 추천 결과: {reason}")
+
+        def _fallback_local(err_msg: str = "") -> None:
+            try:
+                res_map = classify_folder_files_heuristic(
+                    self.path.parent, [self.path], self.categories
+                )
+                info = res_map.get(str(self.path)) or {}
+                rec_cat = info.get("category", "일반 업무")
+                reason = info.get("reason", "문서 제목 및 키워드 분석")
+                _apply_category(rec_cat, reason, prefix="• 자동 추천 분류")
+            except Exception:
+                self.lbl_ai_result.setText(f"• 자동분류 실패: {err_msg}")
+
+        try:
+            cfg = {**AIConfigManager.load(force_reload=True), "stream": False, "timeout_sec": 20}
+            title_str = self.title_input.text().strip() or self.path.stem
+            snippet = self._extract_quick_snippet()
+            messages = build_auto_classify_messages(
+                file_name=self.path.name,
+                title=title_str,
+                content_snippet=snippet,
+                categories=self.categories,
+            )
+
+            self._ai_worker = AIChatWorker(messages, cfg, self)
+
+            def _on_finished(full_text: str):
+                self.btn_ai_classify.setEnabled(True)
+                self.btn_ai_classify.setText("AI 자동분류 추천")
+                parsed = parse_auto_classify_response(full_text, self.categories)
+                if isinstance(parsed, tuple):
+                    rec_cat, reason = parsed
+                else:
+                    rec_cat = (parsed.get("category") or "").strip()
+                    reason = (parsed.get("reason") or "").strip()
+                _apply_category(rec_cat, reason)
+
+            def _on_error(err_msg: str):
+                self.btn_ai_classify.setEnabled(True)
+                self.btn_ai_classify.setText("AI 자동분류 추천")
+                _fallback_local(err_msg)
+
+            self._ai_worker.finished_ok.connect(_on_finished)
+            self._ai_worker.error_occurred.connect(_on_error)
+
+            self.btn_ai_classify.setEnabled(False)
+            self.btn_ai_classify.setText("분류 분석 중...")
+            self.lbl_ai_result.setVisible(True)
+            self.lbl_ai_result.setText("• 업무명 및 내용을 바탕으로 적합한 업무 분류를 분석하고 있습니다...")
+            self._ai_worker.start()
+        except Exception as e:
+            self.btn_ai_classify.setEnabled(True)
+            self.btn_ai_classify.setText("AI 자동분류 추천")
+            self.lbl_ai_result.setVisible(True)
+            _fallback_local(str(e))
 
     def get_result(self) -> dict:
         return {
@@ -1956,11 +2206,11 @@ class WorkImportWizardDialog(QDialog):
         """
 
         self.rb_folder = QRadioButton(
-            "폴더 불러오기  –  하위 파일을 업무 분류 및 문서로 일괄 등록"
+            "📁 폴더 불러오기  –  하위 파일을 업무 분류 및 문서로 일괄 등록"
         )
         self.rb_folder.setChecked(True)
         self.rb_files = QRadioButton(
-            "파일 불러오기  –  문서 파일 1개 또는 여러 개를 업무로 등록"
+            "📄 파일 불러오기  –  문서 파일 1개 또는 여러 개를 업무로 등록"
         )
         self._mode_btn_group = QButtonGroup(self)
         self._mode_btn_group.addButton(self.rb_folder)
@@ -2106,14 +2356,14 @@ class WorkImportWizardDialog(QDialog):
 
         nav.addStretch(1)
 
-        self.btn_prev = QPushButton("◀ 이전")
+        self.btn_prev = QPushButton("이전")
         self.btn_prev.setFixedSize(_BTN_W, _BTN_H)
         self.btn_prev.setStyleSheet(_btn_nav_style)
         self.btn_prev.clicked.connect(self._go_prev)
         self.btn_prev.hide()
         nav.addWidget(self.btn_prev)
 
-        self.btn_next = QPushButton("다음 ▶")
+        self.btn_next = QPushButton("다음")
         self.btn_next.setFixedSize(110, _BTN_H)
         self.btn_next.setStyleSheet(_accent_ss)
         self.btn_next.clicked.connect(self._go_next)
@@ -2130,7 +2380,7 @@ class WorkImportWizardDialog(QDialog):
         self.btn_prev.setVisible(step > 0)
         if step == 0:
             self.lbl_step.setText("1단계 / 2단계:  불러오기 방식 선택")
-            self.btn_next.setText("다음 ▶")
+            self.btn_next.setText("다음")
         else:
             mode = self.MODE_FOLDER if self.rb_folder.isChecked() else self.MODE_FILES
             self._mode = mode
@@ -2142,6 +2392,7 @@ class WorkImportWizardDialog(QDialog):
             self.file_list_frame.setVisible(not is_folder)
             self.cat_frame.setVisible(is_folder)
             self.target_cat_frame.setVisible(not is_folder)
+            self.cb_ai_classify.setVisible(is_folder)
             # 폴더 모드면 기본 분류명 초기화
             if is_folder and not self.cat_input.text():
                 self.cat_input.setPlaceholderText("폴더명이 자동 입력됩니다")
@@ -2229,37 +2480,64 @@ class WorkImportWizardDialog(QDialog):
     def get_copy_attachment(self) -> bool:
         return self.cb_copy_att.isChecked()
 
+    def get_use_ai_classify(self) -> bool:
+        return False
+
 
 class FolderWorkImportDialog(QDialog):
-
     """
-    폴더를 업무로 등록하기 전 사전 분석 모달:
-    - 포함된 하위 폴더 수 및 파일 수 표시
+    폴더를 업무로 등록하기 전 사전 분석 및 AI 업무분류 자동 정리 모달:
+    - 포함된 하위 폴더 수 및 파일 수 개조식 표시
     - 발견된 확장자별 파일 수 및 체크박스 필터 제공
-    - 업무분류 명칭 및 첨부파일 보관 여부 설정
+    - 폴더와 파일을 AI(또는 스마트 규칙)로 분석하여 파일별 최적 업무분류 자동 배정 및 미리보기·편집 지원
     """
 
-    def __init__(self, parent=None, folder_path: str | Path = "", palette: dict | None = None):
+    # 에디터에서 열거나 변환 가능한 문서/데이터 확장자
+    EDITOR_DOC_EXTS: set[str] = {
+        ".hwp", ".hwpx", ".txt", ".md", ".json", ".csv",
+        ".xml", ".html", ".htm", ".log", ".yaml", ".yml", ".ini", ".hml",
+    }
+
+    def __init__(
+        self,
+        parent=None,
+        folder_path: str | Path = "",
+        palette: dict | None = None,
+        existing_categories: list[str] | None = None,
+        initial_category_name: str = "",
+        initial_copy_attachments: bool = True,
+        auto_run_ai: bool = False,
+    ):
         super().__init__(parent)
         self.folder_path = Path(folder_path)
         self.palette = palette or {}
+        self.existing_categories = list(existing_categories or [])
+        self._initial_category_name = initial_category_name.strip() or self.folder_path.name
+        self._initial_copy_attachments = initial_copy_attachments
+        self._auto_run_ai = auto_run_ai
+
         self.selected_extensions: set[str] = set()
         self.ext_checkboxes: dict[str, QCheckBox] = {}
+        self._ai_category_map: dict[str, str] = {}
+        self._use_ai_map: bool = False
+        self._ai_worker = None
+        self._table_files: list[Path] = []
 
-        self.setWindowTitle("업무 폴더 분석 및 가져오기 설정")
-        self.setMinimumWidth(500)
-        self.setMinimumHeight(440)
+        self.setWindowTitle("업무 폴더 분석 및 AI 업무분류 정리")
+        self.resize(scale_px(860), scale_px(620))
+        self.setMaximumWidth(scale_px(940))
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         self._scan_folder()
         self._init_ui()
+        self._populate_preview_table_default()
 
     def _scan_folder(self) -> None:
         self.subfolder_count = 0
         self.all_files: list[Path] = []
         self.att_files_count = 0
         if self.folder_path.exists() and self.folder_path.is_dir():
-            for p in self.folder_path.rglob("*"):
+            for p in sorted(self.folder_path.rglob("*")):
                 if p.is_dir():
                     if not is_inside_attachment_folder(p / "dummy"):
                         self.subfolder_count += 1
@@ -2268,7 +2546,7 @@ class FolderWorkImportDialog(QDialog):
                         self.att_files_count += 1
                     else:
                         self.all_files.append(p)
-        self.ext_counter = Counter(f.suffix.lower() or "(확장자 없음)" for f in self.all_files)
+        self.ext_counter = Counter(f.suffix.lower() or "확장자 없음" for f in self.all_files)
 
     def _init_ui(self) -> None:
         bg = self.palette.get("bg", "#F8FAFC")
@@ -2276,190 +2554,611 @@ class FolderWorkImportDialog(QDialog):
         panel_alt = self.palette.get("panel_alt", "#F1F5F9")
         line = self.palette.get("line", "#CBD5E1")
         text = self.palette.get("text", "#0F172A")
-        muted = self.palette.get("text_muted", "#64748B")
-        accent = self.palette.get("accent", "#0284C7")
+        muted = self.palette.get("text_muted", self.palette.get("muted", "#64748B"))
+        accent = self.palette.get("accent", "#2563EB")
+        accent_soft = self.palette.get("accent_soft", "#EFF6FF")
+
+        ff_css = font_family_css()
+        f_base = make_ui_font_like(12)
+        f_bold = make_ui_font_like(12, bold=True)
+        self.setFont(f_base)
+
+        fs_12 = scale_px(12)
+        fs_11 = scale_px(11)
+        row_h = scale_px(30)
+        hdr_h = scale_px(32)
+        btn_h = scale_px(30)
 
         self.setStyleSheet(f"""
             QDialog {{
                 background-color: {bg};
                 color: {text};
+                font-family: {ff_css};
+                font-size: {fs_12}px;
             }}
             QLabel {{
                 color: {text};
+                font-family: {ff_css};
+                font-size: {fs_12}px;
+                background: transparent;
             }}
             QPushButton {{
                 background-color: {panel};
                 border: 1px solid {line};
-                border-radius: 4px;
+                border-radius: 6px;
                 color: {text};
-                padding: 4px 10px;
-                font-size: 12px;
+                padding: 0px 12px;
+                font-family: {ff_css};
+                font-size: {fs_12}px;
+                font-weight: 600;
             }}
             QPushButton:hover {{
                 background-color: {panel_alt};
             }}
             QCheckBox {{
                 color: {text};
-                font-size: 12px;
+                font-family: {ff_css};
+                font-size: {fs_12}px;
                 spacing: 6px;
+            }}
+            QLineEdit {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-family: {ff_css};
+                font-size: {fs_12}px;
+            }}
+            QTableWidget {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                gridline-color: {line};
+                outline: none;
+                font-family: {ff_css};
+                font-size: {fs_12}px;
+            }}
+            QHeaderView::section {{
+                background-color: {panel_alt};
+                color: {text};
+                font-family: {ff_css};
+                font-size: {fs_12}px;
+                font-weight: 600;
+                padding: 0px 8px;
+                border: none;
+                border-bottom: 1px solid {line};
+                border-right: 1px solid {line};
             }}
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(12)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
 
-        # 1. 안내 헤더
-        header_lbl = QLabel(f"📁 폴더 분석: <b>{html.escape(self.folder_path.name)}</b>")
-        header_lbl.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {accent};")
-        layout.addWidget(header_lbl)
-
-        path_lbl = QLabel(str(self.folder_path))
-        path_lbl.setStyleSheet(f"font-size: 11px; color: {muted}; margin-bottom: 4px;")
-        path_lbl.setWordWrap(True)
-        layout.addWidget(path_lbl)
-
-        # 2. 통계 카드
+        # 1. 상단 개조식 요약 바
         stats_frame = QFrame()
-        stats_frame.setStyleSheet(f"""
-            QFrame {{
-                background-color: {panel_alt};
-                border: 1px solid {line};
-                border-radius: 6px;
-                padding: 8px 12px;
-            }}
-        """)
+        stats_frame.setStyleSheet(
+            f"QFrame {{ background-color: {panel}; border: 1px solid {line}; border-radius: 8px; }}"
+        )
         stats_layout = QHBoxLayout(stats_frame)
-        stats_layout.setContentsMargins(8, 6, 8, 6)
+        stats_layout.setContentsMargins(12, 8, 12, 8)
+        stats_layout.setSpacing(12)
 
-        lbl_folders = QLabel(f"하위 폴더: <b>{self.subfolder_count}</b>개")
-        file_msg = f"총 문서: <b>{len(self.all_files)}</b>개"
-        if self.att_files_count > 0:
-            file_msg += f" (연계 첨부파일 {self.att_files_count}개)"
-        lbl_files = QLabel(file_msg)
-        lbl_types = QLabel(f"파일 형식: <b>{len(self.ext_counter)}</b>종류")
-        stats_layout.addWidget(lbl_folders)
-        stats_layout.addWidget(lbl_files)
-        stats_layout.addWidget(lbl_types)
+        att_part = f"   |   연계 첨부파일: {self.att_files_count}개" if self.att_files_count > 0 else ""
+        summary_txt = (
+            f"• 대상 폴더: {self.folder_path.name}   |   "
+            f"하위 폴더: {self.subfolder_count}개   |   "
+            f"문서 파일: {len(self.all_files)}개   |   "
+            f"형식: {len(self.ext_counter)}종류{att_part}"
+        )
+        self.lbl_summary = QLabel(summary_txt)
+        self.lbl_summary.setFont(f_bold)
+        self.lbl_summary.setStyleSheet("border: none;")
+        stats_layout.addWidget(self.lbl_summary)
+        stats_layout.addStretch(1)
         layout.addWidget(stats_frame)
 
-        # 3. 확장자 선택 영역
+        # 2. 확장자 선택 영역 (컴팩트)
+        ext_frame = QFrame()
+        ext_frame.setStyleSheet(
+            f"QFrame {{ background-color: {panel}; border: 1px solid {line}; border-radius: 8px; }}"
+        )
+        ext_lay = QVBoxLayout(ext_frame)
+        ext_lay.setContentsMargins(12, 8, 12, 8)
+        ext_lay.setSpacing(6)
+
         ext_header = QHBoxLayout()
-        ext_header.addWidget(QLabel("등록할 파일 형식 선택:"))
+        lbl_ext_title = QLabel("• 등록할 파일 형식 선택")
+        lbl_ext_title.setFont(f_bold)
+        lbl_ext_title.setStyleSheet("border: none;")
+        ext_header.addWidget(lbl_ext_title)
         ext_header.addStretch(1)
 
         btn_select_all = QPushButton("전체 선택")
-        btn_select_all.setFixedHeight(22)
-        btn_select_all.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+        btn_select_all.setFixedHeight(scale_px(24))
         btn_select_all.clicked.connect(self._select_all_exts)
         ext_header.addWidget(btn_select_all)
 
         btn_select_docs = QPushButton("문서만 선택")
-        btn_select_docs.setFixedHeight(22)
-        btn_select_docs.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+        btn_select_docs.setFixedHeight(scale_px(24))
         btn_select_docs.clicked.connect(self._select_doc_exts)
         ext_header.addWidget(btn_select_docs)
 
         btn_clear_all = QPushButton("전체 해제")
-        btn_clear_all.setFixedHeight(22)
-        btn_clear_all.setStyleSheet("font-size: 11px; padding: 2px 8px;")
+        btn_clear_all.setFixedHeight(scale_px(24))
         btn_clear_all.clicked.connect(self._clear_all_exts)
         ext_header.addWidget(btn_clear_all)
-        layout.addLayout(ext_header)
+        ext_lay.addLayout(ext_header)
 
-        # 스크롤 영역에 확장자 체크박스들 배치
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(f"background-color: {panel}; border: 1px solid {line}; border-radius: 6px;")
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setContentsMargins(10, 8, 10, 8)
-        scroll_layout.setSpacing(6)
+        ext_scroll = QScrollArea()
+        ext_scroll.setWidgetResizable(True)
+        ext_scroll.setMaximumHeight(scale_px(96) if len(self.ext_counter) > 5 else scale_px(42))
+        ext_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        ext_scroll.setStyleSheet("background: transparent; border: none;")
 
-        # extract_document_content()가 실제로 내용을 추출할 수 있는 확장자
-        SUPPORTED_EXTS = {
-            ".hwp", ".hwpx", ".pdf", ".docx", ".doc",
-            ".txt", ".md", ".csv", ".json", ".xlsx", ".xls",
-        }
+        ext_container = QWidget()
+        ext_container.setStyleSheet("background: transparent; border: none;")
+        ext_grid = QGridLayout(ext_container)
+        ext_grid.setContentsMargins(0, 2, 0, 2)
+        ext_grid.setHorizontalSpacing(14)
+        ext_grid.setVerticalSpacing(4)
 
-        doc_exts = {".hwp", ".hwpx", ".pdf", ".docx", ".doc", ".txt", ".xlsx", ".xls", ".pptx", ".ppt", ".csv", ".json"}
         sorted_exts = sorted(self.ext_counter.items(), key=lambda x: -x[1])
-        for ext, count in sorted_exts:
-            supported = ext in SUPPORTED_EXTS
-            label = f"{ext} ({count}개 파일)" if supported else f"{ext} ({count}개 파일)  [지원 안 됨]"
+        has_editor_docs = any(ext.lower() in self.EDITOR_DOC_EXTS for ext, _ in sorted_exts)
+        col_count = 5
+        for idx, (ext, count) in enumerate(sorted_exts):
+            label = f"{ext} {count}개"
             cb = QCheckBox(label)
-            if supported:
-                is_doc = ext in doc_exts
-                cb.setChecked(is_doc or len(self.ext_counter) <= 3)
-                cb.setEnabled(True)
+            cb.setStyleSheet("border: none;")
+            cb.setEnabled(True)
+            # 기본적으로 문서만 선택(에디터에서 열 수 있는 문서 확장자)으로 표시
+            if has_editor_docs:
+                cb.setChecked(ext.lower() in self.EDITOR_DOC_EXTS)
             else:
-                cb.setChecked(False)
-                cb.setEnabled(False)
-                cb.setStyleSheet("color: gray;")
+                cb.setChecked(True)
+            cb.toggled.connect(self._on_ext_filter_changed)
             self.ext_checkboxes[ext] = cb
-            scroll_layout.addWidget(cb)
-        scroll_layout.addStretch(1)
-        scroll.setWidget(scroll_content)
-        layout.addWidget(scroll, 1)
+            r = idx // col_count
+            c = idx % col_count
+            ext_grid.addWidget(cb, r, c)
 
-        # 4. 업무분류 명칭 설정
+        ext_scroll.setWidget(ext_container)
+        ext_lay.addWidget(ext_scroll)
+        layout.addWidget(ext_frame)
+
+        # 3. AI 업무분류 자동 정리 및 미리보기 영역
+        ai_frame = QFrame()
+        ai_frame.setStyleSheet(
+            f"QFrame {{ background-color: {panel}; border: 1px solid {line}; border-radius: 8px; }}"
+        )
+        ai_lay = QVBoxLayout(ai_frame)
+        ai_lay.setContentsMargins(12, 10, 12, 10)
+        ai_lay.setSpacing(8)
+
+        ai_top = QHBoxLayout()
+        ai_top.setSpacing(8)
+        self.lbl_ai_status = QLabel("• 업무분류 미리보기   |   배정될 업무분류 셀을 더블클릭하여 직접 수정할 수 있습니다")
+        self.lbl_ai_status.setFont(f_bold)
+        self.lbl_ai_status.setStyleSheet("border: none;")
+        ai_top.addWidget(self.lbl_ai_status)
+        ai_top.addStretch(1)
+
+        self.btn_reset_folder_cats = QPushButton("폴더 구조 그대로")
+        self.btn_reset_folder_cats.setFixedHeight(btn_h)
+        self.btn_reset_folder_cats.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_reset_folder_cats.clicked.connect(self._populate_preview_table_default)
+        ai_top.addWidget(self.btn_reset_folder_cats)
+
+        self.btn_ai_settings = QPushButton("AI 설정")
+        self.btn_ai_settings.setFixedHeight(btn_h)
+        self.btn_ai_settings.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_ai_settings.clicked.connect(self._open_ai_settings)
+        ai_top.addWidget(self.btn_ai_settings)
+
+        self.btn_run_ai = QPushButton("AI 업무분류 자동 정리")
+        self.btn_run_ai.setFixedHeight(btn_h)
+        self.btn_run_ai.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_run_ai.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {accent};
+                color: #FFFFFF;
+                border: 1px solid {accent};
+                border-radius: 6px;
+                padding: 0px 14px;
+                font-family: {ff_css};
+                font-size: {fs_12}px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background-color: {accent};
+                border: 1px solid {panel_alt};
+            }}
+            QPushButton:disabled {{
+                background-color: {line};
+                color: {muted};
+                border: 1px solid {line};
+            }}
+        """)
+        self.btn_run_ai.clicked.connect(self._on_run_ai_classify)
+        ai_top.addWidget(self.btn_run_ai)
+        ai_lay.addLayout(ai_top)
+
+        self.preview_table = QTableWidget(0, 4)
+        self.preview_table.setFont(f_base)
+        self.preview_table.setWordWrap(False)
+        self.preview_table.setHorizontalHeaderLabels(["파일명", "기존 폴더", "배정될 업무분류", "분류 기준"])
+        self.preview_table.verticalHeader().setVisible(False)
+        self.preview_table.verticalHeader().setDefaultSectionSize(row_h)
+        self.preview_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.preview_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+
+        from taskcalendar.memo_report_generator import _NoBarListSelectionDelegate
+        self.preview_table.setItemDelegate(
+            _NoBarListSelectionDelegate(self.preview_table, sel_bg=accent_soft, sel_fg=text)
+        )
+
+        hh = self.preview_table.horizontalHeader()
+        hh.setFixedHeight(hdr_h)
+        hh.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.preview_table.setColumnWidth(1, scale_px(140))
+        self.preview_table.setColumnWidth(2, scale_px(160))
+        ai_lay.addWidget(self.preview_table, 1)
+
+        layout.addWidget(ai_frame, 1)
+
+        # 4. 하단 옵션 행 (최상위 분류명 / 분류 등록 방식 / 첨부 보관)
+        opt_frame = QFrame()
+        opt_frame.setStyleSheet(
+            f"QFrame {{ background-color: {panel}; border: 1px solid {line}; border-radius: 8px; }}"
+        )
+        opt_lay = QVBoxLayout(opt_frame)
+        opt_lay.setContentsMargins(12, 8, 12, 8)
+        opt_lay.setSpacing(6)
+
         cat_layout = QHBoxLayout()
-        cat_layout.addWidget(QLabel("등록될 최상위 업무 분류명:"))
-        self.cat_input = QLineEdit(self.folder_path.name)
-        self.cat_input.setFixedHeight(32)
-        self.cat_input.setStyleSheet(f"background-color: {panel}; border: 1px solid {line}; border-radius: 4px; padding: 4px 8px;")
-        cat_layout.addWidget(self.cat_input)
-        layout.addLayout(cat_layout)
+        cat_layout.setSpacing(8)
+        lbl_root_cat = QLabel("최상위 업무 분류명")
+        lbl_root_cat.setFont(f_bold)
+        lbl_root_cat.setStyleSheet("border: none;")
+        cat_layout.addWidget(lbl_root_cat)
 
-        # 5. 첨부파일 자동 보관 체크박스
-        self.cb_attachments = QCheckBox("📂 원본 파일들을 각 업무 문서의 첨부파일로도 자동 보관")
-        self.cb_attachments.setChecked(True)
-        layout.addWidget(self.cb_attachments)
+        self.cat_input = QLineEdit(self._initial_category_name)
+        self.cat_input.setFixedHeight(btn_h)
+        cat_layout.addWidget(self.cat_input, 1)
 
-        # 6. 하단 버튼 – 높이 32px 통일
+        self.cb_top_level_cats = QCheckBox("배정된 업무분류를 최상위 분류로 바로 등록")
+        self.cb_top_level_cats.setChecked(True)
+        self.cb_top_level_cats.setStyleSheet("border: none;")
+        cat_layout.addWidget(self.cb_top_level_cats)
+        opt_lay.addLayout(cat_layout)
+
+        self.cb_attachments = QCheckBox("원본 파일들을 각 업무 문서의 첨부파일로도 자동 보관")
+        self.cb_attachments.setChecked(self._initial_copy_attachments)
+        self.cb_attachments.setStyleSheet("border: none;")
+        opt_lay.addWidget(self.cb_attachments)
+
+        layout.addWidget(opt_frame)
+
+        # 5. 하단 버튼
         btn_layout = QHBoxLayout()
         btn_layout.addStretch(1)
 
         btn_cancel = QPushButton("취소")
-        btn_cancel.setFixedSize(90, 32)
+        btn_cancel.setFixedSize(scale_px(90), scale_px(32))
         btn_cancel.clicked.connect(self.reject)
         btn_layout.addWidget(btn_cancel)
 
         btn_ok = QPushButton("업무 등록 시작")
-        btn_ok.setFixedSize(110, 32)
+        btn_ok.setFixedSize(scale_px(120), scale_px(32))
         btn_ok.setStyleSheet(f"""
             QPushButton {{
                 border: none;
-                border-radius: 4px;
+                border-radius: 6px;
                 background-color: {accent};
                 color: #FFFFFF;
-                font-size: 12px;
-                font-weight: bold;
+                font-family: {ff_css};
+                font-size: {fs_12}px;
+                font-weight: 600;
             }}
             QPushButton:hover {{
-                background-color: #0274AD;
+                opacity: 0.92;
             }}
         """)
         btn_ok.clicked.connect(self._on_accept)
         btn_layout.addWidget(btn_ok)
         layout.addLayout(btn_layout)
 
+    def _get_filtered_files(self) -> list[Path]:
+        selected = {ext for ext, cb in self.ext_checkboxes.items() if cb.isChecked()}
+        return [
+            f for f in self.all_files
+            if (f.suffix.lower() in selected or (not f.suffix and "확장자 없음" in selected))
+        ]
+
+    def _on_ext_filter_changed(self) -> None:
+        if self._use_ai_map:
+            self._render_table_rows(self._ai_category_details)
+        else:
+            self._populate_preview_table_default()
+
+    def _populate_preview_table_default(self) -> None:
+        self._use_ai_map = False
+        self._ai_category_details: dict[str, dict[str, str]] = {}
+        files = self._get_filtered_files()
+        root_name = (self.cat_input.text().strip() or self.folder_path.name)
+        for fp in files:
+            try:
+                rel_p = fp.parent.relative_to(self.folder_path)
+                sub = rel_p.parts[-1] if rel_p.parts else root_name
+            except Exception:
+                sub = root_name
+            self._ai_category_details[str(fp)] = {
+                "category": sub,
+                "reason": "기존 폴더 구조 유지",
+            }
+        self.lbl_ai_status.setText(
+            f"• 업무분류 미리보기: 대상 {len(files)}개 파일   |   배정될 업무분류 셀을 더블클릭해 수정 가능"
+        )
+        self._render_table_rows(self._ai_category_details)
+
+    def _render_table_rows(self, details_map: dict[str, dict[str, str]]) -> None:
+        files = self._get_filtered_files()
+        self._table_files = files
+        self.preview_table.setRowCount(len(files))
+        f_base = make_ui_font_like(12)
+        muted = self.palette.get("text_muted", self.palette.get("muted", "#64748B"))
+        accent = self.palette.get("accent", "#2563EB")
+
+        for row_idx, fp in enumerate(files):
+            try:
+                rel_dir = str(fp.parent.relative_to(self.folder_path)).replace("\\", "/")
+                if rel_dir == ".":
+                    rel_dir = self.folder_path.name
+            except Exception:
+                rel_dir = self.folder_path.name
+
+            info = details_map.get(str(fp)) or {"category": rel_dir, "reason": "폴더 구조"}
+            cat_val = info.get("category", rel_dir)
+            reason_val = info.get("reason", "")
+
+            it_name = QTableWidgetItem(fp.name)
+            it_name.setFont(f_base)
+            it_name.setFlags(it_name.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            it_name.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.preview_table.setItem(row_idx, 0, it_name)
+
+            it_folder = QTableWidgetItem(rel_dir)
+            it_folder.setFont(f_base)
+            it_folder.setForeground(QColor(muted))
+            it_folder.setFlags(it_folder.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            it_folder.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.preview_table.setItem(row_idx, 1, it_folder)
+
+            it_cat = QTableWidgetItem(cat_val)
+            it_cat.setFont(f_base)
+            it_cat.setForeground(QColor(accent))
+            it_cat.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.preview_table.setItem(row_idx, 2, it_cat)
+
+            it_reason = QTableWidgetItem(reason_val)
+            it_reason.setFont(f_base)
+            it_reason.setForeground(QColor(muted))
+            it_reason.setFlags(it_reason.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            it_reason.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            self.preview_table.setItem(row_idx, 3, it_reason)
+
+    def _open_ai_settings(self) -> None:
+        from taskcalendar.ai_assistant import AISettingsDialog
+        dlg = AISettingsDialog(self, palette=self.palette)
+        dlg.exec()
+
+    def _on_run_ai_classify(self) -> None:
+        files = self._get_filtered_files()
+        if not files:
+            self.lbl_ai_status.setText("• 분석할 대상 파일이 없습니다")
+            return
+
+        from taskcalendar.ai_assistant import AIChatWorker, AIConfigManager
+        from taskcalendar.work_smart_tools import (
+            build_folder_ai_classify_messages,
+            classify_folder_files_heuristic,
+            get_ai_connection_status,
+            parse_folder_ai_classify_response,
+        )
+
+        st = get_ai_connection_status()
+        if not st.get("connected"):
+            # AI 미연결 시에도 스마트 도메인·키워드 분류기로 즉시 자동 정리 수행
+            details = classify_folder_files_heuristic(
+                self.folder_path, files, self.existing_categories
+            )
+            self._apply_classification_result(details, is_ai=False)
+            return
+
+        if self._ai_worker and self._ai_worker.isRunning():
+            return
+
+        try:
+            cfg = {**AIConfigManager.load(force_reload=True), "stream": False, "timeout_sec": 25}
+            messages = build_folder_ai_classify_messages(
+                self.folder_path, files, self.existing_categories
+            )
+            self._ai_worker = AIChatWorker(messages, cfg, self)
+
+            panel = self.palette.get("panel", "#FFFFFF")
+            panel_alt = self.palette.get("panel_alt", "#F1F5F9")
+            line = self.palette.get("line", "#CBD5E1")
+            text = self.palette.get("text", "#0F172A")
+            accent = self.palette.get("accent", "#2563EB")
+            ff_css = font_family_css()
+            fs_12 = scale_px(12)
+            fs_11 = scale_px(11)
+
+            progress = QProgressDialog(self)
+            progress.setWindowTitle("AI 업무분류 분석")
+            progress.setLabelText(
+                f"AI가 {len(files)}개 파일과 폴더 구조를 분석하고 있습니다...\n잠시만 기다려주세요."
+            )
+            progress.setCancelButtonText("취소")
+            progress.setRange(0, 100)
+            progress.setValue(10)
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.setMinimumDuration(0)
+            progress.resize(scale_px(420), scale_px(130))
+            progress.setStyleSheet(f"""
+                QProgressDialog {{
+                    background-color: {panel};
+                    border: 1px solid {line};
+                    border-radius: 8px;
+                }}
+                QLabel {{
+                    color: {text};
+                    font-family: {ff_css};
+                    font-size: {fs_12}px;
+                    background: transparent;
+                }}
+                QProgressBar {{
+                    border: 1px solid {line};
+                    border-radius: 4px;
+                    text-align: center;
+                    background-color: {panel_alt};
+                    color: {text};
+                    font-family: {ff_css};
+                    font-size: {fs_11}px;
+                    height: 20px;
+                }}
+                QProgressBar::chunk {{
+                    background-color: {accent};
+                    border-radius: 3px;
+                }}
+                QPushButton {{
+                    background-color: {panel};
+                    border: 1px solid {line};
+                    border-radius: 4px;
+                    color: {text};
+                    padding: 4px 12px;
+                    font-family: {ff_css};
+                    font-size: {fs_11}px;
+                }}
+                QPushButton:hover {{
+                    background-color: {panel_alt};
+                }}
+            """)
+
+            anim_timer = QTimer(self)
+
+            def _tick():
+                if progress.wasCanceled():
+                    anim_timer.stop()
+                    return
+                cur = progress.value()
+                if cur < 35:
+                    progress.setLabelText(f"AI가 {len(files)}개 파일과 폴더 구조를 분석하고 있습니다...")
+                    progress.setValue(cur + 4)
+                elif cur < 70:
+                    progress.setLabelText("문서 내용 및 공공 업무 표준 분류 매핑 중...")
+                    progress.setValue(cur + 3)
+                elif cur < 92:
+                    progress.setLabelText("최적 업무분류 및 사유를 생성하고 있습니다...")
+                    progress.setValue(cur + 2)
+
+            anim_timer.timeout.connect(_tick)
+            anim_timer.start(250)
+
+            def _clean_up():
+                try:
+                    anim_timer.stop()
+                except Exception:
+                    pass
+                try:
+                    progress.setValue(100)
+                    progress.close()
+                except Exception:
+                    pass
+                self.btn_run_ai.setEnabled(True)
+
+            def _on_ok(raw_resp: str) -> None:
+                _clean_up()
+                details = parse_folder_ai_classify_response(
+                    raw_resp, files, self.folder_path, self.existing_categories
+                )
+                self._apply_classification_result(details, is_ai=True)
+
+            def _on_err(err_msg: str) -> None:
+                _clean_up()
+                logger.warning("Folder AI classify failed (%s), using smart classifier.", err_msg)
+                details = classify_folder_files_heuristic(
+                    self.folder_path, files, self.existing_categories
+                )
+                self._apply_classification_result(details, is_ai=False)
+
+            def _on_cancel():
+                try:
+                    anim_timer.stop()
+                except Exception:
+                    pass
+                self.btn_run_ai.setEnabled(True)
+                if self._ai_worker:
+                    try:
+                        self._ai_worker.finished_ok.disconnect()
+                        self._ai_worker.error_occurred.disconnect()
+                    except Exception:
+                        pass
+                    self._ai_worker = None
+                self.lbl_ai_status.setText("• AI 분석이 취소되었습니다")
+
+            progress.canceled.connect(_on_cancel)
+            self._ai_worker.finished_ok.connect(_on_ok)
+            self._ai_worker.error_occurred.connect(_on_err)
+
+            self.btn_run_ai.setEnabled(False)
+            self.lbl_ai_status.setText(f"• AI가 {len(files)}개 파일과 폴더 구조를 분석하여 업무분류를 정리하고 있습니다...")
+            progress.show()
+            QApplication.processEvents()
+            self._ai_worker.start()
+        except Exception as e:
+            self.btn_run_ai.setEnabled(True)
+            details = classify_folder_files_heuristic(
+                self.folder_path, files, self.existing_categories
+            )
+            self._apply_classification_result(details, is_ai=False)
+
+    def _apply_classification_result(self, details: dict[str, dict[str, str]], is_ai: bool) -> None:
+        self._use_ai_map = True
+        self._ai_category_details = details
+        self._render_table_rows(details)
+        unique_cats = sorted({v.get("category", "") for v in details.values() if v.get("category")})
+        mode_str = "AI 분석 완료" if is_ai else "스마트 키워드 분석 완료"
+        self.lbl_ai_status.setText(
+            f"• {mode_str}: 총 {len(details)}개 파일 → {len(unique_cats)}개 업무분류로 자동 정리됨"
+        )
+
     def _select_all_exts(self) -> None:
         for cb in self.ext_checkboxes.values():
+            cb.blockSignals(True)
             cb.setChecked(True)
+            cb.blockSignals(False)
+        self._on_ext_filter_changed()
 
     def _clear_all_exts(self) -> None:
         for cb in self.ext_checkboxes.values():
+            cb.blockSignals(True)
             cb.setChecked(False)
+            cb.blockSignals(False)
+        self._on_ext_filter_changed()
 
     def _select_doc_exts(self) -> None:
-        SUPPORTED_EXTS = {
-            ".hwp", ".hwpx", ".pdf", ".docx", ".doc",
-            ".txt", ".md", ".csv", ".json", ".xlsx", ".xls",
-        }
         for ext, cb in self.ext_checkboxes.items():
-            if cb.isEnabled():
-                cb.setChecked(ext in SUPPORTED_EXTS)
+            cb.blockSignals(True)
+            cb.setChecked(ext.lower() in self.EDITOR_DOC_EXTS)
+            cb.blockSignals(False)
+        self._on_ext_filter_changed()
 
     def _on_accept(self) -> None:
         selected = {ext for ext, cb in self.ext_checkboxes.items() if cb.isChecked()}
@@ -2467,6 +3166,15 @@ class FolderWorkImportDialog(QDialog):
             QMessageBox.warning(self, "선택 오류", "최소 1개 이상의 파일 형식을 선택해주세요.")
             return
         self.selected_extensions = selected
+
+        # 테이블에서 사용자가 직접 수정한 업무분류까지 반영하여 최종 맵 구성
+        final_map: dict[str, str] = {}
+        for row_idx, fp in enumerate(self._table_files):
+            item = self.preview_table.item(row_idx, 2)
+            cat_txt = item.text().strip() if item else ""
+            if cat_txt:
+                final_map[str(fp)] = cat_txt
+        self._ai_category_map = final_map
         self.accept()
 
     def get_selected_extensions(self) -> set[str]:
@@ -2477,6 +3185,15 @@ class FolderWorkImportDialog(QDialog):
 
     def should_copy_attachments(self) -> bool:
         return self.cb_attachments.isChecked()
+
+    def is_ai_classified(self) -> bool:
+        return self._use_ai_map
+
+    def use_top_level_categories(self) -> bool:
+        return self.cb_top_level_cats.isChecked()
+
+    def get_file_category_map(self) -> dict[str, str]:
+        return dict(self._ai_category_map)
 
 
 def export_sheet_to_pdf(sheet: WorkSheetData, dest_path: Path | str) -> bool:
@@ -4022,7 +4739,7 @@ class WorkManagerDialog(QDialog):
         _rtg.setContentsMargins(0, 0, 0, 5)
         _rtg.setSpacing(5)
 
-        # 탭 우측 끝 도구: [전체화면(F12)] [템플릿] [저장(S)] 나란히 배치 (컴팩트 높이 24px, 하단 여백 확보)
+        # 탭 우측 끝 도구: [전체화면(F12)] [부가 기능 ▼] [저장(S)] 나란히 배치
         self.btn_fullscreen = QPushButton("전체화면(F12)")
         self.btn_fullscreen.setFixedHeight(24)
         self.btn_fullscreen.setAutoDefault(False)
@@ -4032,14 +4749,15 @@ class WorkManagerDialog(QDialog):
         self.btn_fullscreen.clicked.connect(self._toggle_editor_fullscreen)
         _rtg.addWidget(self.btn_fullscreen, 0, alignment=Qt.AlignmentFlag.AlignBottom)
 
-        self.btn_template = QPushButton("템플릿")
-        self.btn_template.setFixedHeight(24)
-        self.btn_template.setAutoDefault(False)
-        self.btn_template.setDefault(False)
-        self.btn_template.setToolTip("템플릿 (이미지 템플릿, 업무 템플릿)")
-        self.btn_template.setStyleSheet(self._toolbar_sub_btn_style())
-        self.btn_template.clicked.connect(self._show_template_dropdown_menu)
-        _rtg.addWidget(self.btn_template, 0, alignment=Qt.AlignmentFlag.AlignBottom)
+        self.btn_extra_features = QPushButton("부가 기능 ▾")
+        self.btn_extra_features.setFixedHeight(24)
+        self.btn_extra_features.setAutoDefault(False)
+        self.btn_extra_features.setDefault(False)
+        self.btn_extra_features.setToolTip("업무 스마트 부가 기능 (메모로 문서 생성, 개인정보 점검, 다국어 변환, 템플릿)")
+        self.btn_extra_features.setStyleSheet(self._toolbar_sub_btn_style())
+        self.btn_extra_features.clicked.connect(self._show_extra_features_menu)
+        _rtg.addWidget(self.btn_extra_features, 0, alignment=Qt.AlignmentFlag.AlignBottom)
+        self.btn_template = self.btn_extra_features  # 하위 호환성 유지
 
         self.btn_save_work = QPushButton("저장(S)")
         self.btn_save_work.setFixedHeight(24)
@@ -4382,6 +5100,8 @@ class WorkManagerDialog(QDialog):
         page_editor_layout.setSpacing(0)
         self.editor = RhwpEditorWidget(self, palette=self.palette)
         self.editor.contentChanged.connect(self._on_editor_text_changed)
+        self.editor.personalInfoCheckRequested.connect(self._run_personal_info_check)
+        self.editor.bookmarkAdded.connect(self._on_editor_bookmark_added)
         page_editor_layout.addWidget(self.editor, 1)
         self.center_stack.addWidget(self.page_editor)
 
@@ -4615,11 +5335,11 @@ class WorkManagerDialog(QDialog):
         schedule_layout.setContentsMargins(8, 8, 8, 8)
         schedule_layout.setSpacing(6)
 
-        # 상단 헤더: [📅 관련 일정 (0)] [📄 관련 문서 (0)] 탭 토글 + 우측 [+ 추가] 버튼
+        # 상단 헤더: [일정 (0)] [문서 (0)] [🔖 북마크 (0)] 탭 토글 + 우측 [+ 추가] 버튼
         sched_header = QHBoxLayout()
         sched_header.setSpacing(4)
 
-        self._active_related_tab = 0  # 0: 일정, 1: 문서
+        self._active_related_tab = 0  # 0: 일정, 1: 문서, 2: 하이라이트 북마크
 
         self.btn_tab_related_sched = QPushButton("일정 (0)")
         self.btn_tab_related_sched.setFixedHeight(22)
@@ -4633,9 +5353,16 @@ class WorkManagerDialog(QDialog):
         self.btn_tab_related_doc.clicked.connect(lambda: self._set_related_tab(1))
         sched_header.addWidget(self.btn_tab_related_doc)
 
+        self.btn_tab_related_bookmark = QPushButton("북마크 (0)")
+        self.btn_tab_related_bookmark.setFixedHeight(22)
+        self.btn_tab_related_bookmark.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_tab_related_bookmark.setToolTip("작성하는 업무에서 드래그 → 우클릭 → [하이라이트(북마크) 등록]한 문구 목록 (클릭 시 바로 이동)")
+        self.btn_tab_related_bookmark.clicked.connect(lambda: self._set_related_tab(2))
+        sched_header.addWidget(self.btn_tab_related_bookmark)
+
         sched_header.addStretch(1)
 
-        # 동적 추가 버튼 (+ 일정 <-> + 문서)
+        # 동적 추가 버튼 (+ 일정 <-> + 문서 <-> 안내)
         self.btn_add_related = QPushButton("+ 일정")
         self.btn_add_related.setFixedHeight(22)
         self.btn_add_related.setStyleSheet(self._sub_btn_style())
@@ -4649,6 +5376,8 @@ class WorkManagerDialog(QDialog):
         # [페이지 0] 관련 일정 목록
         self.work_schedule_list = QListWidget()
         self.work_schedule_list.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.work_schedule_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.work_schedule_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.work_schedule_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.work_schedule_list.customContextMenuRequested.connect(self._on_schedule_context_menu)
         self.work_schedule_list.itemDoubleClicked.connect(self._on_schedule_item_double_clicked)
@@ -4688,11 +5417,26 @@ class WorkManagerDialog(QDialog):
         # [페이지 1] 관련 문서 목록
         self.work_doc_list = QListWidget()
         self.work_doc_list.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.work_doc_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.work_doc_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.work_doc_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.work_doc_list.customContextMenuRequested.connect(self._on_doc_context_menu)
         self.work_doc_list.itemDoubleClicked.connect(self._on_doc_item_double_clicked)
         self.work_doc_list.setStyleSheet(list_style)
         self.related_stack.addWidget(self.work_doc_list)
+
+        # [페이지 2] 하이라이트 북마크 목록 (아이콘 제거 및 가로 스크롤 방지)
+        self.work_bookmark_list = QListWidget()
+        self.work_bookmark_list.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.work_bookmark_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.work_bookmark_list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.work_bookmark_list.setWordWrap(False)
+        self.work_bookmark_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.work_bookmark_list.customContextMenuRequested.connect(self._on_bookmark_context_menu)
+        self.work_bookmark_list.itemClicked.connect(self._on_bookmark_item_clicked)
+        self.work_bookmark_list.itemDoubleClicked.connect(self._on_bookmark_item_double_clicked)
+        self.work_bookmark_list.setStyleSheet(list_style)
+        self.related_stack.addWidget(self.work_bookmark_list)
 
         schedule_layout.addWidget(self.related_stack, 1)
 
@@ -5622,11 +6366,19 @@ class WorkManagerDialog(QDialog):
         """업무 문서 DB 영구 삭제 및 탭/트리 반영"""
         res = QMessageBox.question(
             self,
-            "업무 삭제 확인",
-            f"'{target.title}' 업무 문서를 영구히 삭제하시겠습니까?\n\n※ 작성된 매뉴얼 내용 및 보관된 모든 첨부파일이 디스크와 DB에서 영구 삭제됩니다.",
+            "업무 및 첨부파일 영구 삭제",
+            f"'{target.title}' 업무를 완전히 삭제하시겠습니까?\n\n※ 등록된 본문 문서 및 해당 업무의 첨부파일·폴더가 디스크(컴퓨터) 및 DB에서 함께 영구 삭제됩니다.",
             QMessageBox.Yes | QMessageBox.No,
         )
         if res == QMessageBox.Yes:
+            try:
+                grp = self._group_no(target.category, target.category_id)
+                catp = self._cat_path(target.category, target.category_id)
+                work_files.delete_sheet_file(grp, catp, target.title)
+                for g in ("1", "2", "3", "4", "5"):
+                    work_files.delete_sheet_file(g, catp, target.title)
+            except Exception as e:
+                logger.warning(f"Failed to delete sheet file from disk: {e}")
             if self.repository and target.db_id:
                 self.repository.delete_work_item(target.db_id)
             if target in self._all_sheets:
@@ -5829,12 +6581,12 @@ class WorkManagerDialog(QDialog):
 
         self.editor.export_document_data(_after_export)
 
-    def _show_template_dropdown_menu(self) -> None:
-        """템플릿 통합 버튼 클릭 시 드롭다운 팝업 메뉴 표시 (이미지 템플릿, 업무 템플릿)"""
+    def _show_extra_features_menu(self) -> None:
+        """부가 기능 통합 버튼 클릭 시 트리 형태(계층형 팝업 메뉴)로 기능 목록 표시"""
         from PySide6.QtWidgets import QMenu
 
         menu = QMenu(self)
-        menu.setStyleSheet("""
+        menu_qss = """
             QMenu {
                 background-color: #FFFFFF;
                 border: 1px solid #CBD5E0;
@@ -5843,7 +6595,7 @@ class WorkManagerDialog(QDialog):
                 font-size: 12px;
             }
             QMenu::item {
-                padding: 6px 18px 6px 12px;
+                padding: 6px 20px 6px 12px;
                 border-radius: 4px;
                 color: #1E293B;
             }
@@ -5852,21 +6604,179 @@ class WorkManagerDialog(QDialog):
                 color: #0284C7;
                 font-weight: bold;
             }
-        """)
+            QMenu::separator {
+                height: 1px;
+                background: #E2E8F0;
+                margin: 4px 6px;
+            }
+        """
+        menu.setStyleSheet(menu_qss)
 
-        action_img = menu.addAction("🖼️ 이미지 템플릿")
+        # 1. 📄 메모로 문서 생성
+        action_memo = menu.addAction("📄 메모로 문서 생성")
+        action_memo.setToolTip("저장된 메모 또는 직접 입력한 내용을 바탕으로 공문서(보고서·보도자료) HWPX 문서를 생성합니다.")
+        action_memo.triggered.connect(lambda: self.open_memo_to_report_dialog())
+
+        # 2. 🛡️ 개인정보 점검
+        action_pii = menu.addAction("🛡️ 개인정보 점검")
+        action_pii.setToolTip("업무 문서 내 개인정보(주민번호, 연락처, 이메일 등)를 검출하여 조치합니다.")
+        action_pii.triggered.connect(self._run_personal_info_check)
+
+        # 3. 🌐 다국어 변환
+        action_trans = menu.addAction("🌐 다국어 변환")
+        action_trans.setToolTip("연결된 AI 기능을 사용하여 한글 내용을 다국어로 변환합니다.")
+        action_trans.triggered.connect(lambda: self.editor.open_ai_translate())
+
+        menu.addSeparator()
+
+        # 4. 📑 템플릿 (트리/하위 메뉴)
+        template_menu = menu.addMenu("📑 템플릿")
+        template_menu.setStyleSheet(menu_qss)
+
+        # 4-1. 이미지 템플릿
+        action_img = template_menu.addAction("🖼️ 이미지 템플릿")
         action_img.setToolTip("공문서 직인·결재선·고무인 및 AI 서식 이미지 템플릿 불러오기")
         action_img.triggered.connect(self._show_image_template_dialog)
 
-        action_work = menu.addAction("📑 업무 템플릿")
-        action_work.setToolTip("공무원 필수 업무 서식 및 템플릿 불러오기")
-        action_work.triggered.connect(self._show_template_menu)
+        template_menu.addSeparator()
 
+        # 4-2. 업무 템플릿 (카테고리별 트리 서브메뉴 동적 추가)
+        from taskcalendar.paths import runtime_root, package_root
+        import shutil
+
+        tpl_dir = runtime_root() / "업무 템플릿"
+        if not tpl_dir.exists():
+            tpl_dir.mkdir(parents=True, exist_ok=True)
         try:
-            pos = self.btn_template.mapToGlobal(QPoint(0, self.btn_template.height() + 2))
-            menu.exec(pos)
+            bundled_tpl = package_root().parent / "업무 템플릿"
+            if bundled_tpl.exists() and bundled_tpl.is_dir() and not any(tpl_dir.iterdir()):
+                for item in bundled_tpl.iterdir():
+                    dst = tpl_dir / item.name
+                    if item.is_dir():
+                        shutil.copytree(item, dst, dirs_exist_ok=True)
+                    elif item.is_file():
+                        shutil.copy2(item, dst)
         except Exception:
-            logger.exception("Failed to show template dropdown menu")
+            pass
+
+        categories = sorted([d for d in tpl_dir.iterdir() if d.is_dir()])
+        ext_priority = {".hwpx": 0, ".hwp": 1, ".md": 2, ".txt": 3}
+        for cat in categories:
+            cat_name = cat.name.replace("_", " ")
+            sub_menu = template_menu.addMenu(f"📁 {cat_name}")
+            sub_menu.setStyleSheet(menu_qss)
+            seen_stems = set()
+            files = []
+            candidates = [
+                f for f in cat.iterdir()
+                if f.is_file() and f.suffix.lower() in ext_priority
+            ]
+            candidates.sort(key=lambda f: (f.stem, ext_priority.get(f.suffix.lower(), 9)))
+            for f in candidates:
+                if f.stem not in seen_stems:
+                    seen_stems.add(f.stem)
+                    files.append(f)
+            for f in files:
+                import re as _re
+                raw_stem = f.stem
+                m_num = _re.match(r"^(\d+)_(.+)$", raw_stem)
+                if m_num:
+                    title = f"{int(m_num.group(1))}. {m_num.group(2).replace('_', ' ')}"
+                else:
+                    title = raw_stem.replace("_", " ")
+                if f.suffix.lower() in (".hwpx", ".hwp"):
+                    title = f"📄 {title}"
+                act = sub_menu.addAction(title)
+                act.triggered.connect(lambda _, fp=f: self._apply_template_file(fp))
+
+        template_menu.addSeparator()
+        act_open_folder = template_menu.addAction("📂 템플릿 폴더 열기...")
+        act_open_folder.triggered.connect(lambda: os.startfile(str(tpl_dir)))
+
+        btn = getattr(self, "btn_extra_features", None) or getattr(self, "btn_template", None)
+        if btn:
+            pos = btn.mapToGlobal(QPoint(0, btn.height() + 2))
+            menu.exec(pos)
+
+    def _show_template_dropdown_menu(self) -> None:
+        """하위 호환성 유지"""
+        self._show_extra_features_menu()
+
+    def open_memo_to_report_dialog(self, initial_title: str = "", initial_memo_text: str = "") -> None:
+        """메모로 공문서(보고서·보도자료) HWPX 생성 다이얼로그를 열고 완료 시 새 업무 문서로 오픈"""
+        from taskcalendar.memo_report_generator import MemoToReportDialog
+
+        self._save_current_sheet_data()
+
+        default_cat_name = ""
+        selected = self.category_tree.selectedItems()
+        if selected:
+            sel_item = selected[0]
+            sel_sheet = sel_item.data(0, Qt.UserRole)
+            if isinstance(sel_sheet, WorkSheetData):
+                default_cat_name = sel_sheet.category
+            else:
+                default_cat_name = sel_item.data(0, Qt.UserRole + 2) or sel_item.text(0).replace("📁 ", "").replace("📂 ", "").strip()
+        elif 0 <= self._active_sheet_index < len(self._open_sheets):
+            default_cat_name = self._open_sheets[self._active_sheet_index].category
+        if not default_cat_name and self._categories:
+            default_cat_name = self._categories[0]
+        if not default_cat_name:
+            default_cat_name = "1. 일반 업무"
+
+        def _on_created(doc_title: str, cat_name: str, hwpx_bytes: bytes, plain_text: str) -> None:
+            target_cat_name = (cat_name or default_cat_name or "1. 일반 업무").strip()
+            target_cat_id = None
+            for rec in getattr(self, "_category_records", []) or []:
+                rname = getattr(rec, "name", None) or (rec.get("name") if isinstance(rec, dict) else "")
+                rid = getattr(rec, "category_id", None) or (rec.get("category_id") if isinstance(rec, dict) else None)
+                if rname == target_cat_name:
+                    target_cat_id = rid
+                    break
+
+            db_id = None
+            if self.repository:
+                db_id = self.repository.upsert_work_item(
+                    work_id=None,
+                    title=doc_title,
+                    category_name=target_cat_name,
+                    category_id=target_cat_id,
+                    cycle="수시",
+                    content_text=plain_text,
+                    hwpx_blob=hwpx_bytes,
+                    sort_order=len(self._all_sheets) + 1,
+                )
+            new_sheet = WorkSheetData(
+                db_id=db_id,
+                sheet_id=f"sheet_{db_id or (len(self._all_sheets) + 1)}",
+                title=doc_title,
+                category=target_cat_name,
+                category_id=target_cat_id,
+                cycle="수시",
+                content_text=plain_text,
+                hwpx_blob=hwpx_bytes,
+            )
+            self._all_sheets.append(new_sheet)
+            if self.repository:
+                self._load_categories_from_db()
+                self._refresh_category_combos()
+            self._refresh_category_tree()
+            self.open_sheet(new_sheet)
+            self._persist_sheet_file(new_sheet)
+            self.show_floating_toast(f"'{doc_title}' 보고서 문서가 생성되었습니다.")
+
+        cat_list = list(getattr(self, "_category_records", []) or self._categories or [])
+        dlg = MemoToReportDialog(
+            self,
+            repository=self.repository,
+            palette=self.palette,
+            categories=cat_list,
+            default_category=default_cat_name,
+            initial_title=initial_title,
+            initial_memo_text=initial_memo_text,
+            on_document_created=_on_created,
+        )
+        dlg.exec()
 
     def _show_template_menu(self) -> None:
         """공무원 필수 업무 서식 및 템플릿 메뉴 팝업"""
@@ -5914,19 +6824,32 @@ class WorkManagerDialog(QDialog):
             pass
 
         categories = sorted([d for d in tpl_dir.iterdir() if d.is_dir()])
+        ext_priority = {".hwpx": 0, ".hwp": 1, ".md": 2, ".txt": 3}
         for cat in categories:
             cat_name = cat.name.replace("_", " ")
             sub_menu = menu.addMenu(f"📁 {cat_name}")
             sub_menu.setStyleSheet(menu.styleSheet())
             seen_stems = set()
             files = []
-            for f in sorted(cat.iterdir()):
-                if f.is_file() and f.suffix.lower() in (".md", ".txt"):
-                    if f.stem not in seen_stems:
-                        seen_stems.add(f.stem)
-                        files.append(f)
+            candidates = [
+                f for f in cat.iterdir()
+                if f.is_file() and f.suffix.lower() in ext_priority
+            ]
+            candidates.sort(key=lambda f: (f.stem, ext_priority.get(f.suffix.lower(), 9)))
+            for f in candidates:
+                if f.stem not in seen_stems:
+                    seen_stems.add(f.stem)
+                    files.append(f)
             for f in files:
-                title = f.stem.replace("_", " ")
+                import re as _re
+                raw_stem = f.stem
+                m_num = _re.match(r"^(\d+)_(.+)$", raw_stem)
+                if m_num:
+                    title = f"{int(m_num.group(1))}. {m_num.group(2).replace('_', ' ')}"
+                else:
+                    title = raw_stem.replace("_", " ")
+                if f.suffix.lower() in (".hwpx", ".hwp"):
+                    title = f"📄 {title}"
                 act = sub_menu.addAction(title)
                 act.triggered.connect(lambda _, fp=f: self._apply_template_file(fp))
 
@@ -5945,22 +6868,49 @@ class WorkManagerDialog(QDialog):
         dlg.exec()
 
     def _apply_template_file(self, file_path: Path) -> None:
-        """선택된 템플릿을 현재 에디터에 삽입 또는 새 문서로 적용"""
+        """선택된 템플릿을 현재 에디터에 삽입 또는 새 문서로 적용 (HWPX/HWP 한글 정식 서식 완벽 지원)"""
         try:
-            content = file_path.read_text(encoding="utf-8")
-            stem = file_path.stem.replace("_", " ")
+            import re as _re
+            stem = _re.sub(r"^\d+_", "", file_path.stem).replace("_", " ").strip()
+            ext = file_path.suffix.lower()
+            hwpx_blob = None
+            content = ""
+
+            if ext in (".hwpx", ".hwp"):
+                content, hwpx_blob = extract_document_content(file_path)
+            else:
+                # 만약 동일 폴더에 동명의 .hwpx 파일이 있다면 우선 사용
+                hwpx_candidate = file_path.with_suffix(".hwpx")
+                if hwpx_candidate.exists():
+                    content, hwpx_blob = extract_document_content(hwpx_candidate)
+                else:
+                    content = file_path.read_text(encoding="utf-8")
 
             # 열려있는 시트가 없는 경우 새 업무로 자동 생성
             if self._active_sheet_index < 0 or not self._open_sheets:
                 target_cat_name = self._categories[0] if self._categories else "1. 일반 업무"
+                target_cat_id = None
+                selected = self.category_tree.selectedItems()
+                if selected:
+                    sel_item = selected[0]
+                    sel_sheet = sel_item.data(0, Qt.UserRole)
+                    if isinstance(sel_sheet, WorkSheetData):
+                        target_cat_name = sel_sheet.category
+                        target_cat_id = sel_sheet.category_id
+                    else:
+                        target_cat_name = sel_item.data(0, Qt.UserRole + 2) or sel_item.text(0).replace("📁 ", "").replace("📂 ", "").strip()
+                        target_cat_id = sel_item.data(0, Qt.UserRole + 1)
+
                 db_id = None
                 if self.repository:
                     db_id = self.repository.upsert_work_item(
                         work_id=None,
                         title=stem,
                         category_name=target_cat_name,
+                        category_id=target_cat_id,
                         cycle="수시",
                         content_text=content,
+                        hwpx_blob=hwpx_blob,
                         sort_order=len(self._all_sheets) + 1,
                     )
                 new_sheet = WorkSheetData(
@@ -5968,16 +6918,34 @@ class WorkManagerDialog(QDialog):
                     sheet_id=f"sheet_{db_id or (len(self._all_sheets) + 1)}",
                     title=stem,
                     category=target_cat_name,
+                    category_id=target_cat_id,
                     cycle="수시",
                     content_text=content,
+                    hwpx_blob=hwpx_blob,
                 )
                 self._all_sheets.append(new_sheet)
-                self._open_sheets.append(new_sheet)
-                self._active_sheet_index = len(self._open_sheets) - 1
-                self._render_tab_strip()
-                self._switch_to_sheet(new_sheet)
+                if self.repository:
+                    self._load_categories_from_db()
+                    self._refresh_category_combos()
                 self._refresh_category_tree()
-                self.show_floating_toast(f"'{stem}' 서식으로 새 업무가 생성되었습니다.")
+                self.open_sheet(new_sheet)
+                self.show_floating_toast(f"'{stem}' 한글 서식으로 새 업무가 생성되었습니다.")
+                return
+
+            # 현재 열려있는 시트에 적용하는 경우
+            curr_sheet = self._open_sheets[self._active_sheet_index]
+            if hwpx_blob:
+                curr_sheet.hwpx_blob = hwpx_blob
+                curr_sheet.content_text = content
+                curr_sheet.is_dirty = True
+                self._update_tab_title(curr_sheet)
+                if hasattr(self, "editor") and hasattr(self.editor, "load_document"):
+                    self.editor.load_document(
+                        title=curr_sheet.title,
+                        text=content,
+                        hwpx_bytes=hwpx_blob,
+                    )
+                self.show_floating_toast(f"'{stem}' 한글 정식 서식이 문서에 적용되었습니다.")
                 return
 
             if hasattr(self, "editor") and hasattr(self.editor, "insert_text_at_cursor"):
@@ -6419,10 +7387,12 @@ class WorkManagerDialog(QDialog):
         self._sync_tree_selection(self._active_sheet_index)
 
     def _on_tree_item_clicked(self, item: QTreeWidgetItem, column: int) -> None:
-        """좌측 트리 항목 클릭 (폴더 클릭 시 펼침/접힘 토글, 문서는 단순 선택)"""
+        """좌측 트리 항목 클릭 (폴더 클릭 시 펼침/접힘 토글, 문서 클릭 시 열기 확인/전환)"""
         sheet = item.data(0, Qt.UserRole)
         if not isinstance(sheet, WorkSheetData):
             item.setExpanded(not item.isExpanded())
+        else:
+            self._open_sheet_or_external(sheet)
 
     def _on_tree_item_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
         """좌측 트리 문서 더블클릭 시 에디터로 열기 (폴더 더블클릭 시 펼침/접힘 토글)"""
@@ -6432,26 +7402,68 @@ class WorkManagerDialog(QDialog):
         else:
             item.setExpanded(not item.isExpanded())
 
-    def _group_no(self, category_name: str) -> str:
+    def _group_no(self, category_name: str, category_id: int | None = None) -> str:
         """분류가 속한 그룹(하단 탭)의 폴더 번호. work/<번호>/<분류>/ … (탭 이름 매핑은 DB에 저장)"""
         try:
+            if category_id:
+                for c in self._category_rows:
+                    if c.get("id") == category_id:
+                        return str(c.get("tab_id", 1) or 1)
             for c in self._category_rows:
                 if c.get("name") == category_name:
                     return str(c.get("tab_id", 1) or 1)
+            if self.repository:
+                if category_id:
+                    row = self.repository.connection.execute(
+                        "SELECT tab_id FROM work_categories WHERE id = ?", (int(category_id),)
+                    ).fetchone()
+                    if row and row["tab_id"]:
+                        return str(row["tab_id"])
+                if category_name:
+                    row = self.repository.connection.execute(
+                        "SELECT tab_id FROM work_categories WHERE name = ?", (str(category_name),)
+                    ).fetchone()
+                    if row and row["tab_id"]:
+                        return str(row["tab_id"])
         except Exception:
             pass
-        return "1"
+        return str(getattr(self, "_active_category_tab_id", 1) or 1)
 
-    def _cat_path(self, category_name: str) -> str:
+    def _cat_path(self, category_name: str, category_id: int | None = None) -> str:
         """분류명 → '상위/분류' 계층 경로(좌측 트리와 동일). work/<그룹>/<이 경로>/<파일>"""
         try:
             chain, seen = [], set()
-            cur = next((c for c in self._category_rows if c.get("name") == category_name), None)
+            cur = None
+            if category_id:
+                cur = next((c for c in self._category_rows if c.get("id") == category_id), None)
+            if not cur and category_name:
+                cur = next((c for c in self._category_rows if c.get("name") == category_name), None)
+            if not cur and self.repository:
+                if category_id:
+                    row = self.repository.connection.execute(
+                        "SELECT id, name, parent_id FROM work_categories WHERE id = ?", (int(category_id),)
+                    ).fetchone()
+                    if row:
+                        cur = dict(row)
+                if not cur and category_name:
+                    row = self.repository.connection.execute(
+                        "SELECT id, name, parent_id FROM work_categories WHERE name = ?", (str(category_name),)
+                    ).fetchone()
+                    if row:
+                        cur = dict(row)
             while cur and cur.get("id") not in seen:
                 seen.add(cur.get("id"))
                 chain.append(str(cur.get("name")))
                 pid = cur.get("parent_id")
-                cur = next((c for c in self._category_rows if c.get("id") == pid), None) if pid else None
+                if pid:
+                    cur = next((c for c in self._category_rows if c.get("id") == pid), None)
+                    if not cur and self.repository:
+                        p_row = self.repository.connection.execute(
+                            "SELECT id, name, parent_id FROM work_categories WHERE id = ?", (int(pid),)
+                        ).fetchone()
+                        cur = dict(p_row) if p_row else None
+                else:
+                    cur = None
             chain.reverse()
             if chain:
                 return "/".join(chain)
@@ -6461,8 +7473,8 @@ class WorkManagerDialog(QDialog):
 
     def _sheet_work_file_path(self, sheet: "WorkSheetData") -> Path:
         """업무문서의 work/ 파일 경로 (그룹/분류계층/제목 기준, 파일명 정제 적용)"""
-        grp = self._group_no(sheet.category)
-        return work_files.sheet_hwpx_path(grp, self._cat_path(sheet.category), sheet.title or "무제 업무")
+        grp = self._group_no(sheet.category, sheet.category_id)
+        return work_files.sheet_hwpx_path(grp, self._cat_path(sheet.category, sheet.category_id), sheet.title or "무제 업무")
 
     def _export_sheet_to_work_file(self, sheet: "WorkSheetData") -> Path | None:
         """업무문서 현재 내용을 work/ 폴더에 .hwpx 파일로 내보낸다(항상 최신으로 덮어씀)."""
@@ -6504,13 +7516,17 @@ class WorkManagerDialog(QDialog):
         work_files.reveal_in_explorer(path)
 
     def _persist_sheet_file(self, sheet: "WorkSheetData") -> None:
-        """업무문서 내용을 work/ 아래 실제 .hwpx 파일로 저장(파일화)."""
-        if not sheet or not sheet.hwpx_blob:
+        """업무문서 내용을 work/ 아래 실제 파일(.hwpx 또는 .txt)로 저장(파일화)."""
+        if not sheet:
             return
         try:
-            dest = work_files.sheet_hwpx_path(self._group_no(sheet.category), self._cat_path(sheet.category), sheet.title or "무제 업무")
+            dest = work_files.sheet_hwpx_path(self._group_no(sheet.category, sheet.category_id), self._cat_path(sheet.category, sheet.category_id), sheet.title or "무제 업무")
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(sheet.hwpx_blob)
+            if sheet.hwpx_blob:
+                dest.write_bytes(sheet.hwpx_blob)
+            elif sheet.content_text:
+                txt_dest = dest.with_suffix(".txt")
+                txt_dest.write_text(sheet.content_text, encoding="utf-8")
         except Exception as e:
             logger.warning("Failed to persist work file: %s", e)
 
@@ -6518,29 +7534,65 @@ class WorkManagerDialog(QDialog):
         """업무파일 열기: 에디터로 열 수 있으면 에디터, 아니면 안내 후 OS 기본 프로그램."""
         f = None
         try:
-            f = work_files.find_sheet_file(self._group_no(sheet.category), self._cat_path(sheet.category), sheet.title or "무제 업무")
+            f = work_files.find_sheet_file(self._group_no(sheet.category, sheet.category_id), self._cat_path(sheet.category, sheet.category_id), sheet.title or "무제 업무")
         except Exception:
             f = None
+
+        # 1. 디스크 파일이 텍스트/데이터 문서인 경우 (.txt, .md, .csv, .json, .xml, .html 등)
         if f and work_files.is_text_file(f):
-            # 텍스트(txt/md 등): 에디터로 열고 '한글 파일로 변환' 여부를 묻는다(원본 유지)
             try:
                 sheet.content_text = f.read_text(encoding="utf-8", errors="replace")
             except Exception:
                 pass
-            if QMessageBox.question(
+            res = QMessageBox.question(
                 self, "한글로 변환",
-                f"'{f.name}' 은(는) 텍스트 문서입니다.\n한글 파일(.hwpx)로 변환할까요?\n\n※ 원본은 첨부파일로 보관되고, 작업 폴더에는 .hwpx만 남습니다.",
-                QMessageBox.Yes | QMessageBox.No,
-            ) == QMessageBox.Yes:
+                f"'{f.name}' 은(는) 텍스트/데이터 파일입니다.\n한글 파일(.hwpx)로 변환할까요?\n\n※ 변환 시 원본은 첨부파일로 보관되고, 작업 폴더에는 .hwpx만 남습니다.",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes,
+            )
+            if res == QMessageBox.Yes:
                 self.open_sheet(sheet)
-                self._convert_text_to_hwpx(sheet, f)  # 원본은 첨부로, 작업 폴더엔 .hwpx만
+                self._convert_text_to_hwpx(sheet, f)
                 return
-            # 아니요 → 에디터로 열지 않고 윈도우 기본 프로그램으로 바로 연다 (에디터는 .hwp/.hwpx 전용)
-            work_files.open_path_with_os(f)
-            return
+            elif res == QMessageBox.No:
+                # 윈도우 기본 프로그램으로 열기
+                work_files.open_path_with_os(f)
+                return
+            else:
+                return  # 취소
+
+        # 2. 파일은 없지만 시트에 HWP/HWPX 바이너리가 없고 텍스트 내용만 있는 경우 (비HWP 문서)
+        if not sheet.hwpx_blob and bool(sheet.content_text):
+            ext = Path(sheet.title).suffix.lower()
+            if ext not in work_files.NATIVE_EXTENSIONS:
+                res = QMessageBox.question(
+                    self, "한글로 변환",
+                    f"'{sheet.title}' 은(는) 텍스트/데이터 문서입니다.\n한글 파일(.hwpx)로 변환할까요?\n\n※ 원본 내용은 첨부파일로 보관되고, .hwpx로 새로 저장됩니다.",
+                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                    QMessageBox.Yes,
+                )
+                if res == QMessageBox.Yes:
+                    self.open_sheet(sheet)
+                    if f:
+                        self._convert_text_to_hwpx(sheet, f)
+                    else:
+                        QTimer.singleShot(1500, self._on_save_button_clicked)
+                    return
+                elif res == QMessageBox.No:
+                    if f:
+                        work_files.open_path_with_os(f)
+                        return
+                    # 파일이 없는 경우 에디터에 그대로 열기
+                    self.open_sheet(sheet)
+                    return
+                else:
+                    return
+
+        # 3. 에디터로 열 수 없는 형식의 파일인 경우
         if f and not work_files.is_editor_openable(f):
             self._open_file_external_with_notice(f)
             return
+
         self.open_sheet(sheet)
 
     def _convert_text_to_hwpx(self, sheet: "WorkSheetData", src_path: Path) -> None:
@@ -6795,11 +7847,13 @@ class WorkManagerDialog(QDialog):
         root = Path(d)
         data = None
         wj_path = root / "work.json"
-        if wj_path.exists():
-            try:
-                data = json.loads(wj_path.read_text(encoding="utf-8"))
-            except Exception:
-                data = None
+        if not wj_path.exists():
+            self.import_work_folder(root, auto_run_ai=True)
+            return
+        try:
+            data = json.loads(wj_path.read_text(encoding="utf-8"))
+        except Exception:
+            data = None
 
         # 1) 그룹(탭) 복원
         if data and data.get("groups"):
@@ -6977,7 +8031,15 @@ class WorkManagerDialog(QDialog):
         return (n_sched, n_docs)
 
     def _remove_sheet(self, target: "WorkSheetData") -> None:
-        """업무문서를 확인 없이 제거(DB 삭제 + 탭/목록 정리). 활성 시트가 아니면 활성 시트를 유지."""
+        """업무문서를 확인 없이 제거(DB/파일 삭제 + 탭/목록 정리). 활성 시트가 아니면 활성 시트를 유지."""
+        try:
+            grp = self._group_no(target.category, target.category_id)
+            catp = self._cat_path(target.category, target.category_id)
+            work_files.delete_sheet_file(grp, catp, target.title)
+            for g in ("1", "2", "3", "4", "5"):
+                work_files.delete_sheet_file(g, catp, target.title)
+        except Exception as e:
+            logger.warning(f"Failed to delete sheet file from disk: {e}")
         if self.repository and target.db_id:
             self.repository.delete_work_item(target.db_id)
         if target in self._all_sheets:
@@ -7148,7 +8210,7 @@ class WorkManagerDialog(QDialog):
             if action in doc_tab_actions:
                 self._move_sheet_to_tab(sheet, doc_tab_actions[action])
             elif action == act_open:
-                self.open_sheet(sheet)
+                self._open_sheet_or_external(sheet)
             elif action == act_open_hwp:
                 self._open_sheet_in_hangul(sheet)
             elif action == act_reveal:
@@ -7494,12 +8556,13 @@ class WorkManagerDialog(QDialog):
             if s.category_id in target_ids or (s.category_id is None and s.category == cat_name)
         ]
         sub_count = len(target_ids) - 1
-        msg = f"'{cat_name}' 분류를 삭제하시겠습니까?"
+        msg = f"'{cat_name}' 업무분류(폴더)를 삭제하시겠습니까?\n\n"
         if sub_count > 0:
-            msg += f"\n포함된 하위 폴더 {sub_count}개도 함께 삭제됩니다."
+            msg += f"• 포함된 하위 폴더: {sub_count}개\n"
         if to_del:
-            msg += f"\n포함된 {len(to_del)}개의 업무 문서도 함께 DB에서 삭제됩니다."
-        res = QMessageBox.question(self, "분류 삭제 확인", msg, QMessageBox.Yes | QMessageBox.No)
+            msg += f"• 포함된 업무 문서: {len(to_del)}개\n"
+        msg += "\n※ 해당 분류에 속한 모든 업무 문서의 본문 파일 및 첨부파일·폴더가 디스크(컴퓨터)와 DB에서 완전히 함께 영구 삭제됩니다."
+        res = QMessageBox.question(self, "분류 및 첨부파일 영구 삭제", msg, QMessageBox.Yes | QMessageBox.No)
         if res != QMessageBox.Yes:
             return
 
@@ -7513,19 +8576,25 @@ class WorkManagerDialog(QDialog):
                 total_steps,
             )
 
-        try:
-            if self.repository:
-                self.repository.delete_work_category(cat_id)
-            if progress:
-                progress.setValue(1)
-                progress.setLabelText(f"하위 문서 및 첨부파일 정리 중... (0/{len(to_del)})")
-                QApplication.processEvents()
+        # 삭제 대상 카테고리 정보(id, name, path, tab) 미리 수집
+        cats_to_remove = [row for row in self._category_rows if row["id"] in target_ids]
 
+        try:
+            # 1. 하위 문서들의 물리 파일 및 DB 레코드 삭제
             for idx, s in enumerate(to_del):
                 if progress:
                     progress.setValue(idx + 1)
-                    progress.setLabelText(f"하위 문서 삭제 중... ({idx+1}/{len(to_del)})\n{s.title}")
+                    progress.setLabelText(f"하위 문서 및 첨부파일 삭제 중... ({idx+1}/{len(to_del)})\n{s.title}")
                     QApplication.processEvents()
+
+                try:
+                    grp = self._group_no(s.category, s.category_id)
+                    catp = self._cat_path(s.category, s.category_id)
+                    work_files.delete_sheet_file(grp, catp, s.title)
+                    for g in ("1", "2", "3", "4", "5"):
+                        work_files.delete_sheet_file(g, catp, s.title)
+                except Exception as e:
+                    logger.warning(f"Failed to delete sheet file {s.title}: {e}")
 
                 if self.repository and s.db_id:
                     self.repository.delete_work_item(s.db_id)
@@ -7537,6 +8606,23 @@ class WorkManagerDialog(QDialog):
                     self.sheet_tab_bar.blockSignals(True)
                     self.sheet_tab_bar.removeTab(o_idx)
                     self.sheet_tab_bar.blockSignals(False)
+
+            # 2. 물리적 카테고리 디렉토리(work/ 및 work/attach/) 삭제
+            for c_info in cats_to_remove:
+                try:
+                    c_name = c_info.get("name", "")
+                    c_id = c_info.get("id")
+                    grp = str(c_info.get("tab_id", 1) or self._group_no(c_name, c_id))
+                    catp = self._cat_path(c_name, c_id)
+                    work_files.delete_category_dir(grp, catp)
+                    for g in ("1", "2", "3", "4", "5"):
+                        work_files.delete_category_dir(g, catp)
+                except Exception as e:
+                    logger.warning(f"Failed to delete category dir {c_info.get('name')}: {e}")
+
+            # 3. DB 카테고리 삭제
+            if self.repository:
+                self.repository.delete_work_category(cat_id)
         finally:
             if progress:
                 progress.setValue(total_steps)
@@ -7662,8 +8748,8 @@ class WorkManagerDialog(QDialog):
             self._refresh_category_tree()
 
     def _attach_base_for(self, sheet: "WorkSheetData") -> Path:
-        grp = self._group_no(sheet.category)
-        return work_files.attach_dir(grp, self._cat_path(sheet.category), sheet.title or "무제 업무")
+        grp = self._group_no(sheet.category, sheet.category_id)
+        return work_files.attach_dir(grp, self._cat_path(sheet.category, sheet.category_id), sheet.title or "무제 업무")
 
     def _sync_attachments_from_disk(self, sheet: "WorkSheetData") -> None:
         """첨부 폴더를 스캔해 목록을 만들고 DB 행을 자동 보정(폴더가 진실)."""
@@ -7880,33 +8966,52 @@ class WorkManagerDialog(QDialog):
             }}
         """
 
+        if hasattr(self, "btn_tab_related_bookmark"):
+            self.btn_tab_related_bookmark.setStyleSheet(active_style if self._active_related_tab == 2 else inactive_style)
+
         if self._active_related_tab == 0:
             self.btn_tab_related_sched.setStyleSheet(active_style)
             self.btn_tab_related_doc.setStyleSheet(inactive_style)
+            self.btn_add_related.setVisible(True)
             self.btn_add_related.setText("+ 일정")
             self.btn_add_related.setToolTip("현재 업무와 연결된 캘린더 일정 등록")
             self.btn_goto_related.setText("이동")
             self.btn_goto_related.setToolTip("선택한 일정 날짜의 캘린더로 이동")
+            self.btn_edit_related.setVisible(True)
             self.btn_edit_related.setText("수정")
             self.btn_edit_related.setToolTip("선택한 일정 수정")
             self.btn_delete_related.setText("삭제")
             self.btn_delete_related.setToolTip("선택한 일정 삭제")
             self.btn_delete_related.setStyleSheet(self._danger_btn_style())
-        else:
+        elif self._active_related_tab == 1:
             self.btn_tab_related_sched.setStyleSheet(inactive_style)
             self.btn_tab_related_doc.setStyleSheet(active_style)
+            self.btn_add_related.setVisible(True)
             self.btn_add_related.setText("+ 문서")
             self.btn_add_related.setToolTip("현재 업무와 연결할 관련 문서(업무) 추가")
             self.btn_goto_related.setText("이동")
             self.btn_goto_related.setToolTip("선택한 문서를 문서 관리 대시보드에서 열기")
+            self.btn_edit_related.setVisible(True)
             self.btn_edit_related.setText("수정")
             self.btn_edit_related.setToolTip("선택한 문서 내용/정보 수정")
             self.btn_delete_related.setText("연결 해제")
             self.btn_delete_related.setToolTip("현재 업무와 해당 문서의 연결 해제")
             self.btn_delete_related.setStyleSheet(self._sub_btn_style())
+        else:
+            self.btn_tab_related_sched.setStyleSheet(inactive_style)
+            self.btn_tab_related_doc.setStyleSheet(inactive_style)
+            self.btn_add_related.setVisible(True)
+            self.btn_add_related.setText("안내")
+            self.btn_add_related.setToolTip("본문에서 문구를 드래그한 뒤 우클릭 → [🔖 하이라이트(북마크) 등록]을 선택하세요.")
+            self.btn_goto_related.setText("위치로 이동")
+            self.btn_goto_related.setToolTip("선택한 하이라이트 북마크 문구 위치로 에디터 커서 이동")
+            self.btn_edit_related.setVisible(False)
+            self.btn_delete_related.setText("북마크 삭제")
+            self.btn_delete_related.setToolTip("선택한 북마크를 목록에서 제거")
+            self.btn_delete_related.setStyleSheet(self._danger_btn_style())
 
     def _set_related_tab(self, tab_index: int) -> None:
-        """우측 하단 관련 항목 탭 전환 (0: 일정, 1: 문서)"""
+        """우측 하단 관련 항목 탭 전환 (0: 일정, 1: 문서, 2: 북마크)"""
         self._active_related_tab = tab_index
         self.related_stack.setCurrentIndex(tab_index)
         self._update_related_tab_style()
@@ -7925,8 +9030,9 @@ class WorkManagerDialog(QDialog):
         if sheet is None:
             sheet = self._get_current_sheet()
 
-        # 관련 문서 목록도 함께 갱신
+        # 관련 문서 목록 및 북마크 목록도 함께 갱신
         self._refresh_work_documents_list(sheet)
+        self._refresh_work_bookmarks_list(sheet)
 
         if not sheet or not self.repository:
             if hasattr(self, "btn_tab_related_sched"):
@@ -8089,33 +9195,338 @@ class WorkManagerDialog(QDialog):
             self.work_doc_list.scrollToItem(target_doc_item, QAbstractItemView.ScrollHint.PositionAtTop)
             self.work_doc_list.setCurrentItem(target_doc_item)
 
+    # ------------------------------------------------------------------
+    # [기능 3] 하이라이트(북마크) 관리 및 본문 점프 이동
+    # ------------------------------------------------------------------
+    def _sheet_bookmark_key(self, sheet: WorkSheetData | None) -> str:
+        if not sheet:
+            return ""
+        if sheet.db_id:
+            return f"db_{sheet.db_id}"
+        return f"sheet_{sheet.sheet_id}"
+
+    def _load_sheet_bookmarks(self, sheet: WorkSheetData | None) -> list[str]:
+        if not sheet:
+            return []
+        key = self._sheet_bookmark_key(sheet)
+        if not key or not self.repository:
+            return getattr(sheet, "_bookmarks", [])
+        try:
+            raw = self.repository.get_setting("work_sheet_bookmarks", "{}")
+            data = json.loads(raw) if raw else {}
+            if isinstance(data, dict):
+                bms = data.get(key)
+                if isinstance(bms, list):
+                    return [str(x) for x in bms if str(x).strip()]
+        except Exception:
+            pass
+        return getattr(sheet, "_bookmarks", [])
+
+    def _save_sheet_bookmarks(self, sheet: WorkSheetData | None, bookmarks: list[str]) -> None:
+        if not sheet:
+            return
+        clean = [str(x).strip() for x in bookmarks if str(x).strip()]
+        setattr(sheet, "_bookmarks", clean)
+        key = self._sheet_bookmark_key(sheet)
+        if not key or not self.repository:
+            return
+        try:
+            raw = self.repository.get_setting("work_sheet_bookmarks", "{}")
+            data = json.loads(raw) if raw else {}
+            if not isinstance(data, dict):
+                data = {}
+            data[key] = clean
+            self.repository.set_setting("work_sheet_bookmarks", json.dumps(data, ensure_ascii=False))
+        except Exception:
+            pass
+
+    def _refresh_work_bookmarks_list(self, sheet: WorkSheetData | None = None) -> None:
+        """현재 시트에 등록된 하이라이트 북마크 목록 갱신 (아이콘 없음, 가로 스크롤 방지)"""
+        if not hasattr(self, "work_bookmark_list") or not self.work_bookmark_list:
+            return
+        self.work_bookmark_list.clear()
+        if sheet is None:
+            sheet = self._get_current_sheet()
+        if not sheet:
+            if hasattr(self, "btn_tab_related_bookmark"):
+                self.btn_tab_related_bookmark.setText("북마크 (0)")
+            return
+
+        bookmarks = self._load_sheet_bookmarks(sheet)
+        if hasattr(self, "btn_tab_related_bookmark"):
+            self.btn_tab_related_bookmark.setText(f"북마크 ({len(bookmarks)})")
+
+        if not bookmarks:
+            empty_item = QListWidgetItem("(드래그 → 우클릭 → '하이라이트(북마크) 등록')")
+            empty_item.setFlags(Qt.ItemFlag.NoItemFlags)
+            empty_item.setForeground(QColor(self.palette.get("muted", "#94A3B8")))
+            self.work_bookmark_list.addItem(empty_item)
+            return
+
+        for idx, snippet in enumerate(bookmarks, start=1):
+            one_line = " ".join(snippet.splitlines()).strip()
+            item = QListWidgetItem(f"{idx}. {one_line}")
+            item.setData(Qt.ItemDataRole.UserRole, snippet)
+            item.setToolTip(f"북마크 문구:\n{snippet}\n\n(클릭 시 에디터 해당 문구 위치로 바로 이동 / 우클릭 메뉴)")
+            self.work_bookmark_list.addItem(item)
+
+    def _on_editor_bookmark_added(self, snippet: str) -> None:
+        """에디터에서 텍스트 드래그 후 우클릭 -> 하이라이트(북마크) 등록 시 호출"""
+        clean = (snippet or "").strip()
+        if not clean:
+            return
+        sheet = self._get_current_sheet()
+        if not sheet:
+            return
+        bookmarks = self._load_sheet_bookmarks(sheet)
+        if clean not in bookmarks:
+            bookmarks.append(clean)
+            self._save_sheet_bookmarks(sheet, bookmarks)
+        self._refresh_work_bookmarks_list(sheet)
+        self._set_related_tab(2)
+        self.show_floating_toast("하이라이트 북마크가 등록되었습니다. (우측 하단 북마크 클릭 시 바로 이동)")
+
+    def _on_bookmark_item_clicked(self, item: QListWidgetItem) -> None:
+        if not item:
+            return
+        snippet = item.data(Qt.ItemDataRole.UserRole)
+        if snippet and hasattr(self, "editor") and self.editor:
+            self.editor.jump_to_bookmark_text(str(snippet))
+
+    def _on_bookmark_item_double_clicked(self, item: QListWidgetItem) -> None:
+        self._on_bookmark_item_clicked(item)
+
+    def _on_delete_selected_bookmark(self) -> None:
+        sheet = self._get_current_sheet()
+        if not sheet or not hasattr(self, "work_bookmark_list"):
+            return
+        item = self.work_bookmark_list.currentItem()
+        if not item:
+            self.show_floating_toast("삭제할 북마크를 선택해 주세요.")
+            return
+        snippet = item.data(Qt.ItemDataRole.UserRole)
+        if not snippet:
+            return
+        bookmarks = self._load_sheet_bookmarks(sheet)
+        bookmarks = [b for b in bookmarks if b != snippet]
+        self._save_sheet_bookmarks(sheet, bookmarks)
+        self._refresh_work_bookmarks_list(sheet)
+        self.show_floating_toast("북마크가 삭제되었습니다.")
+
+    def _on_bookmark_context_menu(self, pos: QPoint) -> None:
+        item = self.work_bookmark_list.itemAt(pos)
+        if not item or not item.data(Qt.ItemDataRole.UserRole):
+            return
+        menu = QMenu(self)
+        act_jump = menu.addAction("해당 본문 위치로 이동")
+        act_del = menu.addAction("북마크 목록에서 삭제")
+        chosen = menu.exec(self.work_bookmark_list.viewport().mapToGlobal(pos))
+        if chosen == act_jump:
+            self._on_bookmark_item_clicked(item)
+        elif chosen == act_del:
+            self.work_bookmark_list.setCurrentItem(item)
+            self._on_delete_selected_bookmark()
+
+    # ------------------------------------------------------------------
+    # [기능 1] 개인정보 체크 및 변경/수정/유지/삭제 조치 (분류·업무 선택 지원)
+    # ------------------------------------------------------------------
+    def _run_personal_info_check(self) -> None:
+        """등록된 분류 및 업무를 체크하여 개인정보를 검사하고 변경/수정/유지/삭제 조치"""
+        current_sheet = self._get_current_sheet()
+
+        def _open_pii_dialog(live_text: str = "", live_hwpx: bytes | None = None):
+            from taskcalendar.work_smart_tools import (
+                PersonalInfoCheckDialog,
+                apply_replacements_to_hwpx_blob,
+            )
+
+            # 현재 열려있는 시트가 있으면 최신 에디터 내용을 먼저 동기화
+            if current_sheet is not None:
+                if live_text and live_text.strip():
+                    current_sheet.content_text = live_text
+                if live_hwpx:
+                    current_sheet.hwpx_blob = live_hwpx
+
+            all_sheets = list(getattr(self, "_all_sheets", []) or [])
+            if current_sheet is not None and current_sheet not in all_sheets:
+                all_sheets.insert(0, current_sheet)
+
+            if not all_sheets:
+                self.show_floating_toast("등록된 업무 문서가 없습니다.")
+                return
+
+            cat_records = list(getattr(self, "_category_records", []) or [])
+            doc_text = (live_text or "").strip() or (getattr(current_sheet, "content_text", "") if current_sheet else "")
+
+            def _on_pii_entry_open_requested(target_sheet: Any, target_text: str) -> None:
+                if target_sheet is None or not hasattr(target_sheet, "db_id"):
+                    return
+                was_already_active = (self._get_current_sheet() is target_sheet)
+                self.open_sheet(target_sheet)
+                if target_text and hasattr(self, "editor") and self.editor:
+                    delay_ms = 80 if was_already_active else 450
+                    QTimer.singleShot(
+                        delay_ms,
+                        lambda q=target_text: self.editor.jump_to_bookmark_text(q),
+                    )
+
+            dlg = PersonalInfoCheckDialog(
+                self,
+                doc_text=doc_text,
+                palette=self.palette,
+                sheets=all_sheets,
+                categories=cat_records,
+                current_sheet=current_sheet,
+                on_open_entry=_on_pii_entry_open_requested,
+            )
+            if dlg.exec() != QDialog.Accepted:
+                return
+
+            sheet_replacements_list = dlg.get_replacements_by_sheet()
+            if not sheet_replacements_list:
+                self.show_floating_toast("변경·수정하거나 삭제할 개인정보 항목이 없습니다.")
+                return
+
+            active_sheet_after_dlg = self._get_current_sheet()
+            total_changed_items = 0
+            modified_sheets_count = 0
+            active_sheet_repls: list[tuple[str, str]] = []
+
+            for target_sheet, repls in sheet_replacements_list:
+                if not repls:
+                    continue
+                modified_sheets_count += 1
+                total_changed_items += len(repls)
+
+                # 1. 텍스트 및 HTML 치환
+                cur_txt = getattr(target_sheet, "content_text", "") or ""
+                cur_html = getattr(target_sheet, "content_html", "") or ""
+                for orig, repl in repls:
+                    if not orig or orig == repl:
+                        continue
+                    cur_txt = cur_txt.replace(orig, repl)
+                    if cur_html:
+                        cur_html = cur_html.replace(orig, repl)
+                target_sheet.content_text = cur_txt
+                target_sheet.content_html = cur_html
+
+                # 2. HWPX 바이너리(Contents/section*.xml) 치환
+                if getattr(target_sheet, "hwpx_blob", None):
+                    target_sheet.hwpx_blob = apply_replacements_to_hwpx_blob(target_sheet.hwpx_blob, repls)
+
+                # 3. DB 및 디스크 파일 즉시 저장
+                if self.repository:
+                    try:
+                        sort_idx = self._all_sheets.index(target_sheet) if target_sheet in self._all_sheets else 0
+                    except Exception:
+                        sort_idx = 0
+                    target_sheet.db_id = self.repository.upsert_work_item(
+                        work_id=target_sheet.db_id,
+                        title=target_sheet.title,
+                        category_name=target_sheet.category,
+                        category_id=target_sheet.category_id,
+                        cycle=target_sheet.cycle,
+                        assignee=target_sheet.assignee,
+                        deadline=target_sheet.deadline,
+                        content_text=target_sheet.content_text,
+                        content_html=target_sheet.content_html,
+                        hwpx_blob=target_sheet.hwpx_blob,
+                        sort_order=sort_idx,
+                    )
+                    self._persist_sheet_file(target_sheet)
+                target_sheet.is_dirty = False
+                self._update_tab_title(target_sheet)
+
+                if active_sheet_after_dlg is not None and target_sheet is active_sheet_after_dlg:
+                    active_sheet_repls = repls
+
+            # 현재 열려있는 에디터 화면에도 즉시 반영
+            if active_sheet_after_dlg is not None and active_sheet_repls:
+                def _after_live_replace(_cnt: int):
+                    def _sync_after_pii(new_txt: str, new_hwpx: bytes | None):
+                        if new_txt:
+                            active_sheet_after_dlg.content_text = new_txt
+                        if new_hwpx:
+                            active_sheet_after_dlg.hwpx_blob = new_hwpx
+                        if self.repository and active_sheet_after_dlg.db_id:
+                            try:
+                                sort_idx = self._all_sheets.index(active_sheet_after_dlg) if active_sheet_after_dlg in self._all_sheets else 0
+                            except Exception:
+                                sort_idx = 0
+                            self.repository.upsert_work_item(
+                                work_id=active_sheet_after_dlg.db_id,
+                                title=active_sheet_after_dlg.title,
+                                category_name=active_sheet_after_dlg.category,
+                                category_id=active_sheet_after_dlg.category_id,
+                                cycle=active_sheet_after_dlg.cycle,
+                                assignee=active_sheet_after_dlg.assignee,
+                                deadline=active_sheet_after_dlg.deadline,
+                                content_text=active_sheet_after_dlg.content_text,
+                                content_html=active_sheet_after_dlg.content_html,
+                                hwpx_blob=active_sheet_after_dlg.hwpx_blob,
+                                sort_order=sort_idx,
+                            )
+                            self._persist_sheet_file(active_sheet_after_dlg)
+                        active_sheet_after_dlg.is_dirty = False
+                        self._update_tab_title(active_sheet_after_dlg)
+
+                    self.editor.export_document_data(_sync_after_pii)
+
+                self.editor.apply_text_replacements(active_sheet_repls, _after_live_replace)
+
+            self.show_floating_toast(
+                f"{modified_sheets_count}개 업무 개인정보 {total_changed_items}건 조치 완료"
+            )
+
+        if current_sheet is not None and hasattr(self, "editor") and self.editor:
+            self.editor.export_document_data(_open_pii_dialog)
+        else:
+            _open_pii_dialog("", None)
+
     def _on_add_related_clicked(self) -> None:
         """상단 '+ 추가' 버튼 클릭 시 현재 활성 탭에 맞춰 일정 또는 문서 추가"""
         if self._active_related_tab == 0:
             self._on_add_work_schedule_clicked()
-        else:
+        elif self._active_related_tab == 1:
             self._on_add_work_document_clicked()
+        else:
+            QMessageBox.information(
+                self,
+                "하이라이트(북마크) 등록 안내",
+                "작성 중인 업무 에디터에서 원하는 문구를 마우스로 드래그한 뒤,\n"
+                "우클릭 메뉴에서 [🔖 하이라이트(북마크) 등록]을 클릭하면\n"
+                "본문에 노란색 형광펜 하이라이트가 칠해지고 이곳에 북마크로 등록됩니다.",
+            )
 
     def _on_goto_related_clicked(self) -> None:
-        """하단 '이동' 버튼 클릭 시 현재 활성 탭에 맞춰 캘린더 이동 또는 문서 관리 이동"""
+        """하단 '이동' 버튼 클릭 시 현재 활성 탭에 맞춰 캘린더/문서/북마크 이동"""
         if self._active_related_tab == 0:
             self._on_goto_calendar_clicked()
-        else:
+        elif self._active_related_tab == 1:
             self._on_goto_document_clicked()
+        else:
+            if hasattr(self, "work_bookmark_list"):
+                cur = self.work_bookmark_list.currentItem()
+                if cur and cur.data(Qt.ItemDataRole.UserRole):
+                    self._on_bookmark_item_clicked(cur)
+                else:
+                    self.show_floating_toast("이동할 북마크를 먼저 선택해 주세요.")
 
     def _on_edit_related_clicked(self) -> None:
         """하단 '수정' 버튼 클릭 시 현재 활성 탭에 맞춰 일정 또는 문서 수정"""
         if self._active_related_tab == 0:
             self._on_edit_work_schedule_clicked()
-        else:
+        elif self._active_related_tab == 1:
             self._on_edit_work_document_clicked()
 
     def _on_delete_related_clicked(self) -> None:
-        """하단 삭제/연결해제 버튼 클릭 시 현재 활성 탭에 맞춰 일정 삭제 또는 문서 연결 해제"""
+        """하단 삭제/연결해제 버튼 클릭 시 현재 활성 탭에 맞춰 일정 삭제/문서 연결해제/북마크 삭제"""
         if self._active_related_tab == 0:
             self._on_delete_work_schedule_clicked()
-        else:
+        elif self._active_related_tab == 1:
             self._on_unlink_work_document_clicked()
+        else:
+            self._on_delete_selected_bookmark()
 
     def _on_add_work_document_clicked(self) -> None:
         """현재 업무에 연결할 문서 선택 창 띄우기"""
@@ -9207,8 +10618,8 @@ class WorkManagerDialog(QDialog):
         # 4-1. 등록 즉시 work/ 에 업무파일 생성 (드래그하자마자 폴더에 파일이 생기도록)
         if self.repository:
             try:
-                grp = self._group_no(chosen_cat)
-                catp = self._cat_path(chosen_cat)
+                grp = self._group_no(chosen_cat, chosen_cat_id)
+                catp = self._cat_path(chosen_cat, chosen_cat_id)
                 if work_files.is_native_file(p) and hwpx_blob:
                     dest = work_files.sheet_hwpx_path(grp, catp, chosen_title)
                     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -9291,6 +10702,16 @@ class WorkManagerDialog(QDialog):
             hwpx_blob=hwpx_blob,
             attachments=attachments,
         )
+        try:
+            dest_dir = work_files.category_dir(self._group_no(chosen_cat, chosen_cat_id), self._cat_path(chosen_cat, chosen_cat_id))
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            target_file = dest_dir / p.name
+            if not target_file.exists():
+                import shutil
+                shutil.copy2(p, target_file)
+        except Exception as e:
+            logger.warning(f"Failed to copy original file to work dir: {e}")
+            self._persist_sheet_file(new_sheet)
         self._all_sheets.append(new_sheet)
         self._refresh_category_tree()
 
@@ -9347,12 +10768,18 @@ class WorkManagerDialog(QDialog):
             f"'{p.name}' 파일이\n[{target_sheet.category}] '{target_sheet.title}' 업무의 첨부파일로 안전하게 보관되었습니다.",
         )
 
-    def import_work_folder(self, folder_path: str | Path) -> None:
+    def import_work_folder(
+        self,
+        folder_path: str | Path,
+        *,
+        initial_cat_name: str = "",
+        initial_copy_att: bool = True,
+        auto_run_ai: bool = False,
+    ) -> None:
         """
         탐색기에서 폴더 우클릭 '업무로 등록' 또는 [불러오기]->폴더 선택 시 호출:
-        - 사전 분석 모달(FolderWorkImportDialog)을 통해 하위 폴더 수, 파일 수, 파일 확장자 선택 필터 제공
-        - 폴더 및 하위 모든 폴더를 업무분류 트리 구조로 생성
-        - 사용자가 선택한 확장자의 파일들을 업무 문서로 일괄 등록
+        - 사전 분석 모달(FolderWorkImportDialog)을 통해 하위 폴더 수, 파일 수, 확장자 필터 및 AI 업무분류 자동 정리 제공
+        - AI 자동 분류 적용 시 파일별 배정된 업무분류로 자동 정리하여 등록
         - 진행률(QProgressDialog)을 표시하여 장시간 작업 상태 안내
         """
         root_dir = Path(folder_path)
@@ -9360,19 +10787,33 @@ class WorkManagerDialog(QDialog):
             QMessageBox.warning(self, "폴더 오류", f"유효한 폴더를 찾을 수 없습니다:\n{folder_path}")
             return
 
-        dlg = FolderWorkImportDialog(parent=self, folder_path=root_dir, palette=self.palette)
+        active_cat_names = [
+            c["name"] for c in self._category_rows if c.get("tab_id", 1) == self._active_category_tab_id
+        ]
+        dlg = FolderWorkImportDialog(
+            parent=self,
+            folder_path=root_dir,
+            palette=self.palette,
+            existing_categories=active_cat_names,
+            initial_category_name=initial_cat_name,
+            initial_copy_attachments=initial_copy_att,
+            auto_run_ai=auto_run_ai,
+        )
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
         selected_exts = dlg.get_selected_extensions()
         root_name = dlg.get_category_name()
         copy_as_att = dlg.should_copy_attachments()
+        is_ai_mode = dlg.is_ai_classified()
+        use_top_level = dlg.use_top_level_categories()
+        file_cat_map = dlg.get_file_category_map()
 
         all_files = [
-            f for f in root_dir.rglob("*")
+            f for f in sorted(root_dir.rglob("*"))
             if f.is_file()
             and not is_inside_attachment_folder(f)
-            and (f.suffix.lower() in selected_exts or (not f.suffix and "(확장자 없음)" in selected_exts))
+            and (f.suffix.lower() in selected_exts or (not f.suffix and ("확장자 없음" in selected_exts or "(확장자 없음)" in selected_exts)))
         ]
         if not all_files:
             QMessageBox.information(self, "알림", f"'{root_dir.name}' 폴더 내에 선택한 형식({', '.join(selected_exts)})의 파일이 없습니다.")
@@ -9388,11 +10829,27 @@ class WorkManagerDialog(QDialog):
         progress.show()
         QApplication.processEvents()
 
+        # 기존 카테고리 이름 -> id 매핑 (현재 탭 기준)
+        existing_cat_id_map: dict[str, int | None] = {}
+        for c in self._category_rows:
+            if c.get("tab_id", 1) == self._active_category_tab_id and c.get("name"):
+                existing_cat_id_map[str(c["name"]).strip()] = c.get("id")
+
         root_cat_id = None
-        if self.repository:
-            root_cat_id = self.repository.add_work_category(root_name, sort_order=len(self._categories) + 1, parent_id=None, tab_id=self._active_category_tab_id)
+        if not (is_ai_mode and use_top_level):
+            if root_name in existing_cat_id_map:
+                root_cat_id = existing_cat_id_map[root_name]
+            elif self.repository:
+                root_cat_id = self.repository.add_work_category(
+                    root_name,
+                    sort_order=len(self._categories) + 1,
+                    parent_id=None,
+                    tab_id=self._active_category_tab_id,
+                )
+                existing_cat_id_map[root_name] = root_cat_id
 
         dir_to_cat: dict[Path, tuple[str, int | None]] = {root_dir: (root_name, root_cat_id)}
+        ai_cat_cache: dict[str, tuple[str, int | None]] = {}
         imported_sheets: list[WorkSheetData] = []
 
         for i, file_p in enumerate(all_files):
@@ -9403,25 +10860,69 @@ class WorkManagerDialog(QDialog):
             progress.setValue(i)
             QApplication.processEvents()
 
-            parent_dir = file_p.parent
-            if parent_dir not in dir_to_cat:
-                rel_parts = parent_dir.relative_to(root_dir).parts
-                curr_p = root_dir
-                cur_cat_id = root_cat_id
-                cur_cat_name = root_name
-                for sub in rel_parts:
-                    curr_p = curr_p / sub
-                    if curr_p not in dir_to_cat:
-                        new_id = None
-                        if self.repository:
-                            new_id = self.repository.add_work_category(sub, sort_order=100, parent_id=cur_cat_id, tab_id=self._active_category_tab_id)
-                        dir_to_cat[curr_p] = (sub, new_id)
-                        cur_cat_id = new_id
-                        cur_cat_name = sub
-                    else:
-                        cur_cat_name, cur_cat_id = dir_to_cat[curr_p]
+            assigned_cat_name = (file_cat_map.get(str(file_p)) or "").strip()
 
-            cat_name, cat_id = dir_to_cat[parent_dir]
+            if is_ai_mode and assigned_cat_name:
+                if assigned_cat_name in ai_cat_cache:
+                    cat_name, cat_id = ai_cat_cache[assigned_cat_name]
+                else:
+                    cat_id = None
+                    if use_top_level and assigned_cat_name in existing_cat_id_map:
+                        cat_id = existing_cat_id_map[assigned_cat_name]
+                    elif not use_top_level and assigned_cat_name == root_name:
+                        cat_id = root_cat_id
+                    elif self.repository:
+                        parent_for_cat = None if use_top_level else root_cat_id
+                        cat_id = self.repository.add_work_category(
+                            assigned_cat_name,
+                            sort_order=len(existing_cat_id_map) + len(ai_cat_cache) + 1,
+                            parent_id=parent_for_cat,
+                            tab_id=self._active_category_tab_id,
+                        )
+                        if use_top_level:
+                            existing_cat_id_map[assigned_cat_name] = cat_id
+                    cat_name = assigned_cat_name
+                    ai_cat_cache[assigned_cat_name] = (cat_name, cat_id)
+            else:
+                parent_dir = file_p.parent
+                if parent_dir not in dir_to_cat:
+                    rel_parts = parent_dir.relative_to(root_dir).parts
+                    curr_p = root_dir
+                    cur_cat_id = root_cat_id
+                    cur_cat_name = root_name
+                    for sub in rel_parts:
+                        curr_p = curr_p / sub
+                        if curr_p not in dir_to_cat:
+                            new_id = None
+                            if self.repository:
+                                new_id = self.repository.add_work_category(
+                                    sub,
+                                    sort_order=100,
+                                    parent_id=cur_cat_id,
+                                    tab_id=self._active_category_tab_id,
+                                )
+                            dir_to_cat[curr_p] = (sub, new_id)
+                            cur_cat_id = new_id
+                            cur_cat_name = sub
+                        else:
+                            cur_cat_name, cur_cat_id = dir_to_cat[curr_p]
+                cat_name, cat_id = dir_to_cat[parent_dir]
+                # 사용자가 테이블에서 개별 파일 분류를 직접 수정한 경우 반영
+                if assigned_cat_name and assigned_cat_name != cat_name:
+                    if assigned_cat_name in ai_cat_cache:
+                        cat_name, cat_id = ai_cat_cache[assigned_cat_name]
+                    else:
+                        c_id = existing_cat_id_map.get(assigned_cat_name)
+                        if not c_id and self.repository:
+                            c_id = self.repository.add_work_category(
+                                assigned_cat_name,
+                                sort_order=100,
+                                parent_id=None if use_top_level else root_cat_id,
+                                tab_id=self._active_category_tab_id,
+                            )
+                        cat_name, cat_id = assigned_cat_name, c_id
+                        ai_cat_cache[assigned_cat_name] = (cat_name, cat_id)
+
             doc_title = file_p.stem
 
             is_drm, drm_vendor = check_document_drm(file_p)
@@ -9522,6 +11023,19 @@ class WorkManagerDialog(QDialog):
                 hwpx_blob=hwpx_blob,
                 attachments=attachments,
             )
+            # work/ 폴더에 실제 파일 및 분류 폴더를 디스크상에 생성/보존
+            try:
+                dest_grp = str(self._active_category_tab_id or self._group_no(cat_name, cat_id))
+                dest_catp = self._cat_path(cat_name, cat_id)
+                dest_dir = work_files.category_dir(dest_grp, dest_catp)
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                target_file = dest_dir / file_p.name
+                if not target_file.exists():
+                    import shutil
+                    shutil.copy2(file_p, target_file)
+            except Exception as e:
+                logger.warning(f"Failed to copy original file to work dir: {e}")
+                self._persist_sheet_file(sheet)
             imported_sheets.append(sheet)
 
         progress.setValue(total_files)
@@ -9533,10 +11047,11 @@ class WorkManagerDialog(QDialog):
 
         if imported_sheets:
             self.open_sheet(imported_sheets[0])
+            cat_count = len({s.category for s in imported_sheets})
             QMessageBox.information(
                 self,
                 "업무 등록 완료",
-                f"폴더 '{root_name}' 내 총 {len(imported_sheets)}개의 파일이\n계층형 업무 분류 및 문서로 성공적으로 등록되었습니다.",
+                f"총 {len(imported_sheets)}개의 문서가 {cat_count}개 업무분류로 정리되어 등록되었습니다.",
             )
 
     def _on_import_menu(self) -> None:
@@ -9555,8 +11070,12 @@ class WorkManagerDialog(QDialog):
         if mode == WorkImportWizardDialog.MODE_FOLDER:
             folder = dlg.get_folder()
             if folder:
-                # FolderWorkImportDialog(사전 분석 모달)로 이어서 처리
-                self.import_work_folder(folder)
+                self.import_work_folder(
+                    folder,
+                    initial_cat_name=dlg.get_category_name(),
+                    initial_copy_att=copy_att,
+                    auto_run_ai=dlg.get_use_ai_classify(),
+                )
         else:
             target_cat = dlg.get_target_category()
             target_cat_id = None
@@ -10220,6 +11739,7 @@ class WorkManagerDialog(QDialog):
                 btn.setStyleSheet(self._sub_btn_style())
 
         for btn in (
+            getattr(self, "btn_extra_features", None),
             getattr(self, "btn_template", None),
             getattr(self, "btn_img_template", None),
             getattr(self, "btn_fullscreen", None),

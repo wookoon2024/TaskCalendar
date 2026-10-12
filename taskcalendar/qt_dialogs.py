@@ -7375,6 +7375,7 @@ class SettingsDialog(QDialog):
             LGPL3_TEXT,
             GPL3_TEXT,
             OFL1_1_TEXT,
+            MIT_KOREAN_REPORT_HWPX_TEXT,
         )
 
         dlg = QDialog(self)
@@ -7393,6 +7394,7 @@ class SettingsDialog(QDialog):
         tabs = QTabWidget()
         for tab_title, body in (
             ("고지 요약", NOTICES_TEXT),
+            ("korean-report-hwpx (MIT)", MIT_KOREAN_REPORT_HWPX_TEXT),
             ("LGPL-3.0 전문", LGPL3_TEXT),
             ("GPL-3.0 전문", GPL3_TEXT),
             ("OFL-1.1 전문", OFL1_1_TEXT),

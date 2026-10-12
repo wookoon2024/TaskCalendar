@@ -98,7 +98,7 @@ def ui_font_scale() -> float:
     return _scale
 
 
-def make_ui_font(size_px: float, weight: int = -1) -> QFont:
+def make_ui_font(size_px: float, weight: int = -1, *, bold: bool = False) -> QFont:
     """전역 렌더링 설정을 물려받아 QFont 를 만든다.
 
     QFont(family, size) 로 직접 만들면 앱 전역 폰트(set_ui_font)의
@@ -116,20 +116,27 @@ def make_ui_font(size_px: float, weight: int = -1) -> QFont:
     font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
     if weight >= 0:
         font.setWeight(QFont.Weight(weight))
+    elif bold:
+        font.setBold(True)
     font.setPixelSize(scale_px(size_px))
     return font
 
 
-def make_ui_font_like(size_pt: float, weight: int = -1) -> QFont:
+def make_ui_font_like(size_pt: float, weight: int = -1, *, bold: bool = False) -> QFont:
     """pointSize(pt) 기준 헬퍼. 기존 QFont(family, pt) 동작을 그대로 유지한다.
 
     앱 전역 폰트와 같은 pointSize → pixelSize 환산을 적용해,
     렌더링 설정만 물려받으면서 크기는 예전과 완전히 같게 만든다.
     """
-    font = make_ui_font(BASE_FONT_PX, weight=weight)
-    # setPointSizeF 호출 시 pixelSize 는 Qt 가 자동으로 미지정(-1)으로 되돌린다.
-    # setPixelSize(-1) 로 미리 해제하려 하면 "Pixel size <= 0 (-1)" 경고만 출력되고
-    # 아무 효과가 없으므로 호출하지 않는다.
+    font = QFont(_family)
+    font.setStyleStrategy(
+        QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferQuality
+    )
+    font.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+    if weight >= 0:
+        font.setWeight(QFont.Weight(weight))
+    elif bold:
+        font.setBold(True)
     font.setPointSizeF(max(1.0, float(size_pt) * _scale))
     return font
 

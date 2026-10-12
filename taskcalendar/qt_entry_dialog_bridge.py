@@ -2,14 +2,80 @@ from __future__ import annotations
 
 from datetime import date
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QEventLoop, QObject, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QDialog
 
 from taskcalendar.models import CalendarEntry, EntryType
 from taskcalendar.qt_dialogs import EntryDialog, SettingsDialog
 
 
+class _DialogLoopQuitFilter(QObject):
+    """대화상자가 닫히거나 숨겨질 때 로컬 이벤트 루프를 안전하게 종료하는 필터"""
+
+    def __init__(self, dlg: QDialog, loop: QEventLoop) -> None:
+        super().__init__(dlg)
+        self._dlg = dlg
+        self._loop = loop
+
+    def eventFilter(self, obj: QObject, ev: QEvent) -> bool:
+        if obj is self._dlg and ev.type() in (QEvent.Type.Close, QEvent.Type.Hide):
+            QTimer.singleShot(0, self._loop.quit)
+        return False
+
+
+def _non_blocking_memo_dialog_exec(self: QDialog) -> int:
+    """
+    QDialog.exec() 호출 시 ApplicationModal로 인해 바탕화면 스티커 메모 등
+    다른 독립 창까지 클릭이 막히는 현상을 방지하기 위해
+    NonModal + 로컬 QEventLoop 방식으로 동기 실행합니다.
+    """
+    try:
+        QDialog.setResult(self, int(QDialog.DialogCode.Rejected))
+    except Exception:
+        pass
+    self.setModal(False)
+    self.setWindowModality(Qt.WindowModality.NonModal)
+
+    loop = QEventLoop(self)
+    flt = _DialogLoopQuitFilter(self, loop)
+    self.installEventFilter(flt)
+
+    dlg_result = [int(QDialog.DialogCode.Rejected)]
+
+    def _on_finished(code: int = 0) -> None:
+        dlg_result[0] = int(code)
+        loop.quit()
+
+    self.finished.connect(_on_finished)
+    self.destroyed.connect(loop.quit)
+
+    self.show()
+    self.raise_()
+    self.activateWindow()
+    loop.exec()
+    try:
+        self.removeEventFilter(flt)
+    except Exception:
+        pass
+    try:
+        return int(QDialog.result(self))
+    except Exception:
+        return int(dlg_result[0])
+
+
+def _install_non_blocking_dialog_exec() -> None:
+    if not getattr(QDialog, "_memo_non_blocking_patched", False):
+        QDialog._orig_qt_exec = QDialog.exec
+        QDialog.exec = _non_blocking_memo_dialog_exec
+        QDialog.exec_ = _non_blocking_memo_dialog_exec
+        QDialog._memo_non_blocking_patched = True
+
+
+_install_non_blocking_dialog_exec()
+
+
 def ensure_qt_application() -> QApplication:
+    _install_non_blocking_dialog_exec()
     app = QApplication.instance()
     if app is not None:
         app.setQuitOnLastWindowClosed(False)

@@ -4858,7 +4858,7 @@ class MainWindow(QMainWindow):
             if icon_key in self._action_icons:
                 complete.setIcon(self._action_icons[icon_key])
                 complete.setIconSize(QSize(48, 20))
-            complete.setFixedSize(48, 20)
+            complete.setFixedSize(48, 22)
             complete.setStyleSheet(action_btn_style)
             complete.clicked.connect(lambda _checked=False, e=entry: self._toggle_complete(e))
             actions.addWidget(complete)
@@ -4871,7 +4871,7 @@ class MainWindow(QMainWindow):
             if "edit" in self._action_icons:
                 edit.setIcon(self._action_icons["edit"])
                 edit.setIconSize(QSize(48, 20))
-            edit.setFixedSize(48, 20)
+            edit.setFixedSize(48, 22)
             edit.setStyleSheet(action_btn_style)
             edit.clicked.connect(lambda _checked=False, e=entry: self._edit_entry(e.entry_type, e))
             actions.addWidget(edit)
@@ -4893,7 +4893,7 @@ class MainWindow(QMainWindow):
             if "delete" in self._action_icons:
                 delete.setIcon(self._action_icons["delete"])
                 delete.setIconSize(QSize(48, 20))
-            delete.setFixedSize(48, 20)
+            delete.setFixedSize(48, 22)
             delete.setStyleSheet(action_btn_style)
         delete.clicked.connect(lambda _checked=False, e=entry: self._delete_entry(e))
         actions.addWidget(delete)
@@ -4901,7 +4901,7 @@ class MainWindow(QMainWindow):
         if entry.entry_type == EntryType.MEMO:
             actions_wrap.setFixedSize(20, 20)
         else:
-            actions_wrap.setFixedSize(48 * 3 + 4 * 2, 20)
+            actions_wrap.setFixedSize(48 * 3 + 4 * 2, 22)
         actions_wrap.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
         meta_layout.addWidget(actions_wrap, 0, Qt.AlignVCenter | Qt.AlignRight)
@@ -4965,7 +4965,7 @@ class MainWindow(QMainWindow):
                 if "save" in self._action_icons:
                     down.setIcon(self._action_icons["save"])
                     down.setIconSize(QSize(48, 20))
-                down.setFixedSize(48, 20)
+                down.setFixedSize(48, 22)
                 down.setStyleSheet(action_btn_style)
                 down.clicked.connect(lambda _checked=False, a=attachment: self._download_attachment(a))
                 row_layout.addWidget(down)
@@ -4976,7 +4976,7 @@ class MainWindow(QMainWindow):
                 if "delete" in self._action_icons:
                     remove.setIcon(self._action_icons["delete"])
                     remove.setIconSize(QSize(48, 20))
-                remove.setFixedSize(48, 20)
+                remove.setFixedSize(48, 22)
                 remove.setStyleSheet(action_btn_style)
                 remove.clicked.connect(lambda _checked=False, e=entry, a=attachment: self._remove_attachment(e, a))
                 row_layout.addWidget(remove)
@@ -4985,7 +4985,7 @@ class MainWindow(QMainWindow):
             layout.addWidget(attach_block)
 
         if hide_body or (not entry.description and not entry.attachments):
-            card.setFixedHeight(38)
+            card.setFixedHeight(40)
 
 
         return card
@@ -5079,12 +5079,29 @@ class MainWindow(QMainWindow):
         close_all_act.triggered.connect(self._close_all_memos)
 
         menu.addSeparator()
+        report_act = menu.addAction("📄 메모로 보고서 만들기")
+        report_act.triggered.connect(lambda _=False, e=entry: self._create_report_from_memo(e))
+
+        menu.addSeparator()
         edit_act = menu.addAction("✏️ 메모 수정")
         edit_act.triggered.connect(lambda _=False, e=entry: self._edit_entry(EntryType.MEMO, e))
         del_act = menu.addAction("🗑️ 메모 삭제")
         del_act.triggered.connect(lambda _=False, e=entry: self._delete_entry(e))
 
         menu.exec(global_pos)
+
+    def _create_report_from_memo(self, entry: CalendarEntry) -> None:
+        """선택한 메모의 제목과 본문을 가지고 업무관리자의 '메모로 보고서 만들기' 창을 바로 호출"""
+        self._open_work_manager()
+        dlg = getattr(self, "_work_manager_dialog", None)
+        if dlg is not None:
+            dlg.show()
+            dlg.raise_()
+            dlg.activateWindow()
+            dlg.open_memo_to_report_dialog(
+                initial_title=str(getattr(entry, "title", "") or ""),
+                initial_memo_text=str(getattr(entry, "description", "") or ""),
+            )
 
     def _show_schedule_context_menu(self, entry: CalendarEntry, global_pos: QPoint) -> None:
         menu = QMenu(self)

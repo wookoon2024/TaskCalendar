@@ -11,7 +11,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('taskcalendar/assets', 'taskcalendar/assets'), ('data/holidays_kr.json', 'data'), ('chrome_extension', 'chrome_extension'), ('업무 템플릿', '업무 템플릿')],
+    datas=[('taskcalendar/assets', 'taskcalendar/assets'), ('taskcalendar/korean_report_hwpx', 'taskcalendar/korean_report_hwpx'), ('data/holidays_kr.json', 'data'), ('chrome_extension', 'chrome_extension'), ('업무 템플릿', '업무 템플릿')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

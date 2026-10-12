@@ -213,16 +213,24 @@ class AIChatWorker(QThread):
     chunk_received = Signal(str)
     finished = Signal(str)
     error = Signal(str)
+    finished_ok = finished
+    error_occurred = error
+    finished_err = error
 
     def __init__(
         self,
-        messages: list[dict[str, str]],
-        config: dict[str, Any] | None = None,
+        messages: Any,
+        config: Any = None,
         parent: QWidget | None = None,
     ) -> None:
+        if isinstance(config, QWidget) and parent is None:
+            parent = config
+            config = None
+        if isinstance(messages, dict) and isinstance(config, list):
+            messages, config = config, messages
         super().__init__(parent)
-        self.messages = messages
-        self.config = config or AIConfigManager.load(force_reload=True)
+        self.messages = messages if isinstance(messages, list) else []
+        self.config = config if isinstance(config, dict) and config else AIConfigManager.load(force_reload=True)
         self._is_stopped = False
 
     def stop(self) -> None:

@@ -286,6 +286,8 @@ class RhwpEditorWidget(QWidget):
 
     contentChanged = Signal()
     fullscreenToggleRequested = Signal()
+    bookmarkAdded = Signal(str)
+    personalInfoCheckRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None, palette: dict[str, str] | None = None) -> None:
         super().__init__(parent)
@@ -369,6 +371,16 @@ class RhwpEditorWidget(QWidget):
             self.fullscreenToggleRequested.emit()
         elif title.startswith("rhwp_modified:"):
             self.contentChanged.emit()
+        elif title.startswith("rhwp_bookmark:add:"):
+            if self.web_view:
+                self.web_view.page().runJavaScript(
+                    "JSON.stringify(window._rhwpPendingBookmarkText || '')",
+                    lambda v: self._on_bookmark_text_from_js(self._parse_js_str(v)),
+                )
+        elif title.startswith("rhwp_pii:check:"):
+            self.personalInfoCheckRequested.emit()
+        elif title.startswith("rhwp_ai:translate:"):
+            self._handle_ai_preset_from_web("translate")
         elif title.startswith("rhwp_ai:chat:"):
             self.open_ai_chat()
         elif title.startswith("rhwp_ai:analyze:"):
@@ -392,6 +404,12 @@ class RhwpEditorWidget(QWidget):
             self._open_law_search()
         elif title.startswith("rhwp_ai:settings:"):
             self._open_ai_settings()
+
+    def _on_bookmark_text_from_js(self, text: str) -> None:
+        cleaned = (text or "").strip()
+        if cleaned:
+            self.bookmarkAdded.emit(cleaned)
+            self.contentChanged.emit()
 
     def _open_law_search(self) -> None:
         """우클릭 「법령 찾기」 — 국가법령정보센터에서 법령 검색"""
@@ -482,6 +500,145 @@ class RhwpEditorWidget(QWidget):
             dlg = AIAnalyzeDialog(parent_editor=self, doc_text=self._fallback_editor.toPlainText(), palette=self.palette)
             dlg.exec()
 
+    def open_ai_translate(self) -> None:
+        """AI 한글 → 다국어 변환 플로팅 DIV 열기 (선택 영역 자동 캡처)"""
+        self._handle_ai_preset_from_web("translate")
+
+    def jump_to_bookmark_text(self, snippet: str) -> None:
+        """북마크된 하이라이트 문구를 에디터 본문/표 셀에서 찾아 커서/선택 영역 이동 및 화면 스크롤"""
+        target = (snippet or "").strip()
+        if not target:
+            return
+        if self._fallback_editor is not None:
+            self._fallback_editor.find(target)
+            return
+        if not self.web_view:
+            return
+
+        # 여러 줄 선택인 경우 첫 줄 핵심 문구로 우선 검색 후 전체 매칭
+        first_line = next((ln.strip() for ln in target.splitlines() if ln.strip()), target)
+        search_q = first_line[:80] if len(first_line) > 80 else first_line
+        json_q = json.dumps(search_q)
+        js = f"""
+        (function() {{
+            try {{
+                var query = {json_q};
+                if (!query) return false;
+                var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                if (!deps || !deps.wasm || typeof deps.wasm.searchText !== 'function') return false;
+                var ih = deps.getInputHandler ? deps.getInputHandler() : null;
+                var hit = deps.wasm.searchText(query, 0, 0, 0, true, false, true);
+                if (!hit || !hit.found) {{
+                    // 앞 20자로 재시도
+                    if (query.length > 15) {{
+                        hit = deps.wasm.searchText(query.slice(0, 15), 0, 0, 0, true, false, true);
+                    }}
+                }}
+                if (hit && hit.found && ih) {{
+                    var n = hit.cellContext;
+                    var r = n ? {{
+                        sectionIndex: hit.sec,
+                        paragraphIndex: n.parentPara,
+                        charOffset: hit.charOffset,
+                        parentParaIndex: n.parentPara,
+                        controlIndex: n.ctrlIdx,
+                        cellIndex: n.cellIdx,
+                        cellParaIndex: n.cellPara
+                    }} : {{
+                        sectionIndex: hit.sec,
+                        paragraphIndex: hit.para,
+                        charOffset: hit.charOffset
+                    }};
+                    var i = Object.assign({{}}, r, {{ charOffset: hit.charOffset + hit.length }});
+                    var a = ih.cursor;
+                    if (n) {{
+                        if (a && a.clearSelection) a.clearSelection();
+                        if (a && a.moveTo) a.moveTo(r);
+                    }} else if (ih.moveCursorTo) {{
+                        ih.moveCursorTo(r);
+                    }}
+                    if (a) {{
+                        if (a.setAnchor) a.setAnchor();
+                        if (a.moveTo) a.moveTo(i);
+                    }}
+                    if (ih.updateCaret) ih.updateCaret();
+                    if (ih.focus) ih.focus();
+                    return true;
+                }}
+            }} catch(e) {{
+                console.warn('jump_to_bookmark_text error:', e);
+            }}
+            return false;
+        }})();
+        """
+        self.web_view.page().runJavaScript(js)
+
+    def apply_text_replacements(self, replacements: list[tuple[str, str]], callback=None) -> None:
+        """개인정보 점검 결과(변경/삭제)를 현재 에디터 WASM 문서 전체(본문 및 표 셀)에 즉시 일괄 치환"""
+        if not replacements:
+            if callback:
+                callback(0)
+            return
+
+        if self._fallback_editor is not None:
+            txt = self._fallback_editor.toPlainText()
+            cnt = 0
+            for orig, repl in replacements:
+                if orig and orig in txt:
+                    cnt += txt.count(orig)
+                    txt = txt.replace(orig, repl)
+            self._fallback_editor.setPlainText(txt)
+            if callback:
+                callback(cnt)
+            return
+
+        if not self.web_view:
+            if callback:
+                callback(0)
+            return
+
+        json_pairs = json.dumps(replacements, ensure_ascii=False)
+        js = f"""
+        (function() {{
+            try {{
+                var pairs = {json_pairs};
+                var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                if (!deps || !deps.wasm) return 0;
+                var ih = deps.getInputHandler ? deps.getInputHandler() : null;
+                var totalReplaced = 0;
+                for (var idx = 0; idx < pairs.length; idx++) {{
+                    var orig = pairs[idx][0];
+                    var repl = pairs[idx][1];
+                    if (!orig || orig === repl) continue;
+                    var res = {{ ok: false, count: 0 }};
+                    if (ih && typeof ih.executeOperation === 'function') {{
+                        ih.executeOperation({{
+                            kind: 'snapshot',
+                            operationType: 'replaceAll',
+                            operation: function(w) {{
+                                res = w.replaceAll(orig, repl, true);
+                                return ih.getCursorPosition();
+                            }}
+                        }});
+                    }} else if (typeof deps.wasm.replaceAll === 'function') {{
+                        res = deps.wasm.replaceAll(orig, repl, true);
+                    }}
+                    if (res && res.count) totalReplaced += res.count;
+                }}
+                if (deps.eventBus) deps.eventBus.emit('document-changed');
+                if (window._rhwpNotifyMod) window._rhwpNotifyMod();
+                return totalReplaced;
+            }} catch(e) {{
+                console.error('apply_text_replacements error:', e);
+                return 0;
+            }}
+        }})();
+        """
+        if callback:
+            self.web_view.page().runJavaScript(js, callback)
+        else:
+            self.web_view.page().runJavaScript(js)
+
     def _handle_ai_request_from_js(self, req_data: Any) -> None:
         """웹 에디터 플로팅 DIV에서 들어온 AI 요청 비동기 처리"""
         # runJavaScript 결과는 항상 문자열이므로 JSON 파싱이 필요하다
@@ -505,6 +662,8 @@ class RhwpEditorWidget(QWidget):
         mode = str(req_data.get("mode", "chat") or "chat")
         doc_text = str(req_data.get("docText", "") or "").strip()
         selected_text = str(req_data.get("selectedText", "") or "").strip()
+        target_lang = str(req_data.get("targetLang", "영어 (English)") or "영어 (English)").strip()
+        translate_tone = str(req_data.get("translateTone", "공문서·행정 안내문 격식체") or "공문서·행정 안내문 격식체").strip()
 
         if self._ai_worker is not None and self._ai_worker.isRunning():
             self._ai_worker.stop()
@@ -520,7 +679,30 @@ class RhwpEditorWidget(QWidget):
             "- 불필요한 인사말이나 부연 설명 없이 본문 내용만 명료하게 출력하세요."
         )
 
-        if mode == "gongmun":
+        if mode == "translate":
+            bilingual_rule = ""
+            if "병기" in translate_tone:
+                bilingual_rule = (
+                    "- 각 문단 또는 항목마다 [한국어 원문]을 먼저 적고 바로 아랫줄에 [번역문]을 나란히 병기하여 출력하세요.\n"
+                )
+            else:
+                bilingual_rule = (
+                    f"- 불필요한 인사말이나 부연 설명 없이 [{target_lang}] 번역 결과 본문만 즉시 출력하세요.\n"
+                )
+            system_prompt = (
+                "당신은 대한민국 공공기관·지방자치단체 공문서 및 다문화·외국인 민원 행정 안내문 전문 다국어 번역 AI입니다.\n"
+                f"사용자가 제공한 한국어(또는 원문) 행정·업무 텍스트를 [{target_lang}]로 정확하고 품격 있게 번역해 주세요.\n"
+                f"[번역 문체 및 원칙]: {translate_tone}\n"
+                "- 원문의 항목 기호(1., 가., □, ○, -, · 등)와 줄바꿈 구조를 그대로 유지하세요.\n"
+                "- 행정·법률·민원 전문 용어는 해당 언어권의 공식 공공행정 표준 용어로 번역하세요.\n"
+                "- 이모티콘은 절대 넣지 마세요.\n"
+                + bilingual_rule
+            )
+            target = selected_text or prompt or doc_text
+            user_content = f"[번역 대상 언어]: {target_lang}\n[번역 문체]: {translate_tone}\n\n[번역할 원문 내용]:\n{target}"
+            if prompt and selected_text and not prompt.startswith("선택한 내용을"):
+                user_content += f"\n\n[추가 번역 지시사항]:\n{prompt}"
+        elif mode == "gongmun":
             system_prompt = (
                 "당신은 대한민국 행정안전부 「행정업무운영 편람」 및 「공문서 작성 규정」을 준수하는 공문서 전문 교정 AI입니다.\n"
                 "[절대 원칙]\n"
@@ -1029,6 +1211,51 @@ class RhwpEditorWidget(QWidget):
                                 var aiIconHtml = '<img src="' + (window._rhwpAiSparkleIcon || '') + '" style="width:13px; height:13px; margin-right:6px; vertical-align:-2px; display:inline-block;" />';
 
                                 if (hasSel) {
+                                    // [선택 영역이 있을 때: 하이라이트(북마크) 등록 및 해제]
+                                    var hlItem = document.createElement('div');
+                                    hlItem.className = 'md-item ai-menu-item';
+                                    hlItem.innerHTML = '<span class="md-label" style="color:#64748B; display:inline-flex; align-items:center;"><span style="margin-right:6px;">🔖</span>하이라이트(북마크) 등록</span><span class="md-shortcut" style="margin-left:auto; color:#64748B; font-size:10px;">형광펜+북마크</span>';
+                                    hlItem.addEventListener('click', function(ev) {
+                                        ev.stopPropagation();
+                                        ev.preventDefault();
+                                        captureCurrentSelection();
+                                        var curSel = (window._rhwpLastSelectedText || '').trim();
+                                        try {
+                                            var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                                            var eb = (deps && deps.eventBus) || (deps && deps.inputHandler && deps.inputHandler.eventBus);
+                                            if (eb && eb.emit) {
+                                                eb.emit('format-char', { shadeColor: '#FEF08A' });
+                                            }
+                                        } catch(e) {}
+                                        if (node && node.parentNode) node.parentNode.removeChild(node);
+                                        if (curSel) {
+                                            window._rhwpPendingBookmarkText = curSel;
+                                            document.title = 'rhwp_bookmark:add:' + Date.now();
+                                        }
+                                    });
+                                    node.appendChild(hlItem);
+
+                                    var hlClearItem = document.createElement('div');
+                                    hlClearItem.className = 'md-item ai-menu-item';
+                                    hlClearItem.innerHTML = '<span class="md-label" style="color:#64748B; display:inline-flex; align-items:center;"><span style="margin-right:6px;">🧹</span>하이라이트 색상 지우기</span>';
+                                    hlClearItem.addEventListener('click', function(ev) {
+                                        ev.stopPropagation();
+                                        ev.preventDefault();
+                                        try {
+                                            var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                                            var eb = (deps && deps.eventBus) || (deps && deps.inputHandler && deps.inputHandler.eventBus);
+                                            if (eb && eb.emit) {
+                                                eb.emit('format-char', { shadeColor: '#ffffff' });
+                                            }
+                                        } catch(e) {}
+                                        if (node && node.parentNode) node.parentNode.removeChild(node);
+                                    });
+                                    node.appendChild(hlClearItem);
+
+                                    var hlSep = document.createElement('div');
+                                    hlSep.className = 'md-sep';
+                                    node.appendChild(hlSep);
+
                                     // [선택 영역이 있을 때: 원클릭 AI 서식/작성 프리셋 4종 - 투명 AI 아이콘, 일반 굵기]
                                     var presets = [
                                         { label: '공문서 개조식 다듬기', preset: 'gongmun' },
@@ -1057,6 +1284,24 @@ class RhwpEditorWidget(QWidget):
                                     });
                                 }
 
+                                // [공통: 한글 -> 다국어 변환 (연결된 AI 사용)]
+                                var transItem = document.createElement('div');
+                                transItem.className = 'md-item ai-menu-item';
+                                transItem.innerHTML = '<span class="md-label" style="color:#0284C7; display:inline-flex; align-items:center;"><span style="margin-right:6px;">🌐</span>한글 → 다국어 변환 (AI)</span><span class="md-shortcut" style="margin-left:auto; color:#0284C7; font-size:10px;">번역</span>';
+                                transItem.addEventListener('click', function(ev) {
+                                    ev.stopPropagation();
+                                    ev.preventDefault();
+                                    captureCurrentSelection();
+                                    if (node && node.parentNode) node.parentNode.removeChild(node);
+                                    var curSel = (window._rhwpLastSelectedText || '').trim();
+                                    if (window.rhwpOpenAiPanel) {
+                                        window.rhwpOpenAiPanel('translate', curSel);
+                                    } else {
+                                        document.title = 'rhwp_ai:translate:' + Date.now();
+                                    }
+                                });
+                                node.appendChild(transItem);
+
                                 // [공통: AI 대화하기 플로팅 패널 - 원래 💬 아이콘 및 일반 굵기]
                                 var chatItem = document.createElement('div');
                                 chatItem.className = 'md-item ai-menu-item';
@@ -1075,10 +1320,21 @@ class RhwpEditorWidget(QWidget):
                                 });
                                 node.appendChild(chatItem);
 
-                                // [공통: 국가법령정보센터 법령 찾기 - 원래 🔎 아이콘 및 일반 굵기]
+                                // [공통: 개인정보 점검 및 국가법령정보센터 법령 찾기]
                                 var lawSep = document.createElement('div');
                                 lawSep.className = 'md-sep';
                                 node.appendChild(lawSep);
+
+                                var piiItem = document.createElement('div');
+                                piiItem.className = 'md-item ai-menu-item';
+                                piiItem.innerHTML = '<span class="md-label" style="color:#475569; display:inline-flex; align-items:center;"><span style="margin-right:6px;">🛡️</span>개인정보 점검</span>';
+                                piiItem.addEventListener('click', function(ev) {
+                                    ev.stopPropagation();
+                                    ev.preventDefault();
+                                    if (node && node.parentNode) node.parentNode.removeChild(node);
+                                    document.title = 'rhwp_pii:check:' + Date.now();
+                                });
+                                node.appendChild(piiItem);
 
                                 var lawItem = document.createElement('div');
                                 lawItem.className = 'md-item ai-menu-item';
@@ -1111,7 +1367,7 @@ class RhwpEditorWidget(QWidget):
         self._inject_ai_floating_panel()
 
     def _inject_ai_floating_panel(self) -> None:
-        """에디터 웹 뷰 내부에 플로팅 DIV 패널(대화하기/분석하기/프리셋, 요청/중지 토글) 주입"""
+        """에디터 웹 뷰 내부에 플로팅 DIV 패널(대화하기/분석하기/다국어변환/프리셋, 요청/중지 토글) 주입"""
         if not self.web_view:
             return
         sparkle_json = json.dumps(_AI_SPARKLE_DATA_URL)
@@ -1136,6 +1392,33 @@ class RhwpEditorWidget(QWidget):
                 '  </div>',
                 '</div>',
                 '<div id="rhwp-ai-body">',
+                '  <div id="rhwp-ai-translate-bar" style="display:none;">',
+                '    <div class="rhwp-ai-trans-row">',
+                '      <label class="rhwp-ai-trans-lbl">변환 언어</label>',
+                '      <select id="rhwp-ai-lang-select">',
+                '        <option value="영어 (English)">🇺🇸 영어 (English)</option>',
+                '        <option value="중국어 간체 (简体中文)">🇨🇳 중국어 간체 (简体中文)</option>',
+                '        <option value="일본어 (日本語)">🇯🇵 일본어 (日本語)</option>',
+                '        <option value="베트남어 (Tiếng Việt)">🇻🇳 베트남어 (Tiếng Việt)</option>',
+                '        <option value="우즈베크어 (Oʻzbekcha)">🇺🇿 우즈베크어 (Oʻzbekcha)</option>',
+                '        <option value="러시아어 (Русский)">🇷🇺 러시아어 (Русский)</option>',
+                '        <option value="태국어 (ภาษาไทย)">🇹🇭 태국어 (ภาษาไทย)</option>',
+                '        <option value="필리핀어 (Tagalog)">🇵🇭 필리핀어 (Tagalog)</option>',
+                '        <option value="몽골어 (Монгол)">🇲🇳 몽골어 (Монгол)</option>',
+                '        <option value="스페인어 (Español)">🇪🇸 스페인어 (Español)</option>',
+                '        <option value="한국어 (다국어 → 한글)">🇰🇷 한국어 (다국어 → 한글 번역)</option>',
+                '      </select>',
+                '    </div>',
+                '    <div class="rhwp-ai-trans-row">',
+                '      <label class="rhwp-ai-trans-lbl">번역 스타일</label>',
+                '      <select id="rhwp-ai-tone-select">',
+                '        <option value="공문서·행정 안내문 격식체">공문서·행정 안내문 표준 격식체</option>',
+                '        <option value="민원인 친절 안내체 (쉬운 표현)">외국인 주민·민원인 친절 안내체 (쉬운 표현)</option>',
+                '        <option value="한글 원문 + 외국어 병기">한글 원문 + 외국어 나란히 병기 (2개 국어)</option>',
+                '      </select>',
+                '    </div>',
+                '    <div class="rhwp-ai-trans-notice">💡 연결된 AI 엔진으로 다국어 번역을 수행합니다. (외부 유료 AI 연결 시 API 요금 발생 가능)</div>',
+                '  </div>',
                 '  <div id="rhwp-ai-selected-wrap">',
                 '    <div class="rhwp-ai-section-title">',
                 '      <span>선택한 본문 문구</span>',
@@ -1173,7 +1456,7 @@ class RhwpEditorWidget(QWidget):
                 '  top: 48px;',
                 '  right: 20px;',
                 '  width: 430px;',
-                '  height: 480px;',
+                '  height: 510px;',
                 '  max-width: calc(100vw - 30px);',
                 '  max-height: calc(100vh - 50px);',
                 '  background: #FFFFFF;',
@@ -1187,6 +1470,41 @@ class RhwpEditorWidget(QWidget):
                 '  font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;',
                 '  color: #1E293B;',
                 '  box-sizing: border-box;',
+                '}',
+                '#rhwp-ai-translate-bar {',
+                '  background: #F0F9FF;',
+                '  border: 1px solid #BAE6FD;',
+                '  border-radius: 6px;',
+                '  padding: 7px 9px;',
+                '  display: flex;',
+                '  flex-direction: column;',
+                '  gap: 5px;',
+                '}',
+                '.rhwp-ai-trans-row {',
+                '  display: flex;',
+                '  align-items: center;',
+                '  gap: 8px;',
+                '}',
+                '.rhwp-ai-trans-lbl {',
+                '  font-size: 11px;',
+                '  font-weight: 700;',
+                '  color: #0369A1;',
+                '  min-width: 60px;',
+                '}',
+                '#rhwp-ai-lang-select, #rhwp-ai-tone-select {',
+                '  flex: 1;',
+                '  padding: 3px 6px;',
+                '  font-size: 11.5px;',
+                '  border: 1px solid #7DD3FC;',
+                '  border-radius: 4px;',
+                '  background: #FFFFFF;',
+                '  color: #0F172A;',
+                '  outline: none;',
+                '}',
+                '.rhwp-ai-trans-notice {',
+                '  font-size: 10px;',
+                '  color: #0284C7;',
+                '  line-height: 1.35;',
                 '}',
                 '#rhwp-ai-header {',
                 '  background: #F8FAFC;',
@@ -1480,8 +1798,12 @@ class RhwpEditorWidget(QWidget):
                 var selWrap = document.getElementById('rhwp-ai-selected-wrap');
                 var selTextEl = document.getElementById('rhwp-ai-selected-text');
                 var selCountEl = document.getElementById('rhwp-ai-selected-count');
+                var transBar = document.getElementById('rhwp-ai-translate-bar');
 
                 panel.style.display = 'flex';
+                if (transBar) {
+                    transBar.style.display = (currentMode === 'translate') ? 'flex' : 'none';
+                }
 
                 // 선택 문구가 있으면 상단 박스에 표시하고 교체 버튼 노출
                 if (currentSelectedText) {
@@ -1490,44 +1812,58 @@ class RhwpEditorWidget(QWidget):
                     selCountEl.textContent = '(' + currentSelectedText.length + '자)';
                     btnReplace.style.display = 'inline-block';
                     btnReplace.disabled = true;
-                    if (inputTitleEl) inputTitleEl.textContent = '추가 요청사항';
+                    if (inputTitleEl) inputTitleEl.textContent = (currentMode === 'translate') ? '추가 번역 지시사항 (선택)' : '추가 요청사항';
                 } else {
                     selWrap.style.display = 'none';
                     selTextEl.textContent = '';
                     btnReplace.style.display = 'none';
-                    if (inputTitleEl) inputTitleEl.textContent = '요청사항';
+                    if (inputTitleEl) inputTitleEl.textContent = (currentMode === 'translate') ? '번역할 문구 입력 (비워두면 문서 본문 번역)' : '요청사항';
                 }
 
                 respEl.innerHTML = '<span class="rhwp-ai-placeholder" style="color:#94A3B8; pointer-events:none; user-select:none;">AI 변환 결과가 여기에 표시됩니다.</span>';
                 fullResponse = '';
                 btnInsert.disabled = true;
 
-                if (currentMode === 'gongmun') {
+                if (currentMode === 'translate') {
+                    titleEl.textContent = '🌐 한글 → 다국어 변환 (AI)';
+                    inputEl.placeholder = currentSelectedText
+                        ? '특별히 반영할 고유명사 표기나 추가 지시사항이 있으면 입력하세요... (바로 [번역하기] 클릭 가능)'
+                        : '번역할 한글 문구를 입력하거나, 비워둔 채 [번역하기]를 누르면 현재 문서 본문을 번역합니다.';
+                    inputEl.value = '';
+                    btnSend.textContent = '🌐 번역하기';
+                    inputEl.focus();
+                } else if (currentMode === 'gongmun') {
+                    btnSend.textContent = '요청하기';
                     titleEl.textContent = '공문서 개조식 다듬기';
                     inputEl.placeholder = '추가 지시사항이 있다면 입력하세요... (기본: 행안부 표준 개조식 문체 변환)';
                     inputEl.value = '공문서 표준 개조식 문체(명사형 종결, 항목 부호)로 다듬어 주세요.';
                     if (currentSelectedText) setTimeout(function() { doSendRequest(); }, 100);
                 } else if (currentMode === 'summary') {
+                    btnSend.textContent = '요청하기';
                     titleEl.textContent = '3줄 핵심 요약';
                     inputEl.placeholder = '추가 지시사항이 있다면 입력하세요... (기본: 배경/현황/계획 3줄 요약)';
                     inputEl.value = '추진 배경, 주요 내용, 향후 계획의 핵심 3줄 요약으로 정리해 주세요.';
                     if (currentSelectedText) setTimeout(function() { doSendRequest(); }, 100);
                 } else if (currentMode === 'law') {
+                    btnSend.textContent = '요청하기';
                     titleEl.textContent = '관련 법령·규정 검토';
                     inputEl.placeholder = '추가 지시사항이 있다면 입력하세요... (기본: 근거 법령 및 행정 절차 검토)';
                     inputEl.value = '관련 근거 법령, 자치법규 및 필수 사전 행정 절차를 검토해 주세요.';
                     if (currentSelectedText) setTimeout(function() { doSendRequest(); }, 100);
                 } else if (currentMode === 'refine') {
+                    btnSend.textContent = '요청하기';
                     titleEl.textContent = '쉬운 공공언어로 순화';
                     inputEl.placeholder = '추가 지시사항이 있다면 입력하세요... (기본: 바른 공공언어 순화)';
                     inputEl.value = '어려운 한자어, 외래어, 권위적 표현을 쉬운 표준 공공언어로 순화해 주세요.';
                     if (currentSelectedText) setTimeout(function() { doSendRequest(); }, 100);
                 } else if (currentMode === 'analyze') {
+                    btnSend.textContent = '요청하기';
                     titleEl.textContent = '업무 법령/행정절차 분석';
                     inputEl.placeholder = '추가 지시사항이 있다면 입력하세요... (기본: 문서 법령·절차 종합 분석)';
                     inputEl.value = '현재 작성 중인 업무 문서의 관련 법령, 행정 절차, 필수 준수사항을 종합 분석해 주세요.';
                     setTimeout(function() { doSendRequest(); }, 100);
                 } else {
+                    btnSend.textContent = '요청하기';
                     titleEl.textContent = 'AI 업무 도우미 (대화하기)';
                     inputEl.placeholder = '요청할 작업이나 작성할 서식을 입력하세요... (예: 출장보고서 양식 만들어줘 등)';
                     if (!isGenerating) inputEl.value = '';
@@ -1578,7 +1914,7 @@ class RhwpEditorWidget(QWidget):
             function doSendRequest() {
                 var inputEl = document.getElementById('rhwp-ai-input');
                 var prompt = inputEl.value.trim();
-                if (!prompt && currentMode !== 'analyze' && !currentSelectedText) {
+                if (!prompt && currentMode !== 'analyze' && currentMode !== 'translate' && !currentSelectedText) {
                     alert('요청하실 내용을 입력해 주세요.');
                     inputEl.focus();
                     return;
@@ -1592,6 +1928,11 @@ class RhwpEditorWidget(QWidget):
                         try { docText = JSON.parse(raw); } catch(e) { docText = raw; }
                     }
                 } catch(e) {}
+
+                var langEl = document.getElementById('rhwp-ai-lang-select');
+                var toneEl = document.getElementById('rhwp-ai-tone-select');
+                var targetLang = langEl ? langEl.value : '영어 (English)';
+                var translateTone = toneEl ? toneEl.value : '공문서·행정 안내문 격식체';
 
                 isGenerating = true;
                 btnSend.textContent = '⏹ 중지';
@@ -1608,7 +1949,9 @@ class RhwpEditorWidget(QWidget):
                     prompt: prompt,
                     mode: currentMode,
                     selectedText: currentSelectedText,
-                    docText: docText
+                    docText: docText,
+                    targetLang: targetLang,
+                    translateTone: translateTone
                 };
                 document.title = 'rhwp_ai:req:' + Date.now();
             }

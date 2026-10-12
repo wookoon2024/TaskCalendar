@@ -283,6 +283,10 @@ def search_current_laws(query: str, limit: int = 20) -> list[LawSearchResult]:
     return [r for r in search_laws(query, limit=limit * 2) if r.is_current][:limit]
 
 
+# 호환성 별칭
+search_law = search_laws
+
+
 def build_search_page_url(query: str) -> str:
     """law.go.kr 통합검색 페이지 URL (검색 실패 시 폴백)."""
     return f"{LAW_SEARCH_PAGE}{quote(query)}"

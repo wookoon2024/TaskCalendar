@@ -1632,10 +1632,36 @@ class EncryptedRepository:
             self.save()
 
     def delete_work_category(self, cat_id: int) -> None:
-        # 하위 카테고리도 재귀 삭제
+        from taskcalendar import work_files
+
+        # 카테고리 정보 조회 (물리 디렉토리 삭제용)
+        row = self.connection.execute(
+            "SELECT name, tab_id, parent_id FROM work_categories WHERE id = ?", (int(cat_id),)
+        ).fetchone()
+
+        # 1. 하위 카테고리도 재귀 삭제
         sub_rows = self.connection.execute("SELECT id FROM work_categories WHERE parent_id = ?", (cat_id,)).fetchall()
         for r in sub_rows:
             self.delete_work_category(r["id"])
+
+        # 2. 해당 카테고리에 속한 모든 업무 항목도 완전 삭제 (첨부파일 및 본문 파일 포함)
+        work_rows = self.connection.execute(
+            "SELECT id FROM work_items WHERE category_id = ?", (int(cat_id),)
+        ).fetchall()
+        for wr in work_rows:
+            self.delete_work_item(wr["id"])
+
+        # 3. 물리 디렉토리 삭제 (work/ 및 work/attach/)
+        if row and row["name"]:
+            try:
+                catpath = self._category_chain_name(row["name"], row["parent_id"])
+                grp = str(row["tab_id"] or 1)
+                work_files.delete_category_dir(grp, catpath)
+                for g in ("1", "2", "3", "4", "5"):
+                    work_files.delete_category_dir(g, catpath)
+            except Exception:
+                pass
+
         self.connection.execute("DELETE FROM work_categories WHERE id = ?", (cat_id,))
         self.save()
 
@@ -1982,6 +2008,14 @@ class EncryptedRepository:
         self.connection.execute("DELETE FROM work_attachments WHERE id = ?", (att_id,))
         self.connection.execute("DELETE FROM work_rag_chunks WHERE attachment_id = ?", (att_id,))
         self.save()
+        if row and delete_file and path_str:
+            try:
+                from taskcalendar import work_files
+                f = Path(path_str)
+                att_root = work_files.work_root() / work_files.ATTACH_ROOT
+                work_files.prune_empty_parent_dirs(f.parent, att_root)
+            except Exception:
+                pass
 
     def delete_work_attachment_folder(self, work_id: int, folder_path: str) -> None:
         """폴더 및 하위 모든 첨부파일 물리 파일 및 DB 삭제"""
@@ -1990,6 +2024,12 @@ class EncryptedRepository:
         if folder_dir.exists():
             import shutil
             shutil.rmtree(folder_dir, ignore_errors=True)
+            try:
+                from taskcalendar import work_files
+                att_root = work_files.work_root() / work_files.ATTACH_ROOT
+                work_files.prune_empty_parent_dirs(folder_dir.parent, att_root)
+            except Exception:
+                pass
 
         self.connection.execute(
             "DELETE FROM work_attachments WHERE work_id = ? AND (folder_path = ? OR folder_path LIKE ? OR (file_type = 'folder' AND file_name = ?))",
@@ -2039,9 +2079,30 @@ class EncryptedRepository:
         self.save()
 
     def delete_all_work_attachment_files(self, work_id: int) -> None:
-        """업무 삭제 시 첨부 디렉토리 물리 삭제 (옛 위치 + work/attach/<그룹>/<분류>/<업무명>)"""
+        """업무 삭제 시 본문 파일 및 첨부 디렉토리 물리 삭제 (work/ 파일 + 첨부 폴더)"""
         import shutil
         from taskcalendar import work_files
+
+        # 1. work_attachments 테이블에 기록된 실제 파일들 물리 삭제
+        try:
+            att_rows = self.connection.execute(
+                "SELECT file_path FROM work_attachments WHERE work_id = ?", (int(work_id),)
+            ).fetchall()
+            for ar in att_rows:
+                fp_str = ar["file_path"]
+                if fp_str:
+                    fp = Path(fp_str)
+                    try:
+                        if fp.is_file():
+                            fp.unlink(missing_ok=True)
+                        elif fp.is_dir():
+                            shutil.rmtree(fp, ignore_errors=True)
+                        if fp.parent.exists() and not any(fp.parent.iterdir()):
+                            fp.parent.rmdir()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         targets = [self.attachments_root / "work" / f"work_{work_id}"]
         try:
@@ -2053,13 +2114,27 @@ class EncryptedRepository:
             if row and row["title"]:
                 catpath = self._category_chain_name(row["cat"], row["pid"]) if row["cat"] else "미분류"
                 grp = str(row["tab"] or 1)
+                # 2. work/ 본문 파일 물리 삭제 (1~5 모든 탭 폴더에서 정리)
+                try:
+                    work_files.delete_sheet_file(grp, catpath, row["title"])
+                    for g in ("1", "2", "3", "4", "5"):
+                        work_files.delete_sheet_file(g, catpath, row["title"])
+                except Exception:
+                    pass
+                # 3. 첨부 디렉토리 (1~5 모든 탭 폴더에서 정리)
                 targets.append(work_files.attach_dir(grp, catpath, row["title"]))
+                for g in ("1", "2", "3", "4", "5"):
+                    cand = work_files.attach_dir(g, catpath, row["title"])
+                    if cand.exists():
+                        targets.append(cand)
         except Exception:
             pass
         for d in targets:
             try:
                 if d.exists():
                     shutil.rmtree(d, ignore_errors=True)
+                    att_root = work_files.work_root() / work_files.ATTACH_ROOT
+                    work_files.prune_empty_parent_dirs(d.parent, att_root)
             except Exception as e:
                 logger.warning(f"Could not delete work attachment directory {d}: {e}")
 

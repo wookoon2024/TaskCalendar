@@ -58,7 +58,7 @@ def sanitize_component(name: str, fallback: str = "무제") -> str:
 def sheet_file_stem(title: str) -> str:
     """업무 제목 → 파일명 stem (확장자 제외, 정제 적용)"""
     t = (title or "").strip()
-    for ext in (".hwpx", ".hwp"):
+    for ext in (".hwpx", ".hwp", ".json", ".txt", ".md", ".csv", ".xml", ".html", ".htm", ".log", ".ini", ".yaml", ".yml"):
         if t.lower().endswith(ext):
             t = t[: -len(ext)]
             break
@@ -393,12 +393,16 @@ def find_sheet_file(group: str | int, category: str, title: str) -> Path | None:
     if not d.is_dir():
         return None
     stem = sheet_file_stem(title)
-    cands = [p for p in d.iterdir() if p.is_file() and p.stem == stem]
+    raw_title = (title or "").strip()
+    cands = [
+        p for p in d.iterdir()
+        if p.is_file() and (p.stem == stem or p.name == raw_title or p.stem == raw_title)
+    ]
     if not cands:
         return None
-    for group in (NATIVE_EXTENSIONS, TEXT_EXTENSIONS):
+    for group_exts in (NATIVE_EXTENSIONS, TEXT_EXTENSIONS):
         for p in cands:
-            if p.suffix.lower() in group:
+            if p.suffix.lower() in group_exts:
                 return p
     return sorted(cands, key=lambda p: p.name)[0]
 
@@ -415,6 +419,92 @@ def rename_sheet_file(group: str | int, category: str, old_title: str, new_title
         except Exception:
             return None
     return new
+
+
+def prune_empty_parent_dirs(path: Path, stop_at: Path) -> None:
+    """비어 있는 상위 디렉토리를 stop_at 직전까지 거슬러 올라가며 순차 삭제한다."""
+    try:
+        curr = path if path.is_dir() else path.parent
+        stop_resolved = stop_at.resolve()
+        while curr and curr.resolve() != stop_resolved and stop_resolved in curr.resolve().parents:
+            if curr.is_dir() and not any(curr.iterdir()):
+                curr.rmdir()
+                curr = curr.parent
+            else:
+                break
+    except Exception:
+        pass
+
+
+def delete_sheet_file(group: str | int, category: str, title: str) -> bool:
+    """업무 삭제 시 work/ 트리의 해당 본문 파일과 첨부 디렉토리를 물리 삭제하고, 빈 상위 폴더도 정리한다."""
+    deleted = False
+    f = find_sheet_file(group, category, title)
+    grp_str = sanitize_component(str(group), "1")
+    cat_dir = category_dir(grp_str, category)
+    grp_work_root = work_root() / grp_str
+
+    if f and f.is_file():
+        try:
+            f.unlink()
+            deleted = True
+            # 본문 파일 삭제 후 해당 분류 폴더가 비어 있으면 상위로 정리
+            prune_empty_parent_dirs(f.parent, grp_work_root)
+        except Exception:
+            pass
+    elif cat_dir.is_dir():
+        # 혹시 본문이 폴더 형태였거나 파일이 이미 지워졌더라도 빈 부모 정리
+        prune_empty_parent_dirs(cat_dir, grp_work_root)
+
+    # 첨부 디렉토리(work/attach/<그룹>/<분류>/<업무명>) 및 동일 이름 폴더 삭제
+    att_root = work_root() / ATTACH_ROOT / grp_str
+    att = attach_dir(group, category, title)
+    target_dirs = [att]
+    stem = sheet_file_stem(title)
+    base = attach_base(group, category)
+    if base.is_dir():
+        for d in (base / stem, base / title.strip()):
+            if d not in target_dirs:
+                target_dirs.append(d)
+
+    for d in target_dirs:
+        if d.is_dir():
+            try:
+                shutil.rmtree(d, ignore_errors=True)
+                deleted = True
+                prune_empty_parent_dirs(d.parent, att_root)
+            except Exception:
+                pass
+        elif d.parent.is_dir():
+            prune_empty_parent_dirs(d.parent, att_root)
+
+    return deleted
+
+
+def delete_category_dir(group: str | int, category: str) -> bool:
+    """분류(폴더) 삭제 시 work/<그룹>/<분류> 폴더 및 work/attach/<그룹>/<분류> 폴더를 물리 삭제하고 빈 상위 폴더를 정리한다."""
+    deleted = False
+    grp_str = sanitize_component(str(group), "1")
+    grp_work_root = work_root() / grp_str
+    cdir = category_dir(grp_str, category)
+    if cdir.is_dir():
+        try:
+            shutil.rmtree(cdir, ignore_errors=True)
+            deleted = True
+            prune_empty_parent_dirs(cdir.parent, grp_work_root)
+        except Exception:
+            pass
+
+    att_root = work_root() / ATTACH_ROOT / grp_str
+    abool = attach_base(grp_str, category)
+    if abool.is_dir():
+        try:
+            shutil.rmtree(abool, ignore_errors=True)
+            deleted = True
+            prune_empty_parent_dirs(abool.parent, att_root)
+        except Exception:
+            pass
+    return deleted
 
 
 def open_path_with_os(path: Path | str) -> bool:

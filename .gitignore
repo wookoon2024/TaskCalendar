@@ -66,4 +66,8 @@ attachments/
 ocr_results*.txt
 scratch_*.ps1
 scratch_*.py
+# User working directories and raw assets
+work/
+assets/
+test.db*
 

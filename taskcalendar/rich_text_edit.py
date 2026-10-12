@@ -83,10 +83,11 @@ class RichTextEdit(QTextEdit):
     def _get_image_rect(self, cursor: QTextCursor | None) -> QRect:
         if not self._is_valid_image_cursor(cursor):
             return QRect()
-        start = min(cursor.selectionStart(), cursor.selectionEnd())
-        end = max(cursor.selectionStart(), cursor.selectionEnd())
-        
         doc = self.document()
+        max_pos = max(0, doc.characterCount() - 1)
+        start = max(0, min(cursor.selectionStart(), cursor.selectionEnd(), max_pos))
+        end = max(0, min(max(cursor.selectionStart(), cursor.selectionEnd()), max_pos))
+        
         c1 = QTextCursor(doc)
         c1.setPosition(start)
         r1 = self.cursorRect(c1)
@@ -259,14 +260,15 @@ class RichTextEdit(QTextEdit):
         # 2. Check if we clicked on any image in the document
         doc = self.document()
         found_image_cursor = None
-        for p in range(doc.characterCount()):
+        max_p = max(0, doc.characterCount() - 1)
+        for p in range(max_p):
             if doc.characterAt(p) == '\ufffc':
                 c1 = QTextCursor(doc)
                 c1.setPosition(p)
                 r1 = self.cursorRect(c1)
                 
                 c2 = QTextCursor(doc)
-                c2.setPosition(p + 1)
+                c2.setPosition(min(p + 1, max_p))
                 r2 = self.cursorRect(c2)
                 
                 fmt = c1.charFormat()
