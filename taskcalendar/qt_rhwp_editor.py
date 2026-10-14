@@ -698,9 +698,9 @@ class RhwpEditorWidget(QWidget):
                 "- 이모티콘은 절대 넣지 마세요.\n"
                 + bilingual_rule
             )
-            target = selected_text or prompt or doc_text
+            target = selected_text or doc_text or prompt
             user_content = f"[번역 대상 언어]: {target_lang}\n[번역 문체]: {translate_tone}\n\n[번역할 원문 내용]:\n{target}"
-            if prompt and selected_text and not prompt.startswith("선택한 내용을"):
+            if prompt and (selected_text or doc_text) and prompt != target and not prompt.startswith("선택한 내용을"):
                 user_content += f"\n\n[추가 번역 지시사항]:\n{prompt}"
         elif mode == "gongmun":
             system_prompt = (
@@ -1287,7 +1287,7 @@ class RhwpEditorWidget(QWidget):
                                 // [공통: 한글 -> 다국어 변환 (연결된 AI 사용)]
                                 var transItem = document.createElement('div');
                                 transItem.className = 'md-item ai-menu-item';
-                                transItem.innerHTML = '<span class="md-label" style="color:#0284C7; display:inline-flex; align-items:center;"><span style="margin-right:6px;">🌐</span>한글 → 다국어 변환 (AI)</span><span class="md-shortcut" style="margin-left:auto; color:#0284C7; font-size:10px;">번역</span>';
+                                transItem.innerHTML = '<span class="md-label" style="color:#0284C7; display:inline-flex; align-items:center;">한글 → 다국어 변환 (AI)</span><span class="md-shortcut" style="margin-left:auto; color:#0284C7; font-size:10px;">번역</span>';
                                 transItem.addEventListener('click', function(ev) {
                                     ev.stopPropagation();
                                     ev.preventDefault();
@@ -1805,19 +1805,24 @@ class RhwpEditorWidget(QWidget):
                     transBar.style.display = (currentMode === 'translate') ? 'flex' : 'none';
                 }
 
-                // 선택 문구가 있으면 상단 박스에 표시하고 교체 버튼 노출
-                if (currentSelectedText) {
+                // 번역 모드일 때는 기본적으로 현재 선택된 문서 전체를 번역하는 흐름으로 구성
+                if (currentMode === 'translate') {
+                    selWrap.style.display = 'none';
+                    selTextEl.textContent = '';
+                    btnReplace.style.display = 'none';
+                    if (inputTitleEl) inputTitleEl.textContent = '추가 번역 지시사항 (선택)';
+                } else if (currentSelectedText) {
                     selWrap.style.display = 'flex';
                     selTextEl.textContent = currentSelectedText;
                     selCountEl.textContent = '(' + currentSelectedText.length + '자)';
                     btnReplace.style.display = 'inline-block';
                     btnReplace.disabled = true;
-                    if (inputTitleEl) inputTitleEl.textContent = (currentMode === 'translate') ? '추가 번역 지시사항 (선택)' : '추가 요청사항';
+                    if (inputTitleEl) inputTitleEl.textContent = '추가 요청사항';
                 } else {
                     selWrap.style.display = 'none';
                     selTextEl.textContent = '';
                     btnReplace.style.display = 'none';
-                    if (inputTitleEl) inputTitleEl.textContent = (currentMode === 'translate') ? '번역할 문구 입력 (비워두면 문서 본문 번역)' : '요청사항';
+                    if (inputTitleEl) inputTitleEl.textContent = '요청사항';
                 }
 
                 respEl.innerHTML = '<span class="rhwp-ai-placeholder" style="color:#94A3B8; pointer-events:none; user-select:none;">AI 변환 결과가 여기에 표시됩니다.</span>';
@@ -1825,12 +1830,10 @@ class RhwpEditorWidget(QWidget):
                 btnInsert.disabled = true;
 
                 if (currentMode === 'translate') {
-                    titleEl.textContent = '🌐 한글 → 다국어 변환 (AI)';
-                    inputEl.placeholder = currentSelectedText
-                        ? '특별히 반영할 고유명사 표기나 추가 지시사항이 있으면 입력하세요... (바로 [번역하기] 클릭 가능)'
-                        : '번역할 한글 문구를 입력하거나, 비워둔 채 [번역하기]를 누르면 현재 문서 본문을 번역합니다.';
+                    titleEl.textContent = '한글 → 다국어 변환 (AI)';
+                    inputEl.placeholder = '현재 선택된 문서 본문을 번역합니다. (고유명사 표기 등 추가 요청사항이 있으면 입력하세요)';
                     inputEl.value = '';
-                    btnSend.textContent = '🌐 번역하기';
+                    btnSend.textContent = '번역하기';
                     inputEl.focus();
                 } else if (currentMode === 'gongmun') {
                     btnSend.textContent = '요청하기';
@@ -1958,7 +1961,7 @@ class RhwpEditorWidget(QWidget):
 
             function doStopRequest() {
                 isGenerating = false;
-                btnSend.textContent = '요청하기';
+                btnSend.textContent = (currentMode === 'translate') ? '번역하기' : '요청하기';
                 btnSend.classList.remove('is-stop');
                 document.getElementById('rhwp-ai-progress').style.display = 'none';
                 if (fullResponse.trim()) {
@@ -2042,7 +2045,7 @@ class RhwpEditorWidget(QWidget):
 
             window._rhwpAiOnFinished = function(text, imgB64) {
                 isGenerating = false;
-                btnSend.textContent = '요청하기';
+                btnSend.textContent = (currentMode === 'translate') ? '번역하기' : '요청하기';
                 btnSend.classList.remove('is-stop');
                 document.getElementById('rhwp-ai-progress').style.display = 'none';
                 fullResponse = text;
@@ -2095,7 +2098,7 @@ class RhwpEditorWidget(QWidget):
             window._rhwpAiOnError = function(err) {
                 isGenerating = false;
                 generatedImageB64 = null;
-                btnSend.textContent = '요청하기';
+                btnSend.textContent = (currentMode === 'translate') ? '번역하기' : '요청하기';
                 btnSend.classList.remove('is-stop');
                 document.getElementById('rhwp-ai-progress').style.display = 'none';
                 var respEl = document.getElementById('rhwp-ai-response');

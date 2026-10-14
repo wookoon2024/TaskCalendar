@@ -6305,6 +6305,8 @@ class WorkManagerDialog(QDialog):
         act_save = menu.addAction("💾  저장")
         menu.addSeparator()
         act_close = menu.addAction("❌  탭 닫기")
+        act_close_all = menu.addAction("🚫  모든 탭 닫기")
+        act_close_other = menu.addAction("📑  다른 탭 모두 닫기")
         act_rename = menu.addAction("✏️  이름 바꾸기")
         act_duplicate = menu.addAction("📋  시트 복제")
         act_reg_cal = menu.addAction("📅  캘린더에 일정 등록")
@@ -6321,12 +6323,43 @@ class WorkManagerDialog(QDialog):
             self._register_sheet_to_calendar(target)
         elif action == act_close:
             self._on_sheet_tab_close(tab_idx)
+        elif action == act_close_all:
+            self._on_close_all_tabs()
+        elif action == act_close_other:
+            self._on_close_other_tabs(tab_idx)
         elif action == act_rename:
             self._on_sheet_tab_double_clicked(tab_idx)
         elif action == act_duplicate:
             self._duplicate_sheet(target)
         elif action == act_delete:
             self._delete_sheet_permanently(target)
+
+    def _on_close_all_tabs(self) -> None:
+        """열려있는 모든 시트 탭을 닫기 (미저장 시 순차 확인)"""
+        while self._open_sheets:
+            # 맨 뒤 탭부터 차례로 닫기
+            idx = len(self._open_sheets) - 1
+            before_count = len(self._open_sheets)
+            self._on_sheet_tab_close(idx)
+            # 사용자가 취소(Cancel)를 눌러 탭이 닫히지 않은 경우 중단
+            if len(self._open_sheets) == before_count:
+                break
+
+    def _on_close_other_tabs(self, keep_idx: int) -> None:
+        """지정한 탭을 제외하고 나머지 모든 탭을 닫기"""
+        if keep_idx < 0 or keep_idx >= len(self._open_sheets):
+            return
+        target = self._open_sheets[keep_idx]
+        # target을 제외한 다른 시트들 닫기
+        idx = len(self._open_sheets) - 1
+        while idx >= 0:
+            if idx < len(self._open_sheets) and self._open_sheets[idx] is not target:
+                before_count = len(self._open_sheets)
+                self._on_sheet_tab_close(idx)
+                if len(self._open_sheets) == before_count:
+                    # 취소 시 중단
+                    break
+            idx -= 1
 
     def _duplicate_sheet(self, src: WorkSheetData) -> None:
         """시트 복제 및 새 탭 오픈"""
@@ -6622,9 +6655,9 @@ class WorkManagerDialog(QDialog):
         action_pii.setToolTip("업무 문서 내 개인정보(주민번호, 연락처, 이메일 등)를 검출하여 조치합니다.")
         action_pii.triggered.connect(self._run_personal_info_check)
 
-        # 3. 🌐 다국어 변환
-        action_trans = menu.addAction("🌐 다국어 변환")
-        action_trans.setToolTip("연결된 AI 기능을 사용하여 한글 내용을 다국어로 변환합니다.")
+        # 3. 다국어 변환
+        action_trans = menu.addAction("다국어 변환")
+        action_trans.setToolTip("연결된 AI 기능을 사용하여 현재 문서를 다국어로 변환합니다.")
         action_trans.triggered.connect(lambda: self.editor.open_ai_translate())
 
         menu.addSeparator()
@@ -8274,16 +8307,12 @@ class WorkManagerDialog(QDialog):
                     tab_actions[act_m] = ot["id"]
 
             menu.addSeparator()
-            act_reg_cal = menu.addAction("📅 캘린더에 일정 등록")
-            menu.addSeparator()
             act_delete = menu.addAction("🗑️ 폴더 삭제")
             menu.addSeparator()
             act_add_cat = menu.addAction("📁 새 루트 분류(폴더) 추가")
             action = menu.exec(self.category_tree.mapToGlobal(pos))
             if action == act_add_doc:
                 self._on_add_sheet_in_category(cat_name, cat_id)
-            elif action == act_reg_cal:
-                self._register_category_to_calendar(cat_name, cat_id)
             elif action == act_add_sub:
                 self._on_add_sub_category(cat_id, cat_name)
             elif action == act_rename:
@@ -8296,21 +8325,19 @@ class WorkManagerDialog(QDialog):
                 self._on_add_category()
 
     def _register_selected_to_calendar(self) -> None:
-        """선택된 업무 또는 폴더를 캘린더에 일정으로 등록"""
+        """선택된 업무를 캘린더에 일정으로 등록"""
         item = self.category_tree.currentItem()
         if not item:
             if 0 <= self._active_sheet_index < len(self._open_sheets):
                 self._register_sheet_to_calendar(self._open_sheets[self._active_sheet_index])
                 return
-            QMessageBox.information(self, "안내", "캘린더에 등록할 업무 또는 분류(폴더)를 먼저 선택하세요.")
+            QMessageBox.information(self, "안내", "캘린더에 등록할 업무 문서를 먼저 선택하세요.")
             return
         sheet = item.data(0, Qt.UserRole)
         if isinstance(sheet, WorkSheetData):
             self._register_sheet_to_calendar(sheet)
         else:
-            cat_name = item.data(0, Qt.UserRole + 2) or item.text(0).replace("📁 ", "").replace("📂 ", "").strip()
-            cat_id = item.data(0, Qt.UserRole + 1)
-            self._register_category_to_calendar(cat_name, cat_id)
+            QMessageBox.information(self, "안내", "일정 등록은 개별 업무 문서를 선택한 후 진행해 주세요.\n(분류 폴더 자체는 일정이 아닙니다.)")
 
     def _register_sheet_to_calendar(self, sheet: WorkSheetData) -> None:
         """업무 항목을 캘린더 일정으로 등록"""

@@ -80,7 +80,7 @@ class _LawSearchWorker(QThread):
         try:
             from taskcalendar.law_reference import search_laws
 
-            results = search_laws(self._keyword, limit=5)
+            results = search_laws(self._keyword, limit=10)
             items = []
             for r in results:
                 items.append({
@@ -89,11 +89,155 @@ class _LawSearchWorker(QThread):
                     "ministry": r.office or "-",
                     "enforce_date": r.enforce_date or "",
                     "law_no": r.mst or "",
+                    "url": getattr(r, "url", ""),
                 })
             self.finished_laws.emit(items)
         except Exception as e:
             logger.warning("Law search error: %s", e)
             self.finished_laws.emit([])
+
+
+class _LawSelectionDialog(QDialog):
+    """검색된 관련 법령 목록에서 보고서에 표로 삽입할 법령을 직접 선택하는 다이얼로그"""
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        keyword: str = "",
+        law_items: list[dict[str, Any]] | None = None,
+        palette: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("관련 법령 선택")
+        self.resize(scale_px(580), scale_px(420))
+        self.setModal(True)
+
+        pal = palette or {}
+        bg = pal.get("bg", "#F8FAFC")
+        panel = pal.get("panel", "#FFFFFF")
+        text = pal.get("text", "#1E293B")
+        muted = pal.get("muted", "#64748B")
+        line = pal.get("line", "#CBD5E1")
+        accent = pal.get("accent", "#2563EB")
+        ff_css = font_family_css()
+
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {bg};
+                color: {text};
+                font-family: {ff_css};
+            }}
+            QLabel {{
+                color: {text};
+                font-family: {ff_css};
+            }}
+            QListWidget {{
+                background-color: {panel};
+                color: {text};
+                border: 1px solid {line};
+                border-radius: 6px;
+                outline: none;
+                font-family: {ff_css};
+            }}
+            QListWidget::item {{
+                padding: 8px 10px;
+                border-bottom: 1px solid #F1F5F9;
+            }}
+            QListWidget::item:hover {{
+                background-color: #F8FAFC;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 14)
+        layout.setSpacing(10)
+
+        # 헤더 안내
+        hdr_lbl = QLabel(f"• 국가법령정보센터 검색 결과 ('{keyword}'): 총 {len(law_items or [])}건")
+        hdr_lbl.setFont(make_ui_font_like(13, bold=True))
+        layout.addWidget(hdr_lbl)
+
+        sub_lbl = QLabel("보고서 본문의 [관련 법령 및 근거] 표에 포함할 법령을 체크해 주세요.")
+        sub_lbl.setFont(make_ui_font_like(11))
+        sub_lbl.setStyleSheet(f"color: {muted};")
+        layout.addWidget(sub_lbl)
+
+        # 전체 선택 / 해제 버튼
+        sel_bar = QHBoxLayout()
+        sel_bar.setSpacing(8)
+        self.btn_select_all = QPushButton("전체 선택")
+        self.btn_select_all.setFixedHeight(scale_px(26))
+        self.btn_select_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_select_all.setStyleSheet(f"background-color: {panel}; border: 1px solid {line}; border-radius: 4px; padding: 0 8px; font-size: {scale_px(11)}px;")
+        self.btn_select_all.clicked.connect(self._select_all)
+        sel_bar.addWidget(self.btn_select_all)
+
+        self.btn_deselect_all = QPushButton("전체 해제")
+        self.btn_deselect_all.setFixedHeight(scale_px(26))
+        self.btn_deselect_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_deselect_all.setStyleSheet(f"background-color: {panel}; border: 1px solid {line}; border-radius: 4px; padding: 0 8px; font-size: {scale_px(11)}px;")
+        self.btn_deselect_all.clicked.connect(self._deselect_all)
+        sel_bar.addWidget(self.btn_deselect_all)
+        sel_bar.addStretch(1)
+        layout.addLayout(sel_bar)
+
+        # 체크 가능한 법령 리스트
+        self.list_widget = QListWidget()
+        for idx, item in enumerate(law_items or []):
+            name = str(item.get("name", "")).strip()
+            ltype = str(item.get("type", "법령")).strip()
+            ministry = str(item.get("ministry", "-")).strip()
+            enf_date = str(item.get("enforce_date", "")).strip()
+            meta_str = f"[{ltype}] 소관: {ministry}" + (f" | 시행: {enf_date}" if enf_date else "")
+            display_text = f"{name}\n   └ {meta_str}"
+
+            list_item = QListWidgetItem(display_text)
+            list_item.setFlags(list_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            # 기본적으로 상위 3개까지 자동 체크
+            list_item.setCheckState(Qt.CheckState.Checked if idx < 3 else Qt.CheckState.Unchecked)
+            list_item.setData(Qt.ItemDataRole.UserRole, item)
+            self.list_widget.addItem(list_item)
+        layout.addWidget(self.list_widget, 1)
+
+        # 하단 액션 버튼
+        btn_bar = QHBoxLayout()
+        btn_bar.setSpacing(8)
+        btn_bar.addStretch(1)
+
+        btn_ok = QPushButton("선택 완료")
+        btn_ok.setFixedHeight(scale_px(32))
+        btn_ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_ok.setStyleSheet(f"background-color: {accent}; color: #FFFFFF; border: none; border-radius: 6px; padding: 0 16px; font-weight: bold;")
+        btn_ok.clicked.connect(self.accept)
+        btn_bar.addWidget(btn_ok)
+
+        btn_cancel = QPushButton("취소")
+        btn_cancel.setFixedHeight(scale_px(32))
+        btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_cancel.setStyleSheet(f"background-color: {panel}; color: {text}; border: 1px solid {line}; border-radius: 6px; padding: 0 14px;")
+        btn_cancel.clicked.connect(self.reject)
+        btn_bar.addWidget(btn_cancel)
+
+        layout.addLayout(btn_bar)
+
+    def _select_all(self) -> None:
+        for i in range(self.list_widget.count()):
+            self.list_widget.item(i).setCheckState(Qt.CheckState.Checked)
+
+    def _deselect_all(self) -> None:
+        for i in range(self.list_widget.count()):
+            self.list_widget.item(i).setCheckState(Qt.CheckState.Unchecked)
+
+    def get_selected_items(self) -> list[dict[str, Any]]:
+        selected: list[dict[str, Any]] = []
+        for i in range(self.list_widget.count()):
+            it = self.list_widget.item(i)
+            if it.checkState() == Qt.CheckState.Checked:
+                data = it.data(Qt.ItemDataRole.UserRole)
+                if data:
+                    selected.append(data)
+        return selected
 
 
 class _AIProgressDialog(QDialog):
@@ -754,7 +898,7 @@ class MemoToReportDialog(QDialog):
         opt_card_lay.setContentsMargins(12, 10, 12, 10)
         opt_card_lay.setSpacing(8)
 
-        # 1행: 서식 종류 / 기관 서식 / 업무 분류
+        # 1행: 서식 종류 / 기관 서식
         row1 = QHBoxLayout()
         row1.setSpacing(8)
 
@@ -782,29 +926,9 @@ class MemoToReportDialog(QDialog):
             self.combo_ministry.addItem(m, m)
         row1.addWidget(self.combo_ministry, 1)
 
-        lbl_cat = QLabel("업무 분류")
-        lbl_cat.setFont(f_bold)
-        lbl_cat.setStyleSheet("border: none;")
-        row1.addWidget(lbl_cat)
-
-        self.combo_category = QComboBox()
-        self.combo_category.setFixedHeight(ctrl_h)
-        cat_names: list[str] = []
-        for c in self._categories:
-            cname = getattr(c, "name", None) or (c.get("name") if isinstance(c, dict) else str(c))
-            if cname and cname not in cat_names:
-                cat_names.append(cname)
-        if not cat_names:
-            cat_names = ["1. 일반 업무"]
-        for cname in cat_names:
-            self.combo_category.addItem(cname, cname)
-        if self._default_category and self._default_category in cat_names:
-            self.combo_category.setCurrentIndex(cat_names.index(self._default_category))
-        row1.addWidget(self.combo_category, 1)
-
         opt_card_lay.addLayout(row1)
 
-        # 2행: 문서 제목 (넓게) / 부서명 / 작성일
+        # 2행: 문서 제목 (전체 폭)
         row2 = QHBoxLayout()
         row2.setSpacing(8)
 
@@ -816,25 +940,7 @@ class MemoToReportDialog(QDialog):
         self.edit_title = QLineEdit(initial_title)
         self.edit_title.setFixedHeight(ctrl_h)
         self.edit_title.setPlaceholderText("보고서 제목 입력 (미입력 시 첫 줄 자동 활용)")
-        row2.addWidget(self.edit_title, 2)
-
-        lbl_dept = QLabel("부서명")
-        lbl_dept.setFont(f_bold)
-        lbl_dept.setStyleSheet("border: none;")
-        row2.addWidget(lbl_dept)
-
-        self.edit_dept = QLineEdit("담당부서")
-        self.edit_dept.setFixedHeight(ctrl_h)
-        row2.addWidget(self.edit_dept, 1)
-
-        lbl_date = QLabel("작성일")
-        lbl_date.setFont(f_bold)
-        lbl_date.setStyleSheet("border: none;")
-        row2.addWidget(lbl_date)
-
-        self.edit_date = QLineEdit(date.today().strftime("%Y. %m. %d."))
-        self.edit_date.setFixedHeight(ctrl_h)
-        row2.addWidget(self.edit_date, 1)
+        row2.addWidget(self.edit_title, 1)
 
         opt_card_lay.addLayout(row2)
 
@@ -844,18 +950,20 @@ class MemoToReportDialog(QDialog):
 
         self.chk_include_law = QCheckBox("관련 법령 표 포함")
         self.chk_include_law.setChecked(False)
+        self.chk_include_law.setToolTip("생성될 공문서 본문에 선택한 관련 법령 및 근거 규정 표를 자동으로 삽입합니다.")
         self.chk_include_law.setStyleSheet("border: none; font-weight: bold;")
         row3.addWidget(self.chk_include_law)
 
         self.edit_law_keyword = QLineEdit()
         self.edit_law_keyword.setFixedHeight(ctrl_h)
-        self.edit_law_keyword.setPlaceholderText("법령 검색어 (미입력 시 제목·메모에서 자동 검색)")
+        self.edit_law_keyword.setPlaceholderText("법령 검색어 입력 (미입력 시 제목·메모에서 자동 추출)")
         row3.addWidget(self.edit_law_keyword, 1)
 
         self.btn_search_law = QPushButton("법령 조회")
         self.btn_search_law.setFixedHeight(ctrl_h)
         self.btn_search_law.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_search_law.setStyleSheet(self._sub_btn_style())
+        self.btn_search_law.setToolTip("국가법령정보센터에서 법령을 실시간 검색하여 보고서에 넣을 법령을 선택합니다.")
         self.btn_search_law.clicked.connect(self._on_search_law_clicked)
         row3.addWidget(self.btn_search_law)
 
@@ -1037,17 +1145,36 @@ class MemoToReportDialog(QDialog):
     def _on_law_search_finished(self, items: list[dict[str, Any]]) -> None:
         self.btn_search_law.setEnabled(True)
         self.btn_search_law.setText("법령 조회")
-        self._law_items = list(items or [])
-        if self._law_items:
-            self.chk_include_law.setChecked(True)
-            names = ", ".join(str(x.get("name", "")) for x in self._law_items[:2])
-            self.status_lbl.setText(f"• 관련 법령 {len(self._law_items)}건 연동 완료: {names}")
-            if hasattr(self, "lbl_law_status"):
-                self.lbl_law_status.setText(f"{len(self._law_items)}건 연동됨")
-        else:
+        raw_items = list(items or [])
+        if not raw_items:
             self.status_lbl.setText(f"• 일치하는 법령이 없습니다 (검색어: {self.edit_law_keyword.text()})")
             if hasattr(self, "lbl_law_status"):
                 self.lbl_law_status.setText("일치 법령 없음")
+            return
+
+        # 법령 선택 팝업 다이얼로그 띄워 사용자가 직접 선택하도록 함
+        kw = self.edit_law_keyword.text().strip()
+        dlg = _LawSelectionDialog(self, keyword=kw, law_items=raw_items, palette=self._palette)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            selected_items = dlg.get_selected_items()
+            if selected_items:
+                self._law_items = selected_items
+                self.chk_include_law.setChecked(True)
+                names = ", ".join(str(x.get("name", "")) for x in self._law_items[:2])
+                self.status_lbl.setText(f"• 관련 법령 {len(self._law_items)}건 선택 완료: {names}")
+                if hasattr(self, "lbl_law_status"):
+                    self.lbl_law_status.setText(f"{len(self._law_items)}건 선택됨")
+            else:
+                self._law_items = []
+                self.chk_include_law.setChecked(False)
+                self.status_lbl.setText("• 선택된 법령이 없어 법령 표가 제외됩니다.")
+                if hasattr(self, "lbl_law_status"):
+                    self.lbl_law_status.setText("선택 없음")
+        else:
+            # 사용자가 취소했을 때, 기존 선택이 없으면 상태 유지
+            if not self._law_items:
+                if hasattr(self, "lbl_law_status"):
+                    self.lbl_law_status.setText("선택 취소")
 
     def _ensure_laws_if_checked(self) -> list[dict[str, Any]]:
         if not self.chk_include_law.isChecked():
@@ -1062,7 +1189,7 @@ class MemoToReportDialog(QDialog):
         try:
             from taskcalendar.law_reference import search_laws
 
-            results = search_laws(kw, limit=4) or []
+            results = search_laws(kw, limit=3) or []
             self._law_items = [
                 {
                     "name": r.name,
@@ -1070,6 +1197,7 @@ class MemoToReportDialog(QDialog):
                     "ministry": r.office or "-",
                     "enforce_date": r.enforce_date or "",
                     "law_no": r.mst or "",
+                    "url": getattr(r, "url", ""),
                 }
                 for r in results
             ]
@@ -1083,9 +1211,9 @@ class MemoToReportDialog(QDialog):
         doc_tuple = self.combo_doc_type.currentData() or ("report", "standard", "standard")
         doc_type, style, report_kind = doc_tuple
         ministry = str(self.combo_ministry.currentData() or "공통")
-        dept = self.edit_dept.text().strip() or "담당부서"
-        date_str = self.edit_date.text().strip() or date.today().strftime("%Y. %m. %d.")
-        category = str(self.combo_category.currentData() or "")
+        dept = "담당부서"
+        date_str = date.today().strftime("%Y. %m. %d.")
+        category = self.selected_category or self._default_category or "1. 일반 업무"
         return title, memo_text, doc_type, style, report_kind, ministry, dept, date_str
 
     def _finalize_generation(self, structure: dict[str, Any], save_only: bool = False) -> None:
@@ -1106,7 +1234,7 @@ class MemoToReportDialog(QDialog):
         self.generated_hwpx_bytes = hwpx_bytes
         self.generated_plain_text = plain_text
         self.generated_title = str(final_struct.get("title") or title).strip()
-        self.selected_category = str(self.combo_category.currentData() or "")
+        self.selected_category = self.selected_category or self._default_category or "1. 일반 업무"
 
         if save_only:
             default_name = re.sub(r'[\\/:*?"<>|]+', "_", self.generated_title) + ".hwpx"
