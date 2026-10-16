@@ -396,10 +396,18 @@ def plan_reconcile(db_items: list[dict], disk_files: list[dict]) -> dict:
     for db in db_items:
         want_stem = sheet_file_stem(db.get("title") or "")
         want_cat = cat_relpath(db.get("cat_path") or db.get("category_name") or "미분류")
+        want_cat_clean = "/".join(strip_category_prefix(p) for p in want_cat.split("/"))
         want_grp = sanitize_component(str(db.get("group") or "1"), "1")
+
+        def _cat_matches(disk_cat: str) -> bool:
+            if disk_cat == want_cat:
+                return True
+            disk_clean = "/".join(strip_category_prefix(p) for p in str(disk_cat).split("/"))
+            return disk_clean == want_cat_clean
+
         hit = next(
             (f for f in disk_files if id(f) not in used and f.get("group") == want_grp
-             and f["category"] == want_cat and f["stem"] == want_stem),
+             and _cat_matches(f.get("category", "")) and f["stem"] == want_stem),
             None,
         )
         if hit:
