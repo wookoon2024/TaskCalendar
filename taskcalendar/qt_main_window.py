@@ -5687,9 +5687,9 @@ class MainWindow(QMainWindow):
                 )
                 msg = "백업 파일이 성공적으로 저장되었습니다."
                 if not include_attachments:
-                    msg += "\n\n• 초경량 고속 백업: 캘린더, 메모, 문서관리, 업무관리(분류/본문/서식 일체) 및 환경설정이 안전하게 백업되었습니다.\n(첨부파일은 PC 폴더에 보존되어 있어 복원 시 자동으로 연결됩니다)"
+                    msg += "\n\n• 초경량 고속 백업: 캘린더, 메모, 문서, 업무관리 본문/서식 및 환경설정이 백업되었습니다.\n(첨부파일은 PC 폴더에 보존되어 있어 복원 시 자동으로 연결됩니다)"
                 else:
-                    msg += "\n\n• 전체 이전 백업: 첨부파일 폴더를 포함하여 모든 데이터가 ZIP 파일로 압축 저장되었습니다."
+                    msg += "\n\n• 전체 통합 백업: 캘린더, 메모, 문서, 업무관리(본문/서식/첨부), 브라우저 메모 등 data/ 폴더 일체가 ZIP 파일로 압축 저장되었습니다."
                 QMessageBox.information(self, "데이터 내보내기 완료", f"{msg}\n\n저장 위치:\n{file_path}")
             except Exception as exc:
                 logger.exception("zip backup failed")

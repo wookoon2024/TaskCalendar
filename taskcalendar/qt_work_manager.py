@@ -2790,10 +2790,34 @@ class FolderWorkImportDialog(QDialog):
         cat_layout.addWidget(self.cb_top_level_cats)
         opt_lay.addLayout(cat_layout)
 
-        self.cb_attachments = QCheckBox("원본 파일들을 각 업무 문서의 첨부파일로도 자동 보관")
+        self.cb_attachments = QCheckBox("📎 첨부파일 가져오기 (문서별 첨부파일 복원)")
         self.cb_attachments.setChecked(self._initial_copy_attachments)
         self.cb_attachments.setStyleSheet("border: none;")
-        opt_lay.addWidget(self.cb_attachments)
+
+        self.cb_schedules = QCheckBox("📅 연계 일정 가져오기 (캘린더 연동)")
+        self.cb_schedules.setChecked(True)
+        self.cb_schedules.setStyleSheet("border: none;")
+
+        self.cb_linked_tasks = QCheckBox("📑 연계 문서 가져오기 (Task 연계)")
+        self.cb_linked_tasks.setChecked(True)
+        self.cb_linked_tasks.setStyleSheet("border: none;")
+
+        self.cb_bookmarks = QCheckBox("🔖 책갈피(북마크) 가져오기")
+        self.cb_bookmarks.setChecked(True)
+        self.cb_bookmarks.setStyleSheet("border: none;")
+
+        self.cb_browser_memos = QCheckBox("🌐 브라우저 페이지 메모 가져오기")
+        self.cb_browser_memos.setChecked(True)
+        self.cb_browser_memos.setStyleSheet("border: none;")
+
+        meta_grid = QGridLayout()
+        meta_grid.setContentsMargins(0, 4, 0, 0)
+        meta_grid.addWidget(self.cb_attachments, 0, 0)
+        meta_grid.addWidget(self.cb_schedules, 0, 1)
+        meta_grid.addWidget(self.cb_linked_tasks, 1, 0)
+        meta_grid.addWidget(self.cb_bookmarks, 1, 1)
+        meta_grid.addWidget(self.cb_browser_memos, 2, 0, 1, 2)
+        opt_lay.addLayout(meta_grid)
 
         layout.addWidget(opt_frame)
 
@@ -3137,6 +3161,18 @@ class FolderWorkImportDialog(QDialog):
 
     def should_copy_attachments(self) -> bool:
         return self.cb_attachments.isChecked()
+
+    def should_import_schedules(self) -> bool:
+        return self.cb_schedules.isChecked()
+
+    def should_import_linked_tasks(self) -> bool:
+        return self.cb_linked_tasks.isChecked()
+
+    def should_import_bookmarks(self) -> bool:
+        return self.cb_bookmarks.isChecked()
+
+    def should_import_browser_memos(self) -> bool:
+        return self.cb_browser_memos.isChecked()
 
     def is_ai_classified(self) -> bool:
         return self._use_ai_map
@@ -11115,6 +11151,10 @@ class WorkManagerDialog(QDialog):
         selected_exts = dlg.get_selected_extensions()
         root_name = dlg.get_category_name()
         copy_as_att = dlg.should_copy_attachments()
+        import_schedules = dlg.should_import_schedules()
+        import_tasks = dlg.should_import_linked_tasks()
+        import_bookmarks = dlg.should_import_bookmarks()
+        import_browser_memos = dlg.should_import_browser_memos()
         is_ai_mode = dlg.is_ai_classified()
         use_top_level = dlg.use_top_level_categories()
         file_cat_map = dlg.get_file_category_map()
@@ -11150,12 +11190,14 @@ class WorkManagerDialog(QDialog):
                     if t:
                         docs_meta_map[t] = dm
                 # 브라우저 메모 복원 (work.json 내 browser_memos)
-                wj_memos = wj_data.get("browser_memos", [])
-                if wj_memos:
-                    work_files.merge_browser_memos(wj_memos)
-            browser_file = root_dir / "browser" / "page_memos.json"
-            if browser_file.exists():
-                work_files.import_browser_memos_from_file(browser_file)
+                if import_browser_memos:
+                    wj_memos = wj_data.get("browser_memos", [])
+                    if wj_memos:
+                        work_files.merge_browser_memos(wj_memos)
+            if import_browser_memos:
+                browser_file = root_dir / "browser" / "page_memos.json"
+                if browser_file.exists():
+                    work_files.import_browser_memos_from_file(browser_file)
         except Exception as ex:
             logger.warning("Failed to parse work.json or restore browser memos during import: %s", ex)
 
@@ -11370,7 +11412,7 @@ class WorkManagerDialog(QDialog):
             if doc_meta:
                 # 1) 연계 일정 복원
                 schedules_to_restore = doc_meta.get("schedules", [])
-                if schedules_to_restore and self.repository and db_id:
+                if import_schedules and schedules_to_restore and self.repository and db_id:
                     for s_item in schedules_to_restore:
                         try:
                             self.repository.add_entry(
@@ -11395,7 +11437,7 @@ class WorkManagerDialog(QDialog):
 
                 # 2) 연계 문서(Task) 복원
                 tasks_to_restore = doc_meta.get("linked_tasks", [])
-                if tasks_to_restore and self.repository and db_id:
+                if import_tasks and tasks_to_restore and self.repository and db_id:
                     for t_item in tasks_to_restore:
                         try:
                             t_title = t_item.get("title", "")
@@ -11413,14 +11455,14 @@ class WorkManagerDialog(QDialog):
                                     category=t_item.get("category", ""),
                                     work_id=db_id,
                                     work_title=doc_title,
-                                )
+                                    )
                                 self.repository.link_entry_to_work(work_id=db_id, entry_id=new_eid, entry_type="task")
                         except Exception as ex:
                             logger.warning(f"Failed to restore linked task for '{doc_title}': {ex}")
 
                 # 3) 하이라이트 북마크 복원
                 bookmarks_to_restore = doc_meta.get("bookmarks", [])
-                if bookmarks_to_restore:
+                if import_bookmarks and bookmarks_to_restore:
                     try:
                         self._save_sheet_bookmarks(sheet, bookmarks_to_restore)
                     except Exception as ex:

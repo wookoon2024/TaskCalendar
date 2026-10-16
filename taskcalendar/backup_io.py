@@ -13,10 +13,18 @@ def backup_to_zip(
     zip_filepath: Path,
     settings_dict: dict[str, str] | None = None,
     plain_db_bytes: bytes | None = None,
-    include_attachments: bool = False,
+    include_attachments: bool = True,
 ) -> None:
-    """Compresses the database file, portable plain SQLite bytes, companion settings, and optionally attachments into a single zip file."""
+    """
+    Compresses the database file, portable plain SQLite bytes, settings,
+    and the entire data/ tree (work documents, templates, browser memos, attachments)
+    into a complete, self-contained backup zip.
+    """
+    from taskcalendar.paths import data_root
+
+    d_root = data_root()
     with zipfile.ZipFile(zip_filepath, "w", zipfile.ZIP_DEFLATED) as zipf:
+        # 1. 루트 편의 파일들 (하위 호환 및 범용 호환)
         if db_path.exists():
             zipf.write(db_path, arcname=db_path.name)
         if plain_db_bytes:
@@ -27,31 +35,19 @@ def backup_to_zip(
             latest_settings = db_path.parent / "backups" / "settings_latest.json"
             if latest_settings.exists():
                 zipf.write(latest_settings, arcname="settings.json")
-        if include_attachments:
-            from taskcalendar.paths import (
-                calendar_attachments_root,
-                document_attachments_root,
-                memo_attachments_root,
-                work_attachments_root,
-            )
-            cat_att_dirs = [
-                (calendar_attachments_root(), "calendar/attachments"),
-                (memo_attachments_root(), "memo/attachments"),
-                (document_attachments_root(), "documents/attachments"),
-                (work_attachments_root(), "work/attachments"),
-            ]
-            for adir, arc_prefix in cat_att_dirs:
-                if adir.exists():
-                    for file in adir.rglob("*"):
-                        if file.is_file():
-                            arcname = Path(arc_prefix) / file.relative_to(adir)
-                            zipf.write(file, arcname=arcname.as_posix())
-            if attachments_dir.exists():
-                for file in attachments_dir.rglob("*"):
-                    if file.is_file():
-                        arcname = Path("attachments") / file.relative_to(attachments_dir)
-                        if arcname.as_posix() not in zipf.namelist():
-                            zipf.write(file, arcname=arcname.as_posix())
+
+        # 2. data/ 전체 디렉토리 트리 압축 (DB, 캘린더, 메모, 문서, 브라우저 메모, 업무문서, 서식템플릿, 업무첨부)
+        if d_root.exists():
+            for file in d_root.rglob("*"):
+                if file.is_file():
+                    # 임시/복원 백업 파일이나 과도하게 큰 덤프는 제외
+                    if file.suffix in (".restore_bak", ".tmp") or ".corrupt." in file.name:
+                        continue
+                    # attachments 제외 옵션이 꺼져있는 경우 첨부 디렉토리 스킵
+                    if not include_attachments and "attachments" in file.parts:
+                        continue
+                    arcname = Path("data") / file.relative_to(d_root)
+                    zipf.write(file, arcname=arcname.as_posix())
 
 
 def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -> dict[str, str] | None:
@@ -138,7 +134,22 @@ def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -
             except Exception:
                 pass
 
-            # If the backup zip contains attachments, restore/merge them safely
+            # 1. Full data/ directory restore (new unified backup structure)
+            extracted_data_dir = tmp_path / "data"
+            if extracted_data_dir.exists() and extracted_data_dir.is_dir():
+                from taskcalendar.paths import data_root
+                d_root = data_root()
+                for file in extracted_data_dir.rglob("*"):
+                    if file.is_file():
+                        rel = file.relative_to(extracted_data_dir)
+                        # DB 파일 자체는 상위 검증 및 암호화 블록(final_db_bytes)에서 쓰므로 충돌 방지
+                        if rel.parts and rel.parts[0] == "db" and rel.name in ("taskcalendar.db.enc", "taskcalendar.db"):
+                            continue
+                        dest = d_root / rel
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(file, dest)
+
+            # 2. Legacy / Individual categorized attachments restore
             from taskcalendar.paths import (
                 calendar_attachments_root,
                 document_attachments_root,
