@@ -95,10 +95,12 @@ def main() -> None:
         cal_exe = dist_dir / "calendar.exe"
         baro_exe = dist_dir / "바로업무.exe"
         import shutil
-        if cal_exe.exists() and not baro_exe.exists():
-            shutil.copy2(cal_exe, baro_exe)
-        elif baro_exe.exists() and not cal_exe.exists():
+        if baro_exe.exists():
             shutil.copy2(baro_exe, cal_exe)
+            print("[OK] Synchronized calendar.exe with latest 바로업무.exe")
+        elif cal_exe.exists():
+            shutil.copy2(cal_exe, baro_exe)
+            print("[OK] Synchronized 바로업무.exe with latest calendar.exe")
         for exe_f in [baro_exe, cal_exe]:
             if exe_f.exists():
                 print(f"Output executable: {exe_f} ({exe_f.stat().st_size:,} bytes)")

@@ -110,6 +110,20 @@ def migrate_to_data_root() -> None:
     root = runtime_root()
     d_root = data_root()
 
+    # 0. 필수 기본 디렉토리 무조건 생성
+    try:
+        data_root().mkdir(parents=True, exist_ok=True)
+        db_dir().mkdir(parents=True, exist_ok=True)
+        calendar_attachments_root().mkdir(parents=True, exist_ok=True)
+        memo_attachments_root().mkdir(parents=True, exist_ok=True)
+        document_attachments_root().mkdir(parents=True, exist_ok=True)
+        browser_root().mkdir(parents=True, exist_ok=True)
+        work_root().mkdir(parents=True, exist_ok=True)
+        work_templates_root().mkdir(parents=True, exist_ok=True)
+        work_attachments_root().mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        logger.warning("Could not ensure basic data folders: %s", e)
+
     # 1. DB 파일 마이그레이션: <root>/db/ -> <root>/data/db/
     old_db_dir = root / "db"
     new_db_dir = db_dir()
@@ -124,14 +138,18 @@ def migrate_to_data_root() -> None:
             except Exception as e:
                 logger.error("Failed to move DB file: %s", e)
 
-        # 진단 로그 및 기타 파일 이전
-        for log_f in old_db_dir.glob("taskcalendar*.log"):
-            target_log = new_db_dir / log_f.name
-            if not target_log.exists():
-                try:
-                    shutil.move(str(log_f), str(target_log))
-                except Exception:
-                    pass
+        # 진단 로그, .enc, .bak 및 백업 파일 일체 이전
+        for item in list(old_db_dir.iterdir()):
+            if item.is_file() and any(item.name.endswith(ext) for ext in (".log", ".enc", ".bak", ".safety_backup")):
+                target_f = new_db_dir / item.name
+                if not target_f.exists():
+                    try:
+                        shutil.move(str(item), str(target_f))
+                    except Exception:
+                        pass
+        old_backups = old_db_dir / "backups"
+        if old_backups.exists() and old_backups.is_dir():
+            _move_or_merge_dir(old_backups, new_db_dir / "backups")
 
         # old_db_dir / attachments 가 있으면 calendar 첨부로 이전
         old_db_att = old_db_dir / "attachments"

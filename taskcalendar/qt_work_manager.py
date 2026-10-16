@@ -4544,6 +4544,19 @@ class WorkManagerDialog(QDialog):
         self._law_scan_timer.timeout.connect(self._on_law_scan_timer_timeout)
 
         self._load_data_from_db()
+        # 업무 관련 필수 디렉토리 및 카테고리 폴더 즉시 생성
+        try:
+            work_files.work_root().mkdir(parents=True, exist_ok=True)
+            work_files.work_templates_root().mkdir(parents=True, exist_ok=True)
+            work_files.work_attachments_root().mkdir(parents=True, exist_ok=True)
+            work_files.browser_root().mkdir(parents=True, exist_ok=True)
+            for c in self._category_rows:
+                c_grp = c.get("tab_id", 1)
+                c_name = c.get("name", "")
+                if c_name:
+                    work_files.category_dir(c_grp, c_name).mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Failed to ensure work directories: {e}")
         self._init_ui()
         # 처음에 문서를 아무것도 띄우지 않음 (빈 상태 초기화)
         self._clear_editor_view()
