@@ -730,3 +730,32 @@ def reveal_in_explorer(path: Path | str) -> bool:
         except Exception:
             pass
     return open_path_with_os(p.parent)
+
+
+def build_empty_hwpx(title: str = "새 업무") -> bytes:
+    """한글(HWP) 및 웹 에디터 호환용 표준 빈 HWPX 바이너리를 즉시 생성한다."""
+    import io
+    from taskcalendar.korean_report_hwpx.engine import blank
+
+    hdr = blank.header_xml()
+    sec_p = blank.sec_pr({})
+    t = (title or "새 업무").strip()
+    first_p = (
+        f'<hp:p id="0" paraPrIDRef="0" styleIDRef="0" pageBreak="0" columnBreak="0">'
+        f'<hp:run charPrIDRef="0">{sec_p}<hp:t>{t}</hp:t></hp:run></hp:p>'
+    )
+    sec = blank.section_xml([first_p])
+    buf = io.BytesIO()
+    blank.save(buf, hdr, sec, title=t, preview=t)
+    return buf.getvalue()
+
+
+def create_empty_hwpx_file(dest_path: Path | str, title: str = "새 업무") -> Path:
+    """dest_path 경로에 빈 HWPX 파일을 생성하고 경로를 반환한다."""
+    dest = Path(dest_path)
+    if dest.suffix.lower() != ".hwpx":
+        dest = dest.with_suffix(".hwpx")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    blob = build_empty_hwpx(title or dest.stem)
+    dest.write_bytes(blob)
+    return dest

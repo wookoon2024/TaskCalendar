@@ -96,11 +96,17 @@ def main() -> None:
         baro_exe = dist_dir / "바로업무.exe"
         import shutil
         if baro_exe.exists():
-            shutil.copy2(baro_exe, cal_exe)
-            print("[OK] Synchronized calendar.exe with latest 바로업무.exe")
+            try:
+                shutil.copy2(baro_exe, cal_exe)
+                print("[OK] Synchronized calendar.exe with latest 바로업무.exe")
+            except Exception as e:
+                print(f"[WARN] calendar.exe is currently running; 바로업무.exe was built successfully: {e}")
         elif cal_exe.exists():
-            shutil.copy2(cal_exe, baro_exe)
-            print("[OK] Synchronized 바로업무.exe with latest calendar.exe")
+            try:
+                shutil.copy2(cal_exe, baro_exe)
+                print("[OK] Synchronized 바로업무.exe with latest calendar.exe")
+            except Exception as e:
+                print(f"[WARN] 바로업무.exe is currently running; calendar.exe was built successfully: {e}")
         for exe_f in [baro_exe, cal_exe]:
             if exe_f.exists():
                 print(f"Output executable: {exe_f} ({exe_f.stat().st_size:,} bytes)")

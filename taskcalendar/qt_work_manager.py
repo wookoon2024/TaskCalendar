@@ -3264,11 +3264,10 @@ def export_sheet_to_hwpx(sheet: WorkSheetData, dest_path: Path | str) -> bool:
             dest_p.write_bytes(sheet.hwpx_blob)
             return True
 
-        # 2. HWPX blob이 없는 문서(HWP 형식이 아니거나 텍스트 문서)는 텍스트 파일로 저장
-        #    (HWPX 생성은 rhwp 에디터 저장 경로가 담당한다. 별도 템플릿 조립은 사용하지 않음)
-        txt_path = dest_p.with_suffix(".txt")
-        txt_content = f"[{sheet.title}]\n분류: {sheet.category} | 담당: {sheet.assignee} | 주기: {sheet.cycle}\n\n{sheet.content_text}"
-        txt_path.write_text(txt_content, encoding="utf-8")
+        # 2. HWPX blob이 없으면 표준 빈 HWPX 문서로 생성하여 저장
+        blob = work_files.build_empty_hwpx(sheet.title or "새 업무")
+        dest_p.write_bytes(blob)
+        sheet.hwpx_blob = blob
         return True
     except Exception as e:
         logger.exception("Failed to export sheet to HWPX: %s", e)
@@ -7313,6 +7312,7 @@ class WorkManagerDialog(QDialog):
             return
 
         new_title = title.strip()
+        hwpx_blob = work_files.build_empty_hwpx(new_title)
         db_id = None
         if self.repository:
             db_id = self.repository.upsert_work_item(
@@ -7321,7 +7321,8 @@ class WorkManagerDialog(QDialog):
                 category_name=target_cat_name,
                 category_id=target_cat_id,
                 cycle="수시",
-                content_text="",
+                content_text=new_title,
+                hwpx_blob=hwpx_blob,
                 sort_order=len(self._all_sheets) + 1,
             )
         new_sheet = WorkSheetData(
@@ -7331,7 +7332,8 @@ class WorkManagerDialog(QDialog):
             category=target_cat_name,
             category_id=target_cat_id,
             cycle="수시",
-            content_text="",
+            content_text=new_title,
+            hwpx_blob=hwpx_blob,
         )
         self._all_sheets.append(new_sheet)
         self._persist_sheet_file(new_sheet)
@@ -7842,7 +7844,7 @@ class WorkManagerDialog(QDialog):
         work_files.reveal_in_explorer(path)
 
     def _persist_sheet_file(self, sheet: "WorkSheetData") -> None:
-        """업무문서 내용을 work/ 아래 실제 파일(.hwpx 또는 .txt)로 저장(파일화)."""
+        """업무문서 내용을 work/ 아래 실제 파일(.hwpx)로 저장(파일화)."""
         if not sheet:
             return
         try:
@@ -7850,14 +7852,29 @@ class WorkManagerDialog(QDialog):
             dest.parent.mkdir(parents=True, exist_ok=True)
             if sheet.hwpx_blob:
                 dest.write_bytes(sheet.hwpx_blob)
-            elif sheet.content_text:
-                txt_dest = dest.with_suffix(".txt")
-                txt_dest.write_text(sheet.content_text, encoding="utf-8")
             else:
-                # 새 업무 생성 직후 본문이 비어 있는 경우에도 work/ 폴더에 동기화용 기본 텍스트 파일 생성
-                txt_dest = dest.with_suffix(".txt")
-                if not dest.exists() and not txt_dest.exists():
-                    txt_dest.write_text(f"[{sheet.title}]\n", encoding="utf-8")
+                hwpx_blob = work_files.build_empty_hwpx(sheet.title or "새 업무")
+                sheet.hwpx_blob = hwpx_blob
+                dest.write_bytes(hwpx_blob)
+                if self.repository and sheet.db_id:
+                    self.repository.upsert_work_item(
+                        work_id=sheet.db_id,
+                        title=sheet.title,
+                        category_name=sheet.category,
+                        category_id=sheet.category_id,
+                        cycle=sheet.cycle,
+                        assignee=sheet.assignee,
+                        deadline=sheet.deadline,
+                        content_text=sheet.content_text or sheet.title,
+                        hwpx_blob=hwpx_blob,
+                    )
+            # 기존에 동일 경로에 잘못 생성된 .txt 파일이 있다면 즉시 정리
+            txt_dest = dest.with_suffix(".txt")
+            if txt_dest.exists():
+                try:
+                    txt_dest.unlink()
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning("Failed to persist work file: %s", e)
 
@@ -8118,11 +8135,24 @@ class WorkManagerDialog(QDialog):
                 cat = cats.get(doc_id, "미분류")
                 dest = work_files.sheet_hwpx_path(grps.get(doc_id, "1"), cpaths.get(doc_id, cat), doc.get("title") or "무제 업무")
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                blob = doc.get("hwpx_blob")
-                if blob:
-                    dest.write_bytes(blob)
-                else:
-                    dest.with_suffix(".txt").write_text(f"[{doc.get('title')}]\n분류: {cat}\n", encoding="utf-8")
+                blob = doc.get("hwpx_blob") or work_files.build_empty_hwpx(doc.get("title") or "새 업무")
+                dest.write_bytes(blob)
+                if not doc.get("hwpx_blob"):
+                    try:
+                        self.repository.upsert_work_item(
+                            work_id=doc_id,
+                            title=doc.get("title"),
+                            category_name=cat,
+                            hwpx_blob=blob,
+                        )
+                    except Exception:
+                        pass
+                txt_cand = dest.with_suffix(".txt")
+                if txt_cand.exists():
+                    try:
+                        txt_cand.unlink()
+                    except Exception:
+                        pass
             except Exception as e:
                 logger.warning("work sync create_file failed: %s", e)
         for doc_id in (result.get("create_folder") or []):
@@ -8816,6 +8846,7 @@ class WorkManagerDialog(QDialog):
             return
 
         new_title = title.strip()
+        hwpx_blob = work_files.build_empty_hwpx(new_title)
         db_id = None
         if self.repository:
             db_id = self.repository.upsert_work_item(
@@ -8824,7 +8855,8 @@ class WorkManagerDialog(QDialog):
                 category_name=cat_name,
                 category_id=cat_id,
                 cycle="수시",
-                content_text="",
+                content_text=new_title,
+                hwpx_blob=hwpx_blob,
                 sort_order=len(self._all_sheets) + 1,
             )
         new_sheet = WorkSheetData(
@@ -8834,7 +8866,8 @@ class WorkManagerDialog(QDialog):
             category=cat_name,
             category_id=cat_id,
             cycle="수시",
-            content_text="",
+            content_text=new_title,
+            hwpx_blob=hwpx_blob,
         )
         self._all_sheets.append(new_sheet)
         self._persist_sheet_file(new_sheet)
