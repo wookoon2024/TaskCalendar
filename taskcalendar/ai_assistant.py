@@ -153,10 +153,10 @@ class AIConfigManager:
             repo = EncryptedRepository.get_global_instance()
             if repo is not None:
                 return repo
-            from taskcalendar.paths import runtime_root
-            db_path = runtime_root() / "db" / "taskcalendar.db.enc"
-            if db_path.exists():
-                return EncryptedRepository(db_path)
+            from taskcalendar.paths import db_path as get_db_path
+            p = get_db_path()
+            if p.exists():
+                return EncryptedRepository(p)
         except Exception as e:
             logger.warning("Failed to access EncryptedRepository for AI config: %s", e)
         return None

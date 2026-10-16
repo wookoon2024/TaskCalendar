@@ -3199,7 +3199,15 @@ class EntryDialog(QDialog):
         if direct_p.exists() and direct_p.is_file():
             return direct_p
         # Fallback check across standard paths
+        from taskcalendar.paths import (
+            calendar_attachments_root,
+            document_attachments_root,
+            memo_attachments_root,
+        )
         for base in [
+            calendar_attachments_root(),
+            memo_attachments_root(),
+            document_attachments_root(),
             runtime_root() / "db" / "attachments",
             runtime_root() / "attachments",
             runtime_root().parent / "db" / "attachments",

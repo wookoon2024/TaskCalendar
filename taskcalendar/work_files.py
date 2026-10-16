@@ -25,22 +25,45 @@ _RESERVED_NAMES = {
 MAX_COMPONENT_LEN = 120
 
 
-def work_root() -> Path:
-    """업무 파일 루트 (데이터 루트 기준: <데이터루트>/work)"""
-    from taskcalendar.paths import runtime_root
+import re
 
-    return runtime_root() / "work"
+
+def strip_category_prefix(name: str) -> str:
+    """'1.기본업무' 또는 '01. 기본업무' 등에서 앞의 숫자 접두사를 제거한 순수 이름 반환"""
+    return re.sub(r"^\d+[\.\-_ ]\s*", "", (name or "").strip())
+
+
+def format_numbered_category(name: str, sort_order: int | None = None) -> str:
+    """
+    카테고리명에 번호 접두사를 붙여 반환.
+    - 이미 '1.', '2.', '01.', '1- ' 등의 접두사가 붙어 있으면 그대로 사용.
+    - 없으면 sort_order(기본값 1)를 붙여 '1.기본업무' 형태로 포맷.
+    """
+    s = (name or "").strip()
+    if not s:
+        return "1.미분류"
+    if re.match(r"^\d+[\.\-_ ]", s):
+        return s
+    order = sort_order if (sort_order is not None and sort_order > 0) else 1
+    return f"{order}.{s}"
+
+
+def work_root() -> Path:
+    """업무 파일 루트 (데이터 루트 기준: data/work)"""
+    from taskcalendar.paths import work_root as _work_root
+
+    return _work_root()
 
 
 def browser_root() -> Path:
-    """브라우저 메모 및 연계 정보 루트 (work/browser)"""
-    p = work_root() / "browser"
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+    """브라우저 메모 및 연계 정보 루트 (data/browser)"""
+    from taskcalendar.paths import browser_root as _browser_root
+
+    return _browser_root()
 
 
 def browser_memos_path() -> Path:
-    """브라우저 메모 기본 동기화 파일 (work/browser/page_memos.json)"""
+    """브라우저 메모 기본 동기화 파일 (data/browser/page_memos.json)"""
     return browser_root() / "page_memos.json"
 
 
@@ -302,10 +325,13 @@ def file_sha1(path: Path | str) -> str:
     return h.hexdigest()
 
 
+SYSTEM_WORK_DIRS = {"attachments", "attach", "browser", "templates"}
+
+
 def scan_work_files(known_categories: set | None = None) -> list[dict]:
     """
     work/ 트리에서 업무 항목(파일·폴더) 목록을 스캔한다.
-    - '*_첨부파일' 폴더 내부는 제외
+    - attachments, templates, browser 등 시스템 예약 폴더는 제외
     - 폴더는 '업무 폴더'로 간주: 알려진 분류명이 아니고 깊이 3 이상일 때만
     각 항목: {path, group, category, stem, ext, size, sha1, is_dir}
     """
@@ -316,8 +342,8 @@ def scan_work_files(known_categories: set | None = None) -> list[dict]:
     known = {c for c in (known_categories or set())}
     for p in root.rglob("*"):
         rel_parts = p.relative_to(root).parts
-        if rel_parts and rel_parts[0] == ATTACH_ROOT:
-            continue  # 첨부 전용 트리는 업무 항목이 아님
+        if rel_parts and rel_parts[0] in SYSTEM_WORK_DIRS:
+            continue  # 첨부, 템플릿, 브라우저 메모 등 시스템 디렉토리는 업무 항목이 아님
         group = rel_parts[0] if len(rel_parts) >= 3 else "1"
         try:
             cat = p.parent.relative_to(root / group).as_posix()
@@ -398,11 +424,11 @@ TEXT_EXTENSIONS = (".txt", ".md", ".csv", ".json", ".html", ".htm", ".xml", ".hm
 EDITOR_EXTENSIONS = NATIVE_EXTENSIONS + TEXT_EXTENSIONS
 
 
-ATTACH_ROOT = "attach"  # 첨부 전용 루트: work/attach/<그룹>/<분류경로>/<업무명>/
+ATTACH_ROOT = "attachments"  # 업무 첨부 전용 루트: data/work/attachments/<그룹>/<분류경로>/<업무명>/
 
 
 def attach_base(group: str | int, category: str) -> Path:
-    """첨부 기본 폴더(업무명 제외): work/attach/<그룹>/<분류경로>"""
+    """첨부 기본 폴더(업무명 제외): data/work/attachments/<그룹>/<분류경로>"""
     p = work_root() / ATTACH_ROOT / sanitize_component(str(group), "1")
     for part in cat_relpath(category).split("/"):
         p = p / part
@@ -543,21 +569,34 @@ def is_editor_openable(path: Path | str) -> bool:
 def find_sheet_file(group: str | int, category: str, title: str) -> Path | None:
     """work/<그룹>/<분류>/<제목>.<ext> 업무 파일을 찾는다(에디터 포맷 우선)."""
     d = category_dir(group, category)
-    if not d.is_dir():
+    target_dirs = [d] if d.is_dir() else []
+    if not target_dirs:
+        # 번호 접두사 유무 차이로 인한 폴더 탐색 (예: "1.인사" vs "인사")
+        grp_dir = work_root() / sanitize_component(str(group), "1")
+        if grp_dir.is_dir():
+            cat_clean = strip_category_prefix(category)
+            for sub_p in grp_dir.iterdir():
+                if sub_p.is_dir() and strip_category_prefix(sub_p.name) == cat_clean:
+                    target_dirs.append(sub_p)
+
+    if not target_dirs:
         return None
+
     stem = sheet_file_stem(title)
     raw_title = (title or "").strip()
-    cands = [
-        p for p in d.iterdir()
-        if p.is_file() and (p.stem == stem or p.name == raw_title or p.stem == raw_title)
-    ]
-    if not cands:
-        return None
-    for group_exts in (NATIVE_EXTENSIONS, TEXT_EXTENSIONS):
-        for p in cands:
-            if p.suffix.lower() in group_exts:
-                return p
-    return sorted(cands, key=lambda p: p.name)[0]
+    for cur_d in target_dirs:
+        cands = [
+            p for p in cur_d.iterdir()
+            if p.is_file() and (p.stem == stem or p.name == raw_title or p.stem == raw_title)
+        ]
+        if not cands:
+            continue
+        for group_exts in (NATIVE_EXTENSIONS, TEXT_EXTENSIONS):
+            for p in cands:
+                if p.suffix.lower() in group_exts:
+                    return p
+        return sorted(cands, key=lambda p: p.name)[0]
+    return None
 
 
 def rename_sheet_file(group: str | int, category: str, old_title: str, new_title: str) -> Path | None:

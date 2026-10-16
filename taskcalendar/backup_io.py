@@ -27,11 +27,31 @@ def backup_to_zip(
             latest_settings = db_path.parent / "backups" / "settings_latest.json"
             if latest_settings.exists():
                 zipf.write(latest_settings, arcname="settings.json")
-        if include_attachments and attachments_dir.exists():
-            for file in attachments_dir.rglob("*"):
-                if file.is_file():
-                    arcname = Path("attachments") / file.relative_to(attachments_dir)
-                    zipf.write(file, arcname=arcname.as_posix())
+        if include_attachments:
+            from taskcalendar.paths import (
+                calendar_attachments_root,
+                document_attachments_root,
+                memo_attachments_root,
+                work_attachments_root,
+            )
+            cat_att_dirs = [
+                (calendar_attachments_root(), "calendar/attachments"),
+                (memo_attachments_root(), "memo/attachments"),
+                (document_attachments_root(), "documents/attachments"),
+                (work_attachments_root(), "work/attachments"),
+            ]
+            for adir, arc_prefix in cat_att_dirs:
+                if adir.exists():
+                    for file in adir.rglob("*"):
+                        if file.is_file():
+                            arcname = Path(arc_prefix) / file.relative_to(adir)
+                            zipf.write(file, arcname=arcname.as_posix())
+            if attachments_dir.exists():
+                for file in attachments_dir.rglob("*"):
+                    if file.is_file():
+                        arcname = Path("attachments") / file.relative_to(attachments_dir)
+                        if arcname.as_posix() not in zipf.namelist():
+                            zipf.write(file, arcname=arcname.as_posix())
 
 
 def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -> dict[str, str] | None:
@@ -119,6 +139,28 @@ def restore_from_zip(zip_filepath: Path, db_path: Path, attachments_dir: Path) -
                 pass
 
             # If the backup zip contains attachments, restore/merge them safely
+            from taskcalendar.paths import (
+                calendar_attachments_root,
+                document_attachments_root,
+                memo_attachments_root,
+                work_attachments_root,
+            )
+            cat_targets = [
+                (tmp_path / "calendar" / "attachments", calendar_attachments_root()),
+                (tmp_path / "memo" / "attachments", memo_attachments_root()),
+                (tmp_path / "documents" / "attachments", document_attachments_root()),
+                (tmp_path / "work" / "attachments", work_attachments_root()),
+            ]
+            for ext_dir, target_dir in cat_targets:
+                if ext_dir.exists() and any(f.is_file() for f in ext_dir.rglob("*")):
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    for file in ext_dir.rglob("*"):
+                        if file.is_file():
+                            rel = file.relative_to(ext_dir)
+                            dest = target_dir / rel
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(file, dest)
+
             has_extracted_attachments = (
                 extracted_attachments.exists()
                 and any(f.is_file() for f in extracted_attachments.rglob("*"))

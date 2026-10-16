@@ -262,9 +262,18 @@ def run() -> None:
     if not icon.isNull():
         app.setWindowIcon(icon)
 
-    db_dir = runtime_root() / "db"
-    db_dir.mkdir(parents=True, exist_ok=True)
-    repository = EncryptedRepository(db_dir / "taskcalendar.db.enc")
+    from taskcalendar.migration import migrate_to_data_root
+    from taskcalendar.paths import db_path, runtime_root
+
+    # 기존 데이터 구조가 있다면 새 data/ 계층 구조로 안전하게 1회 자동 마이그레이션
+    try:
+        migrate_to_data_root()
+    except Exception as e:
+        logger.error("Data migration error: %s", e)
+
+    target_db = db_path()
+    target_db.parent.mkdir(parents=True, exist_ok=True)
+    repository = EncryptedRepository(target_db)
 
     if not repository.get_setting("toggle_shortcut"):
         repository.set_setting("toggle_shortcut", default_shortcut())

@@ -6927,13 +6927,20 @@ class WorkManagerDialog(QDialog):
         template_menu.addSeparator()
 
         # 4-2. 업무 템플릿 (카테고리별 트리 서브메뉴 동적 추가)
-        from taskcalendar.paths import runtime_root, package_root
+        from taskcalendar.paths import package_root, runtime_root, work_templates_root
         import shutil
 
-        tpl_dir = runtime_root() / "업무 템플릿"
-        if not tpl_dir.exists():
-            tpl_dir.mkdir(parents=True, exist_ok=True)
+        tpl_dir = work_templates_root()
         try:
+            # 기존 레거시 경로 또는 번들 패키지에서 템플릿 마이그레이션/시딩
+            legacy_tpl = runtime_root() / "업무 템플릿"
+            if legacy_tpl.exists() and legacy_tpl.is_dir() and not any(tpl_dir.iterdir()):
+                for item in legacy_tpl.iterdir():
+                    dst = tpl_dir / item.name
+                    if item.is_dir():
+                        shutil.copytree(item, dst, dirs_exist_ok=True)
+                    elif item.is_file():
+                        shutil.copy2(item, dst)
             bundled_tpl = package_root().parent / "업무 템플릿"
             if bundled_tpl.exists() and bundled_tpl.is_dir() and not any(tpl_dir.iterdir()):
                 for item in bundled_tpl.iterdir():
@@ -7091,15 +7098,21 @@ class WorkManagerDialog(QDialog):
             }
         """)
 
-        from taskcalendar.paths import runtime_root, package_root
+        from taskcalendar.paths import package_root, runtime_root, work_templates_root
         import shutil
 
-        tpl_dir = runtime_root() / "업무 템플릿"
-        if not tpl_dir.exists():
-            tpl_dir.mkdir(parents=True, exist_ok=True)
+        tpl_dir = work_templates_root()
 
         # 단일 exe만 배포된 경우 내장된 번들 템플릿을 자동으로 추출(시딩)
         try:
+            legacy_tpl = runtime_root() / "업무 템플릿"
+            if legacy_tpl.exists() and legacy_tpl.is_dir() and not any(tpl_dir.iterdir()):
+                for item in legacy_tpl.iterdir():
+                    dst = tpl_dir / item.name
+                    if item.is_dir():
+                        shutil.copytree(item, dst, dirs_exist_ok=True)
+                    elif item.is_file():
+                        shutil.copy2(item, dst)
             bundled_tpl = package_root().parent / "업무 템플릿"
             if bundled_tpl.exists() and bundled_tpl.is_dir() and not any(tpl_dir.iterdir()):
                 for item in bundled_tpl.iterdir():
@@ -7689,8 +7702,10 @@ class WorkManagerDialog(QDialog):
         return str(getattr(self, "_active_category_tab_id", 1) or 1)
 
     def _cat_path(self, category_name: str, category_id: int | None = None) -> str:
-        """분류명 → '상위/분류' 계층 경로(좌측 트리와 동일). work/<그룹>/<이 경로>/<파일>"""
+        """분류명 → '1.상위/1.분류' 계층 경로(좌측 트리와 동일, 번호 자동 부여). work/<그룹>/<이 경로>/<파일>"""
         try:
+            from taskcalendar import work_files
+
             chain, seen = [], set()
             cur = None
             if category_id:
@@ -7700,25 +7715,27 @@ class WorkManagerDialog(QDialog):
             if not cur and self.repository:
                 if category_id:
                     row = self.repository.connection.execute(
-                        "SELECT id, name, parent_id FROM work_categories WHERE id = ?", (int(category_id),)
+                        "SELECT id, name, parent_id, sort_order FROM work_categories WHERE id = ?", (int(category_id),)
                     ).fetchone()
                     if row:
                         cur = dict(row)
                 if not cur and category_name:
                     row = self.repository.connection.execute(
-                        "SELECT id, name, parent_id FROM work_categories WHERE name = ?", (str(category_name),)
+                        "SELECT id, name, parent_id, sort_order FROM work_categories WHERE name = ?", (str(category_name),)
                     ).fetchone()
                     if row:
                         cur = dict(row)
             while cur and cur.get("id") not in seen:
                 seen.add(cur.get("id"))
-                chain.append(str(cur.get("name")))
+                c_name = str(cur.get("name"))
+                c_order = cur.get("sort_order", 0)
+                chain.append(work_files.format_numbered_category(c_name, c_order))
                 pid = cur.get("parent_id")
                 if pid:
                     cur = next((c for c in self._category_rows if c.get("id") == pid), None)
                     if not cur and self.repository:
                         p_row = self.repository.connection.execute(
-                            "SELECT id, name, parent_id FROM work_categories WHERE id = ?", (int(pid),)
+                            "SELECT id, name, parent_id, sort_order FROM work_categories WHERE id = ?", (int(pid),)
                         ).fetchone()
                         cur = dict(p_row) if p_row else None
                 else:
@@ -7728,7 +7745,8 @@ class WorkManagerDialog(QDialog):
                 return "/".join(chain)
         except Exception:
             pass
-        return category_name or "미분류"
+        from taskcalendar import work_files
+        return work_files.format_numbered_category(category_name or "미분류", 1)
 
     def _sheet_work_file_path(self, sheet: "WorkSheetData") -> Path:
         """업무문서의 work/ 파일 경로 (그룹/분류계층/제목 기준, 파일명 정제 적용)"""

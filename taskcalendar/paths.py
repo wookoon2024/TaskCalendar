@@ -35,12 +35,71 @@ def data_path(*parts: str) -> Path:
     return runtime_root() / "data" / Path(*parts)
 
 
+def data_root() -> Path:
+    p = runtime_root() / "data"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def db_dir() -> Path:
+    p = data_root() / "db"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def db_path() -> Path:
+    return db_dir() / "taskcalendar.db.enc"
+
+
+def calendar_attachments_root() -> Path:
+    p = data_root() / "calendar" / "attachments"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def memo_attachments_root() -> Path:
+    p = data_root() / "memo" / "attachments"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def document_attachments_root() -> Path:
+    p = data_root() / "documents" / "attachments"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def browser_root() -> Path:
+    p = data_root() / "browser"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def work_root() -> Path:
+    p = data_root() / "work"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def work_templates_root() -> Path:
+    p = work_root() / "templates"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def work_attachments_root() -> Path:
+    p = work_root() / "attachments"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 def logs_path(*parts: str) -> Path:
     return runtime_root() / "logs" / Path(*parts)
 
 
 def custom_stickers_path(*parts: str) -> Path:
-    p = runtime_root() / "data" / "custom_stickers" / Path(*parts)
+    p = data_root() / "custom_stickers" / Path(*parts)
     p.parent.mkdir(parents=True, exist_ok=True)
     return p
+
 

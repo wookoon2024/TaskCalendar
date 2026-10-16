@@ -176,10 +176,19 @@ class EncryptedRepository:
         cls._global_instance = repo
 
     def __init__(self, db_path: Path) -> None:
+        from taskcalendar.paths import (
+            calendar_attachments_root,
+            document_attachments_root,
+            memo_attachments_root,
+            work_attachments_root,
+        )
+
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.attachments_root = self.db_path.parent / "attachments"
-        self.attachments_root.mkdir(parents=True, exist_ok=True)
+        self.attachments_root = calendar_attachments_root()
+        self.memo_attachments_root = memo_attachments_root()
+        self.document_attachments_root = document_attachments_root()
+        self.work_attachments_root = work_attachments_root()
         self.connection = sqlite3.connect(":memory:")
         self.connection.row_factory = sqlite3.Row
         self._load_failed = False
@@ -1231,6 +1240,15 @@ class EncryptedRepository:
         path = Path(stored_path)
         if path.is_absolute():
             return path
+        candidates = [
+            self.attachments_root / path,
+            getattr(self, "memo_attachments_root", self.attachments_root) / path,
+            getattr(self, "document_attachments_root", self.attachments_root) / path,
+            self.db_path.parent / "attachments" / path,
+        ]
+        for cand in candidates:
+            if cand.exists():
+                return cand
         return self.attachments_root / path
 
     def _expand_entry_for_month(self, entry: CalendarEntry, year: int, month: int) -> list[CalendarEntry]:
@@ -1355,7 +1373,7 @@ class EncryptedRepository:
                 continue
 
             if path.is_absolute() and path.exists() and path.is_file():
-                copied = self._copy_attachment_to_store(path, anchor)
+                copied = self._copy_attachment_to_store(path, anchor, entry.entry_type)
                 if copied not in resolved:
                     resolved.append(copied)
                 continue
@@ -1367,14 +1385,21 @@ class EncryptedRepository:
 
         return resolved
 
-    def _copy_attachment_to_store(self, source: Path, anchor_day: date) -> str:
-        day_dir = self.attachments_root / f"{anchor_day.year:04d}" / f"{anchor_day.month:02d}" / f"{anchor_day.day:02d}"
+    def _copy_attachment_to_store(self, source: Path, anchor_day: date, entry_type: EntryType = EntryType.SCHEDULE) -> str:
+        if entry_type == EntryType.MEMO and hasattr(self, "memo_attachments_root"):
+            target_root = self.memo_attachments_root
+        elif entry_type == EntryType.TASK and hasattr(self, "document_attachments_root"):
+            target_root = self.document_attachments_root
+        else:
+            target_root = self.attachments_root
+
+        day_dir = target_root / f"{anchor_day.year:04d}" / f"{anchor_day.month:02d}" / f"{anchor_day.day:02d}"
         day_dir.mkdir(parents=True, exist_ok=True)
         safe_name = source.name.replace(" ", "_")
         target_name = f"{datetime.now().strftime('%H%M%S')}_{uuid4().hex[:8]}_{safe_name}"
         target = day_dir / target_name
         shutil.copy2(source, target)
-        return str(target.relative_to(self.attachments_root).as_posix())
+        return str(target.relative_to(target_root).as_posix())
 
     def _cleanup_unused_attachments(self, candidates: list[str], current_entry_id: int | None, current_attachments: list[str] | None = None) -> None:
         current_set = set(current_attachments or [])
@@ -1801,36 +1826,39 @@ class EncryptedRepository:
             pass
         self.save()
 
-    def _category_chain_name(self, name: str, parent_id) -> str:
-        """분류명 + parent_id → '상위/분류' 계층 경로 문자열"""
+    def _category_chain_name(self, name: str, parent_id, sort_order: int | None = None) -> str:
+        """분류명 + parent_id → '1.상위/1.분류' 계층 경로 문자열 (번호 자동 부여)"""
+        from taskcalendar import work_files
+
         chain, seen = [], set()
         cur_name, cur_pid = name, parent_id
-        while cur_name and cur_pid not in seen:
-            seen.add(cur_pid)
-            chain.append(cur_name)
-            row = (
-                self.connection.execute(
-                    "SELECT name, parent_id FROM work_categories WHERE id = ?", (cur_pid,)
-                ).fetchone()
-                if cur_pid
-                else None
-            )
+        cur_order = sort_order
+        while cur_name and (cur_pid is None or cur_pid not in seen):
+            if cur_pid is not None:
+                seen.add(cur_pid)
+            chain.append(work_files.format_numbered_category(cur_name, cur_order))
+            if not cur_pid:
+                break
+            row = self.connection.execute(
+                "SELECT name, parent_id, sort_order FROM work_categories WHERE id = ?", (cur_pid,)
+            ).fetchone()
             cur_name = row["name"] if row else None
             cur_pid = row["parent_id"] if row else None
+            cur_order = row["sort_order"] if row else 1
         chain.reverse()
-        return "/".join(chain) if chain else (name or "미분류")
+        return "/".join(chain) if chain else work_files.format_numbered_category(name or "미분류", 1)
 
     def get_work_attachments_dir(self, work_id: int, subfolder: str = "") -> Path:
-        """업무 첨부 디렉토리: work/<그룹>/<분류경로>/<업무명>_첨부파일/<subfolder> (본문과 같은 공간)"""
+        """업무 첨부 디렉토리: data/work/attachments/<그룹>/<분류경로>/<업무명>/<subfolder>"""
         from taskcalendar import work_files
 
         row = self.connection.execute(
-            "SELECT w.title AS title, c.name AS cat, c.tab_id AS tab, c.parent_id AS pid "
+            "SELECT w.title AS title, c.name AS cat, c.tab_id AS tab, c.parent_id AS pid, c.sort_order AS sort_order "
             "FROM work_items w LEFT JOIN work_categories c ON w.category_id = c.id WHERE w.id = ?",
             (int(work_id),),
         ).fetchone()
         title = ((row["title"] if row else "") or "무제 업무")
-        catpath = self._category_chain_name(row["cat"], row["pid"]) if row and row["cat"] else "미분류"
+        catpath = self._category_chain_name(row["cat"], row["pid"], row["sort_order"]) if row and row["cat"] else "1.미분류"
         grp = str((row["tab"] if row else None) or 1)
         d = work_files.attach_dir(grp, catpath, title)
         if subfolder:
@@ -2107,12 +2135,12 @@ class EncryptedRepository:
         targets = [self.attachments_root / "work" / f"work_{work_id}"]
         try:
             row = self.connection.execute(
-                "SELECT w.title AS title, c.name AS cat, c.tab_id AS tab, c.parent_id AS pid "
+                "SELECT w.title AS title, c.name AS cat, c.tab_id AS tab, c.parent_id AS pid, c.sort_order AS sort_order "
                 "FROM work_items w LEFT JOIN work_categories c ON w.category_id = c.id WHERE w.id = ?",
                 (int(work_id),),
             ).fetchone()
             if row and row["title"]:
-                catpath = self._category_chain_name(row["cat"], row["pid"]) if row["cat"] else "미분류"
+                catpath = self._category_chain_name(row["cat"], row["pid"], row["sort_order"]) if row["cat"] else "1.미분류"
                 grp = str(row["tab"] or 1)
                 # 2. work/ 본문 파일 물리 삭제 (1~5 모든 탭 폴더에서 정리)
                 try:
