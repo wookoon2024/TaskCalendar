@@ -6688,7 +6688,19 @@ class MainWindow(QMainWindow):
                     elif action == "attach_work_folder":
                         QTimer.singleShot(200, lambda: dlg.import_attachment_folder(target_path))
                 return
-            elif action == "sync_memos":
+            # 모든 외부 신호(등록, 백업, 가져오기 등) 수신 시 창을 즉시 정상화 및 포그라운드로 복원
+            if self.isMinimized() or not self.isVisible():
+                self._restore_window_state()
+            else:
+                if self.isMaximized():
+                    self.showMaximized()
+                else:
+                    self.show()
+                self.raise_()
+                self.activateWindow()
+            force_window_to_foreground(int(self.winId()))
+
+            if action == "sync_memos":
                 # 브라우저 확장 프로그램에서 전달된 페이지 메모 데이터 work/browser/page_memos.json에 저장 및 병합
                 try:
                     raw_json = data.get("data", "")
@@ -6717,25 +6729,26 @@ class MainWindow(QMainWindow):
                         added, updated = work_files.merge_browser_memos(memos_to_merge, overwrite_existing=True)
                         bm_path = work_files.browser_memos_path()
                         logger.info(f"[receive_external_entry] Synced browser memos -> {bm_path} (+{added}, ~{updated})")
-                        self.show_toast(f"브라우저 페이지 메모 {len(memos_to_merge)}건이 바로업무(work/browser)에 저장되었습니다.")
+                        if getattr(self, "tray_icon", None):
+                            self.tray_icon.showMessage(
+                                "바로업무 브라우저 메모 백업",
+                                f"페이지 메모 {len(memos_to_merge)}건이 바로업무(work/browser)에 저장되었습니다.",
+                            )
+                        from PySide6.QtWidgets import QMessageBox
+                        QMessageBox.information(
+                            self,
+                            "브라우저 메모 백업 완료",
+                            f"브라우저 페이지 메모 {len(memos_to_merge)}건이 바로업무에 안전하게 저장되었습니다.\n\n"
+                            f"• 새로 추가: {added}건\n"
+                            f"• 내용 갱신: {updated}건\n"
+                            f"• 저장 파일: work/browser/page_memos.json",
+                        )
                 except Exception as ex:
                     logger.warning(f"[receive_external_entry] Failed to sync browser memos: {ex}")
                 return
             elif action != "add":
                 logger.warning(f"[receive_external_entry] Unknown action: {action}")
                 return
-
-            # Force bring the main window to the foreground preserving maximized/normal state
-            if self.isMinimized() or not self.isVisible():
-                self._restore_window_state()
-            else:
-                if self.isMaximized():
-                    self.showMaximized()
-                else:
-                    self.show()
-                self.raise_()
-                self.activateWindow()
-            force_window_to_foreground(int(self.winId()))
 
             entry_type_str = data.get("type", "schedule")
             title = data.get("title", "").strip()

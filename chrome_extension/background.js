@@ -1565,7 +1565,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     chrome.tabs.create({ url: urlToOpen, active: false }, (t) => {
       setTimeout(() => {
         if (t && t.id) chrome.tabs.remove(t.id).catch(() => {});
-      }, 1500);
+      }, 8000);
     });
     sendResponse({ success: true });
     return true;

@@ -1552,36 +1552,8 @@ document.addEventListener('DOMContentLoaded', () => {
     els.btnSubmit.disabled = true;
     els.btnSubmit.textContent = '전송 중...';
 
-    // 보던 원래 웹페이지(originTabId)에서 직접 프로토콜 호출 (새 탭 생성 없이 보던 창에서 'Calendar.exe 열기' 안내 표시)
-    if (originTabId) {
-      chrome.scripting.executeScript({
-        target: { tabId: originTabId },
-        func: (protocolUrl) => {
-          try {
-            const a = document.createElement('a');
-            a.href = protocolUrl;
-            a.style.display = 'none';
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(() => { a.remove(); }, 2000);
-          } catch (e) {
-            try {
-              const ifr = document.createElement('iframe');
-              ifr.style.display = 'none';
-              ifr.src = protocolUrl;
-              document.body.appendChild(ifr);
-              setTimeout(() => { ifr.remove(); }, 2000);
-            } catch (err) {}
-          }
-        },
-        args: [url]
-      }).catch(() => {
-        // 특수 페이지(chrome:// 등)로 인해 스크립트 주입 불가 시에만 백그라운드로 전송
-        chrome.runtime.sendMessage({ action: "openProtocolUrl", url: url }).catch(() => {});
-      });
-    } else {
-      chrome.runtime.sendMessage({ action: "openProtocolUrl", url: url }).catch(() => {});
-    }
+    // 백그라운드 openProtocolUrl을 통해 Windows OS로 확실하고 안정적으로 전달
+    chrome.runtime.sendMessage({ action: "openProtocolUrl", url: url }).catch(() => {});
 
     els.btnSubmit.textContent = '✅ 전송 완료!';
     els.btnSubmit.style.background = '#10B981';

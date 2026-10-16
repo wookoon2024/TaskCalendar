@@ -295,6 +295,26 @@
     var jsonStr = JSON.stringify(payload);
     var encoded = encodeURIComponent(jsonStr);
     var targetUrl = 'taskcalendar://sync_memos?data=' + encoded;
+
+    // Windows 커맨드라인 길이 한계(약 8KB)를 넘을 경우 파일 다운로드로 안전 안내
+    if (targetUrl.length > 7000) {
+      toast('메모 데이터가 커서 파일로 다운로드합니다. 바로업무의 [메모 가져오기]에서 불러오세요.');
+      exportData();
+      return;
+    }
+
+    try {
+      var ifr = document.createElement('iframe');
+      ifr.style.display = 'none';
+      ifr.src = targetUrl;
+      document.body.appendChild(ifr);
+      setTimeout(function () { ifr.remove(); }, 5000);
+    } catch (e) {
+      try {
+        window.location.href = targetUrl;
+      } catch (e2) {}
+    }
+
     chrome.runtime.sendMessage({ action: 'openProtocolUrl', url: targetUrl }, function (res) {
       toast('바로업무(work/browser)로 전체 메모를 백업 전송했습니다.');
     });

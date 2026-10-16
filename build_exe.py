@@ -92,12 +92,18 @@ def main() -> None:
     if res.returncode == 0:
         print("\n=== Build Completed Successfully! ===")
         dist_dir = ROOT / "dist"
-        dist_exe = dist_dir / "바로업무.exe"
-        if dist_exe.exists():
-            print(f"Output executable: {dist_exe} ({dist_exe.stat().st_size:,} bytes)")
+        cal_exe = dist_dir / "calendar.exe"
+        baro_exe = dist_dir / "바로업무.exe"
+        import shutil
+        if cal_exe.exists() and not baro_exe.exists():
+            shutil.copy2(cal_exe, baro_exe)
+        elif baro_exe.exists() and not cal_exe.exists():
+            shutil.copy2(baro_exe, cal_exe)
+        for exe_f in [baro_exe, cal_exe]:
+            if exe_f.exists():
+                print(f"Output executable: {exe_f} ({exe_f.stat().st_size:,} bytes)")
         ext_zip = ROOT / "chrome_extension.zip"
         if ext_zip.exists():
-            import shutil
             shutil.copy2(ext_zip, dist_dir / "chrome_extension.zip")
             print(f"Output extension: {dist_dir / 'chrome_extension.zip'} ({ext_zip.stat().st_size:,} bytes)")
     else:
