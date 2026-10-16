@@ -6782,15 +6782,23 @@ class WorkManagerDialog(QDialog):
         self.meta_assignee_input.setText(sheet.assignee)
         self.meta_deadline_input.setText(sheet.deadline)
 
-        # work/ 파일이 있으면 파일 내용을 우선 반영(한글 등 외부 편집 반영 = 파일이 원본)
+        # work/ 디스크 파일이 본체: 항상 디스크 파일을 직접 읽어 에디터에 로드
         try:
-            wf_path = work_files.find_sheet_file(self._group_no(sheet.category), self._cat_path(sheet.category), sheet.title or "무제 업무")
-            if wf_path and work_files.is_native_file(wf_path):
-                data = wf_path.read_bytes()
-                if data and data != sheet.hwpx_blob:
-                    sheet.hwpx_blob = data
-        except Exception:
-            pass
+            wf_path = work_files.find_sheet_file(self._group_no(sheet.category, sheet.category_id), self._cat_path(sheet.category, sheet.category_id), sheet.title or "무제 업무")
+            if wf_path and wf_path.exists():
+                if work_files.is_native_file(wf_path):
+                    sheet.hwpx_blob = wf_path.read_bytes()
+                elif work_files.is_text_file(wf_path):
+                    sheet.content_text = wf_path.read_text(encoding="utf-8", errors="replace")
+            else:
+                # 디스크에 파일이 없으면 즉시 표준 빈 .hwpx 파일을 디스크에 생성하여 실체화
+                dest = work_files.sheet_hwpx_path(self._group_no(sheet.category, sheet.category_id), self._cat_path(sheet.category, sheet.category_id), sheet.title or "무제 업무")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                blob = sheet.hwpx_blob or work_files.build_empty_hwpx(sheet.title or "새 업무")
+                dest.write_bytes(blob)
+                sheet.hwpx_blob = blob
+        except Exception as e:
+            logger.warning("Failed to load/ensure sheet disk file: %s", e)
 
         # rhwp 에디터로 본문 로드 (HWPX 바이너리가 있으면 무손실 원본 로드, 없으면 텍스트로 로드)
         self.editor.load_document(
@@ -6888,6 +6896,10 @@ class WorkManagerDialog(QDialog):
                 if hwpx_bytes:
                     current.hwpx_blob = hwpx_bytes
 
+                # 1. 파일 시스템에 실제 .hwpx 문서로 영구 저장 (파일이 본체)
+                self._persist_sheet_file(current)
+
+                # 2. DB에는 본문 내용을 넣지 않고 제목/분류/주기/담당자 메타데이터 및 연결고리만 보관
                 if self.repository:
                     current.db_id = self.repository.upsert_work_item(
                         work_id=current.db_id,
@@ -6897,12 +6909,11 @@ class WorkManagerDialog(QDialog):
                         cycle=current.cycle,
                         assignee=current.assignee,
                         deadline=current.deadline,
-                        content_text=current.content_text,
-                        content_html=current.content_html,
-                        hwpx_blob=current.hwpx_blob,
+                        content_text="",
+                        content_html="",
+                        hwpx_blob=None,
                         sort_order=self._all_sheets.index(current) if current in self._all_sheets else 0,
                     )
-                    self._persist_sheet_file(current)
                 current.is_dirty = False
                 self._update_tab_title(current)
                 self._refresh_category_tree()
@@ -7321,8 +7332,8 @@ class WorkManagerDialog(QDialog):
                 category_name=target_cat_name,
                 category_id=target_cat_id,
                 cycle="수시",
-                content_text=new_title,
-                hwpx_blob=hwpx_blob,
+                content_text="",
+                hwpx_blob=None,
                 sort_order=len(self._all_sheets) + 1,
             )
         new_sheet = WorkSheetData(
@@ -8002,9 +8013,33 @@ class WorkManagerDialog(QDialog):
 
     def _work_startup_sync(self) -> None:
         """업무문서 파일화·첨부 이관 후 work/ 폴더와 DB 동기화를 점검."""
+        self._ensure_all_sheets_exist_on_disk()
         self._maybe_migrate_work_to_files()
         self._maybe_migrate_attachments()
         self._check_work_file_sync()
+
+    def _ensure_all_sheets_exist_on_disk(self) -> None:
+        """DB에 등록된 모든 업무문서가 work/ 폴더에 실제 .hwpx 파일로 존재하도록 보장"""
+        for sheet in self._all_sheets:
+            try:
+                dest = work_files.sheet_hwpx_path(
+                    self._group_no(sheet.category, sheet.category_id),
+                    self._cat_path(sheet.category, sheet.category_id),
+                    sheet.title or "무제 업무"
+                )
+                if not dest.exists():
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    blob = sheet.hwpx_blob or work_files.build_empty_hwpx(sheet.title or "새 업무")
+                    dest.write_bytes(blob)
+                    sheet.hwpx_blob = blob
+                old_txt = dest.with_suffix(".txt")
+                if old_txt.exists():
+                    try:
+                        old_txt.unlink()
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning("Failed to ensure disk file for sheet %s: %s", sheet.title, e)
 
     def _maybe_migrate_attachments(self) -> None:
         """기존 첨부파일을 work/ 트리로 1회 이관(파일 이동 + DB 경로 갱신)."""
@@ -8855,8 +8890,8 @@ class WorkManagerDialog(QDialog):
                 category_name=cat_name,
                 category_id=cat_id,
                 cycle="수시",
-                content_text=new_title,
-                hwpx_blob=hwpx_blob,
+                content_text="",
+                hwpx_blob=None,
                 sort_order=len(self._all_sheets) + 1,
             )
         new_sheet = WorkSheetData(
