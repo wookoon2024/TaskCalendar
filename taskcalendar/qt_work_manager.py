@@ -1583,7 +1583,7 @@ class WorkDocumentImportDialog(QDialog):
                 return self.path.read_text(encoding="utf-8", errors="ignore")[:500]
             if ext == ".hwpx":
                 import zipfile
-                import xml.etree.ElementTree as ET
+                import defusedxml.ElementTree as ET
                 with zipfile.ZipFile(self.path, "r") as zf:
                     for name in sorted(zf.namelist()):
                         if name.startswith("Contents/section") and name.endswith(".xml"):
@@ -8036,7 +8036,7 @@ class WorkManagerDialog(QDialog):
                     "category_id": cat_id,
                     "group": self._group_no(cat_name, cat_id),
                     "cat_path": self._cat_path(cat_name, cat_id),
-                    "sha1": hashlib.sha1(blob).hexdigest() if blob else None,
+                    "sha256": hashlib.sha256(blob).hexdigest() if blob else None,
                     "hwpx_blob": blob,
                     "content_text": ctext,
                 })

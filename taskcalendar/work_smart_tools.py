@@ -226,7 +226,7 @@ def extract_text_from_hwpx_blob(hwpx_blob: bytes | None) -> str:
     if not hwpx_blob:
         return ""
     import io
-    import xml.etree.ElementTree as ET
+    import defusedxml.ElementTree as ET
     lines: list[str] = []
     try:
         with zipfile.ZipFile(io.BytesIO(hwpx_blob), "r") as zf:
@@ -1215,7 +1215,7 @@ def extract_quick_file_snippet(file_path: Path, max_chars: int = 220) -> str:
             raw = file_path.read_text(encoding="utf-8", errors="ignore")
             return re.sub(r"\s+", " ", raw).strip()[:max_chars]
         if ext == ".hwpx":
-            import xml.etree.ElementTree as ET
+            import defusedxml.ElementTree as ET
             with zipfile.ZipFile(file_path, "r") as zf:
                 for name in sorted(zf.namelist()):
                     if name.startswith("Contents/section") and name.endswith(".xml"):
@@ -1224,7 +1224,7 @@ def extract_quick_file_snippet(file_path: Path, max_chars: int = 220) -> str:
                         texts = [t.strip() for t in root.itertext() if t and t.strip()]
                         return " ".join(texts)[:max_chars]
         if ext == ".docx":
-            import xml.etree.ElementTree as ET
+            import defusedxml.ElementTree as ET
             with zipfile.ZipFile(file_path, "r") as zf:
                 if "word/document.xml" in zf.namelist():
                     xml_bytes = zf.read("word/document.xml")

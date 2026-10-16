@@ -190,7 +190,6 @@ def _fetch(target: str, term: str, timeout: int) -> list[LawSearchResult]:
             },
             headers=_HEADERS,
             timeout=timeout,
-            verify=False,
         )
     except Exception:
         return []
@@ -319,15 +318,11 @@ def get_law_detail(mst: str, target: str = "law", timeout: int = 15) -> dict | N
             },
             headers=_HEADERS,
             timeout=timeout,
-            verify=False,
         )
         if resp.status_code != 200:
             return None
 
-        try:
-            import defusedxml.ElementTree as ET
-        except ImportError:
-            import xml.etree.ElementTree as ET
+        import defusedxml.ElementTree as ET
 
         root = ET.fromstring(resp.content)
         law_name = root.findtext(".//기본정보/법령명_한글") or root.findtext(".//법령명_한글") or ""

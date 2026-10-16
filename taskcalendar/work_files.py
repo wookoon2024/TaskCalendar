@@ -314,15 +314,18 @@ def migrate_items_to_files(items: list[dict], writer, progress_cb=None) -> int:
 _ATTACH_SUFFIX = "_첨부파일"
 
 
-def file_sha1(path: Path | str) -> str:
+def file_sha256(path: Path | str) -> str:
     """파일 내용 해시(rename 자동 인식용)"""
     import hashlib
 
-    h = hashlib.sha1()
+    h = hashlib.sha256()
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+file_sha1 = file_sha256
 
 
 SYSTEM_WORK_DIRS = {"attachments", "attach", "browser", "templates"}
@@ -353,12 +356,12 @@ def scan_work_files(known_categories: set | None = None) -> list[dict]:
             if p.is_file():
                 out.append({
                     "path": p, "group": group, "category": cat, "stem": p.stem,
-                    "ext": p.suffix.lower(), "size": p.stat().st_size, "sha1": file_sha1(p), "is_dir": False,
+                    "ext": p.suffix.lower(), "size": p.stat().st_size, "sha256": file_sha256(p), "sha1": file_sha256(p), "is_dir": False,
                 })
             elif p.is_dir() and len(rel_parts) >= 3 and p.name not in known:
                 out.append({
                     "path": p, "group": group, "category": cat, "stem": p.name,
-                    "ext": "", "size": 0, "sha1": "", "is_dir": True,
+                    "ext": "", "size": 0, "sha256": "", "sha1": "", "is_dir": True,
                 })
         except Exception:
             continue
@@ -379,7 +382,7 @@ def scan_work_files(known_categories: set | None = None) -> list[dict]:
 def plan_reconcile(db_items: list[dict], disk_files: list[dict]) -> dict:
     """
     DB 업무문서와 work/ 파일을 비교한다.
-    db_items: [{"id","title","category_name","sha1"}] (sha1 = blob 해시)
+    db_items: [{"id","title","category_name","sha256"}] (sha256 = blob 해시)
     disk_files: scan_work_files() 결과
     반환: {"matched":[(db,f)], "renamed":[(db,f)], "missing":[db], "new":[f]}
     - 경로(분류/제목)가 같으면 matched
@@ -407,8 +410,8 @@ def plan_reconcile(db_items: list[dict], disk_files: list[dict]) -> dict:
 
     renamed_db: set[int] = set()
     for db in missing_candidates:
-        sha = db.get("sha1")
-        hit = next((f for f in disk_files if id(f) not in used and sha and f["sha1"] == sha), None)
+        sha = db.get("sha256") or db.get("sha1")
+        hit = next((f for f in disk_files if id(f) not in used and sha and (f.get("sha256") == sha or f.get("sha1") == sha)), None)
         if hit:
             used.add(id(hit))
             renamed.append((db, hit))
