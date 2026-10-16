@@ -6,21 +6,6 @@ import logging
 import sys
 from urllib.parse import parse_qs, unquote, urlparse
 
-from PySide6.QtCore import QTimer
-from PySide6.QtNetwork import QLocalServer, QLocalSocket
-
-from taskcalendar import fonts
-from taskcalendar.desktop_services import (
-    default_shortcut,
-    default_memo_shortcut,
-    is_startup_enabled,
-    set_startup_enabled,
-)
-from taskcalendar.paths import runtime_root
-from taskcalendar.qt_entry_dialog_bridge import ensure_qt_application
-from taskcalendar.qt_main_window import MainWindow, app_icon
-from taskcalendar.storage import EncryptedRepository
-
 logger = logging.getLogger(__name__)
 
 ERROR_ALREADY_EXISTS = 183
@@ -80,6 +65,29 @@ def _acquire_single_instance_lock() -> bool:
         return True
 
 
+def _parse_query_params_to_entry_data(action: str, query_string: str) -> dict:
+    params = parse_qs(query_string, keep_blank_values=True)
+    if action == "sync_memos":
+        payload_data = params.get("data", [""])[0]
+        return {
+            "action": "sync_memos",
+            "data": unquote(payload_data),
+        }
+    return {
+        "action": action or "add",
+        "type": params.get("type", ["schedule"])[0],
+        "title": unquote(params.get("title", [""])[0]),
+        "department": unquote(params.get("department", [""])[0] or params.get("dept", [""])[0]),
+        "author": unquote(params.get("author", [""])[0]),
+        "category": unquote(params.get("category", [""])[0]),
+        "status": unquote(params.get("status", [""])[0]),
+        "desc": unquote(params.get("desc", [""])[0]),
+        "url": unquote(params.get("url", [""])[0]),
+        "date": params.get("date", [""])[0],
+        "all_day": params.get("all_day", ["1"])[0],
+    }
+
+
 def _parse_protocol_url(argv: list[str]) -> dict | None:
     """Parse taskcalendar:// URL or CLI arguments (--import-work, --attach-work)."""
     if len(argv) < 2:
@@ -114,20 +122,7 @@ def _parse_protocol_url(argv: list[str]) -> dict | None:
         if arg.startswith("taskcalendar://"):
             try:
                 parsed = urlparse(arg)
-                params = parse_qs(parsed.query, keep_blank_values=True)
-                data = {
-                    "action": parsed.netloc or "add",
-                    "type": params.get("type", ["schedule"])[0],
-                    "title": unquote(params.get("title", [""])[0]),
-                    "department": unquote(params.get("department", [""])[0] or params.get("dept", [""])[0]),
-                    "author": unquote(params.get("author", [""])[0]),
-                    "category": unquote(params.get("category", [""])[0]),
-                    "status": unquote(params.get("status", [""])[0]),
-                    "desc": unquote(params.get("desc", [""])[0]),
-                    "url": unquote(params.get("url", [""])[0]),
-                    "date": params.get("date", [""])[0],
-                    "all_day": params.get("all_day", ["1"])[0],
-                }
+                data = _parse_query_params_to_entry_data(parsed.netloc or "add", parsed.query)
                 logger.info(f"[_parse_protocol_url] Parsed: {data}")
                 return data
             except Exception as e:
@@ -137,17 +132,43 @@ def _parse_protocol_url(argv: list[str]) -> dict | None:
 
 
 def _send_to_existing_instance(data: dict) -> bool:
-    """Send data to the already-running primary instance via QLocalSocket."""
+    """Send data to the already-running primary instance via Win32 Named Pipe (or QLocalSocket fallback)."""
     try:
         # Explicitly permit the target process to set foreground window
         try:
-            import ctypes
             ctypes.windll.user32.AllowSetForegroundWindow(-1)
         except Exception:
             pass
 
-        # Need a minimal QApplication for QLocalSocket to work
-        app = ensure_qt_application()
+        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+        # 1. Fast path: write directly to QLocalServer's underlying Windows Named Pipe (\\.\pipe\TaskCalendar_IPC)
+        # No PySide6 import or QApplication initialization required (~5ms)
+        if sys.platform == "win32":
+            try:
+                k32 = ctypes.windll.kernel32
+                pipe_name = rf"\\.\pipe\{IPC_SERVER_NAME}"
+                GENERIC_WRITE = 0x40000000
+                OPEN_EXISTING = 3
+                INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+                k32.CreateFileW.restype = ctypes.c_void_p
+                handle = k32.CreateFileW(pipe_name, GENERIC_WRITE, 0, None, OPEN_EXISTING, 0, None)
+                if handle and handle != INVALID_HANDLE_VALUE:
+                    written = ctypes.c_ulong(0)
+                    ok = k32.WriteFile(handle, payload, len(payload), ctypes.byref(written), None)
+                    k32.FlushFileBuffers(handle)
+                    k32.CloseHandle(handle)
+                    if ok:
+                        logger.info(f"[IPC Pipe] Sent data to existing instance: {data}")
+                        return True
+            except Exception:
+                pass
+
+        # 2. Fallback path: QLocalSocket
+        from PySide6.QtNetwork import QLocalSocket
+        from taskcalendar.qt_entry_dialog_bridge import ensure_qt_application
+
+        ensure_qt_application()
 
         socket = QLocalSocket()
         socket.connectToServer(IPC_SERVER_NAME)
@@ -155,7 +176,6 @@ def _send_to_existing_instance(data: dict) -> bool:
             logger.warning(f"[IPC] Could not connect to server: {socket.errorString()}")
             return False
 
-        payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
         socket.write(payload)
         socket.flush()
         socket.waitForBytesWritten(IPC_TIMEOUT_MS)
@@ -167,8 +187,11 @@ def _send_to_existing_instance(data: dict) -> bool:
         return False
 
 
-def _start_local_server(window: MainWindow) -> QLocalServer:
+def _start_local_server(window):
     """Start QLocalServer to receive data from new instances."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtNetwork import QLocalServer
+
     # Remove any stale server
     QLocalServer.removeServer(IPC_SERVER_NAME)
 
@@ -215,6 +238,20 @@ def run() -> None:
     _configure_logging()
     _enable_windows_dpi_awareness()
     _set_windows_app_id()
+
+    from PySide6.QtCore import QTimer
+    from taskcalendar import fonts
+    from taskcalendar.desktop_services import (
+        default_memo_shortcut,
+        default_shortcut,
+        is_startup_enabled,
+        set_startup_enabled,
+    )
+    from taskcalendar.paths import runtime_root
+    from taskcalendar.qt_entry_dialog_bridge import ensure_qt_application
+    from taskcalendar.qt_main_window import MainWindow, app_icon
+    from taskcalendar.storage import EncryptedRepository
+
     app = ensure_qt_application()
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("바로업무")

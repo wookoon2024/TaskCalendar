@@ -14,5 +14,6 @@ def _ensure_assets() -> None:
 
 
 if __name__ == "__main__":
-    _ensure_assets()
+    if len(sys.argv) < 2:
+        _ensure_assets()
     run()

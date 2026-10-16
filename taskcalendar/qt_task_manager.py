@@ -1433,8 +1433,8 @@ class TaskManagerDialog(QDialog):
         # 스킨/테마 스타일 일괄 적용
         self._apply_dialog_styles()
 
-        # 기본적으로 전체 탭 활성화
-        self._set_active_tab("all")
+        # 저장된 필터(분류, 상태, 기간, 시작일, 종료일, 전체/등록/진행/완료 탭) 복원
+        self._restore_filter_state()
 
     def _apply_dialog_styles(self) -> None:
         """현재 self.palette를 바탕으로 창 배경, 버튼, 툴바, 탭, 테이블 스타일 일괄 갱신"""
@@ -2117,6 +2117,91 @@ class TaskManagerDialog(QDialog):
         self._filtered_tasks = filtered
         self._sort_tasks()
         self._render_table()
+        self._save_filter_state(persist_disk=False)
+
+    def _save_filter_state(self, persist_disk: bool = False) -> None:
+        """문서관리 필터(분류, 상태, 기간, 시작일, 종료일, 탭) 상태를 저장소에 기록"""
+        if getattr(self, "_restoring_filters", False) or not self.repository:
+            return
+        try:
+            state = {
+                "category": self.category_combo.currentText() if hasattr(self, "category_combo") else "분류",
+                "status": self.status_combo.currentText() if hasattr(self, "status_combo") else "상태",
+                "period": self.period_combo.currentText() if hasattr(self, "period_combo") else "기간",
+                "start_date": self.start_date_edit.date().toString("yyyy-MM-dd") if hasattr(self, "start_date_edit") else "",
+                "end_date": self.end_date_edit.date().toString("yyyy-MM-dd") if hasattr(self, "end_date_edit") else "",
+                "tab": getattr(self, "_current_tab", "all") or "all",
+            }
+            self.repository.set_setting("task_manager_filter_state", json.dumps(state, ensure_ascii=False))
+            if persist_disk:
+                self.repository.save()
+        except Exception:
+            pass
+
+    def _restore_filter_state(self) -> None:
+        """저장된 문서관리 필터(분류, 상태, 기간, 시작일, 종료일, 탭) 상태 복원"""
+        self._restoring_filters = True
+        try:
+            raw = self.repository.get_setting("task_manager_filter_state") if self.repository else None
+            state = json.loads(raw) if raw else None
+            if not isinstance(state, dict):
+                self._current_tab = "all"
+                self._update_tab_styles()
+                return
+
+            self.category_combo.blockSignals(True)
+            self.status_combo.blockSignals(True)
+            self.period_combo.blockSignals(True)
+            self.start_date_edit.blockSignals(True)
+            self.end_date_edit.blockSignals(True)
+            try:
+                saved_cat = state.get("category", "")
+                if saved_cat:
+                    idx = self.category_combo.findText(saved_cat)
+                    if idx >= 0:
+                        self.category_combo.setCurrentIndex(idx)
+
+                saved_tab = state.get("tab", "all")
+                if saved_tab not in ("all", "reg", "prog", "done"):
+                    saved_tab = "all"
+                self._current_tab = saved_tab
+
+                saved_status = state.get("status", "")
+                if saved_status:
+                    idx = self.status_combo.findText(saved_status)
+                    if idx >= 0:
+                        self.status_combo.setCurrentIndex(idx)
+
+                saved_period = state.get("period", "")
+                if saved_period:
+                    idx = self.period_combo.findText(saved_period)
+                    if idx >= 0:
+                        self.period_combo.setCurrentIndex(idx)
+
+                saved_start = state.get("start_date", "")
+                if saved_start:
+                    qd_s = QDate.fromString(saved_start, "yyyy-MM-dd")
+                    if qd_s.isValid():
+                        self.start_date_edit.setDate(qd_s)
+
+                saved_end = state.get("end_date", "")
+                if saved_end:
+                    qd_e = QDate.fromString(saved_end, "yyyy-MM-dd")
+                    if qd_e.isValid():
+                        self.end_date_edit.setDate(qd_e)
+            finally:
+                self.category_combo.blockSignals(False)
+                self.status_combo.blockSignals(False)
+                self.period_combo.blockSignals(False)
+                self.start_date_edit.blockSignals(False)
+                self.end_date_edit.blockSignals(False)
+
+            self._update_tab_styles()
+        except Exception:
+            self._current_tab = "all"
+            self._update_tab_styles()
+        finally:
+            self._restoring_filters = False
 
     def _update_header_labels(self) -> None:
         """현재 정렬 컬럼 및 방향에 따라 헤더 라벨에 정렬 화살표(▲/▼) 표시"""
@@ -2243,6 +2328,7 @@ class TaskManagerDialog(QDialog):
         self._adjust_columns_to_fill_width()
 
     def closeEvent(self, event) -> None:
+        self._save_filter_state(persist_disk=False)
         self._save_column_widths()
         super().closeEvent(event)
 

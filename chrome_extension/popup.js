@@ -1585,6 +1585,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     els.btnSubmit.textContent = '✅ 전송 완료!';
     els.btnSubmit.style.background = '#10B981';
-    setTimeout(() => window.close(), 500);
+    setTimeout(() => window.close(), 250);
   });
 });

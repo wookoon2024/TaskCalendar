@@ -2838,19 +2838,7 @@ class EntryDialog(QDialog):
                 self._save_timer.stop()
 
             parent = getattr(self, "_owner_window", None) or self.parent()
-
-            # Seamlessly transfer focus to the next memo before hiding this one
-            # to prevent Windows from falling back to the main calendar and causing flicker
-            if parent and hasattr(parent, "_active_memo_dialogs"):
-                remaining = [
-                    d for d in parent._active_memo_dialogs.values()
-                    if d is not None and d is not self and d.isVisible()
-                ]
-                if remaining:
-                    remaining[-1].raise_()
-                    remaining[-1].activateWindow()
-
-            self.hide()
+            self._hide_without_raising_other_memos()
 
             if self.entry and self.entry.entry_id and parent and hasattr(parent, "repository"):
                 target_id = self.entry.entry_id
@@ -3632,24 +3620,62 @@ class EntryDialog(QDialog):
             if parent and hasattr(parent, "repository"):
                 parent.repository.set_setting(f"memo_opacity_{self.entry.entry_id}", str(percent))
 
+    def _hide_without_raising_other_memos(self) -> None:
+        """플로팅 메모를 닫을 때 뒤에 숨어 있던 다른 일반 메모가 Windows 포커스/Z-order 전이로 인해 앞으로 튀어나오지 않도록 Z-order 보존 후 숨김"""
+        parent = getattr(self, "_owner_window", None) or self.parent()
+        saved_z: list[tuple[int, int]] = []
+        try:
+            user32 = ctypes.windll.user32
+            user32.GetWindow.restype = ctypes.c_void_p
+            user32.GetWindow.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+            GW_HWNDPREV = 3
+            self_hwnd = int(self.winId())
+            if parent:
+                other_dlgs = []
+                for attr in ("_active_memo_dialogs", "_active_group_dialogs"):
+                    dmap = getattr(parent, attr, None)
+                    if isinstance(dmap, dict):
+                        for d in dmap.values():
+                            if d is not None and d is not self and d.isVisible() and not getattr(d, "_is_floating", False):
+                                other_dlgs.append(d)
+                for d in other_dlgs:
+                    dh = int(d.winId())
+                    prev_h = user32.GetWindow(ctypes.c_void_p(dh), GW_HWNDPREV)
+                    while prev_h and int(prev_h) == self_hwnd:
+                        prev_h = user32.GetWindow(ctypes.c_void_p(prev_h), GW_HWNDPREV)
+                    if prev_h:
+                        saved_z.append((dh, int(prev_h)))
+        except Exception:
+            saved_z = []
+
+        self.hide()
+
+        if saved_z:
+            def _restore_z():
+                try:
+                    u32 = ctypes.windll.user32
+                    SWP_NOMOVE = 0x0002
+                    SWP_NOSIZE = 0x0001
+                    SWP_NOACTIVATE = 0x0010
+                    for dh, prev_h in saved_z:
+                        u32.SetWindowPos(
+                            ctypes.c_void_p(dh),
+                            ctypes.c_void_p(prev_h),
+                            0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        )
+                except Exception:
+                    pass
+            _restore_z()
+            QTimer.singleShot(0, _restore_z)
+
     def _close_memo(self) -> None:
         if getattr(self, "_closing", False):
             return
         self._closing = True
 
         parent = getattr(self, "_owner_window", None) or self.parent()
-
-        # Seamlessly transfer focus to the next memo before hiding this one
-        if parent and hasattr(parent, "_active_memo_dialogs"):
-            remaining = [
-                d for d in parent._active_memo_dialogs.values()
-                if d is not None and d is not self and d.isVisible()
-            ]
-            if remaining:
-                remaining[-1].raise_()
-                remaining[-1].activateWindow()
-
-        self.hide()
+        self._hide_without_raising_other_memos()
         if self.entry_type == EntryType.MEMO:
             if parent and getattr(parent, "_is_app_quitting", False):
                 self.close()
@@ -7093,7 +7119,7 @@ class SettingsDialog(QDialog):
 
         ctx_desc = QLabel(
             "문서 파일(*.hwp, *.hwpx, *.pdf, *.docx 등) 또는 폴더를 마우스 우클릭했을 때\n"
-            "'TaskCalendar 업무로 등록' 및 'TaskCalendar 업무 첨부파일로 등록' 메뉴를 제공합니다."
+            "'바로업무 업무로 등록' 및 '바로업무 첨부파일로 등록' 메뉴를 제공합니다."
         )
         ctx_desc.setObjectName("subtitle")
         ctx_desc.setWordWrap(True)

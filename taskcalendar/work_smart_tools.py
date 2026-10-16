@@ -501,7 +501,7 @@ class PersonalInfoCheckDialog(QDialog):
                 opacity: 0.92;
             }}
         """)
-        self.btn_scan.clicked.connect(self.run_scan_on_checked_sheets)
+        self.btn_scan.clicked.connect(lambda: self.run_scan_on_checked_sheets(manual=True))
         left_layout.addWidget(self.btn_scan)
 
         splitter.addWidget(left_frame)
@@ -625,6 +625,16 @@ class PersonalInfoCheckDialog(QDialog):
         self.table.setColumnWidth(3, scale_px(110))
         hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
         self.table.setColumnWidth(4, scale_px(155))
+
+        vp_layout = QVBoxLayout(self.table.viewport())
+        vp_layout.setContentsMargins(16, 16, 16, 16)
+        self.lbl_empty_table = QLabel("검출된 개인정보가 없습니다.")
+        self.lbl_empty_table.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_empty_table.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.lbl_empty_table.setStyleSheet(
+            f"font-family: {font_family_css()}; font-size: 13px; color: {muted}; background: transparent; border: none;"
+        )
+        vp_layout.addWidget(self.lbl_empty_table)
 
         right_layout.addWidget(self.table, 1)
         splitter.addWidget(right_frame)
@@ -831,7 +841,7 @@ class PersonalInfoCheckDialog(QDialog):
             return extract_text_from_hwpx_blob(hwpx_blob).strip()
         return ""
 
-    def run_scan_on_checked_sheets(self) -> None:
+    def run_scan_on_checked_sheets(self, manual: bool = False) -> None:
         """체크된 분류/업무들을 대상으로 개인정보 검출 실행 후 우측 테이블 갱신 (동일 업무 내 동일 개인정보 중복 제거)"""
         checked_sheets = self._get_checked_sheets()
         self.entries = []
@@ -858,6 +868,20 @@ class PersonalInfoCheckDialog(QDialog):
 
         self._rebuild_results_table(len(checked_sheets))
 
+        if manual:
+            if not checked_sheets:
+                QMessageBox.information(
+                    self,
+                    "개인정보 점검 안내",
+                    "점검할 대상 업무가 선택되지 않았습니다.\n좌측 목록에서 점검할 업무를 체크한 후 다시 실행해 주세요.",
+                )
+            elif not self.entries:
+                QMessageBox.information(
+                    self,
+                    "개인정보 점검 결과",
+                    f"선택한 {len(checked_sheets)}개 업무를 검사한 결과,\n검출된 개인정보가 없습니다.",
+                )
+
     def _rebuild_results_table(self, checked_sheet_count: int) -> None:
         pal = self.palette
         panel = pal.get("panel", "#FFFFFF")
@@ -874,14 +898,22 @@ class PersonalInfoCheckDialog(QDialog):
         count = len(self.entries)
         if checked_sheet_count == 0:
             self.lbl_summary_title.setText("• 점검 대상 미선택")
+            if hasattr(self, "lbl_empty_table"):
+                self.lbl_empty_table.setText("좌측 목록에서 점검할 업무를 선택해 주세요.")
+                self.lbl_empty_table.show()
         elif count > 0:
             self.lbl_summary_title.setText(
                 f"• 점검 대상: {checked_sheet_count}개 업무   |   검출 결과: {count}건"
             )
+            if hasattr(self, "lbl_empty_table"):
+                self.lbl_empty_table.hide()
         else:
             self.lbl_summary_title.setText(
                 f"• 점검 대상: {checked_sheet_count}개 업무   |   검출 결과: 없음"
             )
+            if hasattr(self, "lbl_empty_table"):
+                self.lbl_empty_table.setText("검출된 개인정보가 없습니다.")
+                self.lbl_empty_table.show()
 
         row_font = make_ui_font_like(10)
         row_h = max(34, scale_px(34))

@@ -68,7 +68,7 @@
 
     statsEl.innerHTML = '';
     if (keys.length === 0) {
-      listEl.appendChild(h('div', 'empty', '등록된 페이지 메모가 없습니다.\n웹 페이지에서 우클릭 → "해당 페이지 메모 등록" 으로 메모를 추가하세요.'));
+      listEl.appendChild(h('div', 'empty', '등록된 메모가 없습니다.\n웹 페이지에서 우클릭 → "해당 페이지 메모 등록" 으로 메모를 추가하세요.'));
       statsEl.textContent = '';
       return;
     }
@@ -129,6 +129,15 @@
     var left = h('div');
     left.style.flex = '1';
     left.style.minWidth = '0';
+
+    if (memo.title) {
+      var titleEl = h('div', 'pm-memo-title', memo.title);
+      titleEl.style.fontWeight = '700';
+      titleEl.style.fontSize = '12px';
+      titleEl.style.marginBottom = '3px';
+      titleEl.style.color = '#1E293B';
+      left.appendChild(titleEl);
+    }
 
     var text = h('div', 'pm-memo-text');
     if (memo.text) {
@@ -256,7 +265,7 @@
       }
       var pages = parsed && parsed.pages && typeof parsed.pages === 'object' ? parsed.pages : null;
       if (!pages) {
-        toast('올바른 페이지 메모 내보내기 파일이 아닙니다.');
+        toast('올바른 바로업무 메모 내보내기 파일이 아닙니다.');
         return;
       }
 
@@ -276,9 +285,26 @@
     reader.readAsText(file, 'utf-8');
   }
 
+  function syncToApp() {
+    var payload = {
+      app: EXPORT_APP,
+      version: EXPORT_VERSION,
+      exportedAt: new Date().toISOString(),
+      pages: store
+    };
+    var jsonStr = JSON.stringify(payload);
+    var encoded = encodeURIComponent(jsonStr);
+    var targetUrl = 'taskcalendar://sync_memos?data=' + encoded;
+    chrome.runtime.sendMessage({ action: 'openProtocolUrl', url: targetUrl }, function (res) {
+      toast('바로업무(work/browser)로 전체 메모를 백업 전송했습니다.');
+    });
+  }
+
   // ---------------------------------------------------------------- 초기화
   document.getElementById('btn-export').addEventListener('click', exportData);
   document.getElementById('btn-import').addEventListener('click', function () { fileInput.click(); });
+  var btnSync = document.getElementById('btn-sync-app');
+  if (btnSync) btnSync.addEventListener('click', syncToApp);
   fileInput.addEventListener('change', function () {
     if (fileInput.files && fileInput.files[0]) handleFile(fileInput.files[0]);
     fileInput.value = '';

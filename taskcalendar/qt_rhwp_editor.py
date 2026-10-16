@@ -9,7 +9,7 @@ import socket
 import threading
 from pathlib import Path
 from PySide6.QtCore import QObject, QPoint, QTimer, QUrl, Qt, Signal, Slot
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QClipboard, QFont, QGuiApplication, QImage
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -404,6 +404,192 @@ class RhwpEditorWidget(QWidget):
             self._open_law_search()
         elif title.startswith("rhwp_ai:settings:"):
             self._open_ai_settings()
+        elif title.startswith("rhwp_doc:copy_image:"):
+            self.copy_document_as_image()
+        elif title.startswith("rhwp_doc:image_ready:"):
+            if self.web_view:
+                self.web_view.page().runJavaScript(
+                    "JSON.stringify(window._rhwpRenderedDocImage || null)",
+                    self._on_doc_image_rendered,
+                )
+
+    def copy_document_as_image(self) -> None:
+        """현재 작성 중인 한글 문서를 상단 툴바/눈금자/배경 제외하고 본문 용지만 전체(다중 페이지 포함) 통 이미지(PNG)로 클립보드에 복사"""
+        if self._fallback_editor is not None:
+            try:
+                pixmap = self._fallback_editor.grab()
+                if not pixmap.isNull():
+                    clipboard = QGuiApplication.clipboard()
+                    clipboard.setPixmap(pixmap)
+                    self._show_editor_toast("문서 내용이 이미지로 클립보드에 복사되었습니다.")
+                else:
+                    self._show_editor_toast("문서 이미지를 생성하지 못했습니다.")
+            except Exception as e:
+                logger.warning("Fallback editor copy image failed: %s", e)
+                self._show_editor_toast("문서 이미지 복사에 실패했습니다.")
+            return
+
+        if not self.web_view:
+            return
+
+        js_render_all = """
+        (function() {
+            try {
+                var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                var wasm = deps && deps.wasm;
+                if (!wasm || !wasm.doc) {
+                    window._rhwpRenderedDocImage = { ok: false, error: 'WASM 엔진이 준비되지 않았습니다.' };
+                    document.title = 'rhwp_doc:image_ready:' + Date.now();
+                    return;
+                }
+
+                var pageCount = (typeof wasm.pageCount === 'number' && wasm.pageCount > 0) ? wasm.pageCount : 1;
+                var scale = 2.0; // 가독성 최상의 200% 고해상도 렌더링
+                var pageCanvases = [];
+                var maxWidth = 0;
+                var totalHeight = 0;
+                var pageGap = (pageCount > 1) ? Math.round(20 * scale) : 0;
+
+                for (var p = 0; p < pageCount; p++) {
+                    var info = null;
+                    try {
+                        info = wasm.getPageInfo(p);
+                    } catch(e) {}
+                    var pw = Math.round(((info && info.width) || 794) * scale);
+                    var ph = Math.round(((info && info.height) || 1123) * scale);
+
+                    var cv = document.createElement('canvas');
+                    cv.width = pw;
+                    cv.height = ph;
+                    var ctx = cv.getContext('2d');
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(0, 0, pw, ph);
+
+                    try {
+                        if (typeof wasm.renderPageToCanvasFiltered === 'function') {
+                            wasm.renderPageToCanvasFiltered(p, cv, scale, 'all');
+                        } else if (typeof wasm.renderPageToCanvas === 'function') {
+                            wasm.renderPageToCanvas(p, cv, scale);
+                        }
+                    } catch(renderErr) {
+                        console.warn('renderPageToCanvas error for page ' + p, renderErr);
+                    }
+
+                    pageCanvases.push(cv);
+                    if (pw > maxWidth) maxWidth = pw;
+                    totalHeight += ph;
+                }
+
+                // 캔버스 추출 실패 시 DOM 기반 #scroll-content 내부 캔버스 폴백 (UI 툴바/눈금자 원천 제외)
+                if (pageCanvases.length === 0) {
+                    var domCanvases = Array.from(document.querySelectorAll('#scroll-content canvas.document-page-canvas'));
+                    if (domCanvases.length > 0) {
+                        domCanvases.sort(function(a, b) {
+                            return (a.offsetTop || 0) - (b.offsetTop || 0);
+                        });
+                        var dTotalH = 0;
+                        var dMaxW = 0;
+                        for (var d = 0; d < domCanvases.length; d++) {
+                            var dw = domCanvases[d].width || 794;
+                            var dh = domCanvases[d].height || 1123;
+                            if (dw > dMaxW) dMaxW = dw;
+                            dTotalH += dh;
+                        }
+                        var dFinal = document.createElement('canvas');
+                        dFinal.width = dMaxW;
+                        dFinal.height = dTotalH;
+                        var dCtx = dFinal.getContext('2d');
+                        dCtx.fillStyle = '#FFFFFF';
+                        dCtx.fillRect(0, 0, dMaxW, dTotalH);
+                        var dy = 0;
+                        for (var d2 = 0; d2 < domCanvases.length; d2++) {
+                            var dc = domCanvases[d2];
+                            dCtx.drawImage(dc, (dMaxW - dc.width) / 2, dy);
+                            dy += dc.height;
+                        }
+                        var db64 = dFinal.toDataURL('image/png').split(',')[1] || '';
+                        window._rhwpRenderedDocImage = { ok: true, b64: db64, count: domCanvases.length };
+                        document.title = 'rhwp_doc:image_ready:' + Date.now();
+                        return;
+                    }
+                }
+
+                if (pageCanvases.length === 0) {
+                    window._rhwpRenderedDocImage = { ok: false, error: '문서 페이지를 렌더링할 수 없습니다.' };
+                    document.title = 'rhwp_doc:image_ready:' + Date.now();
+                    return;
+                }
+
+                totalHeight += pageGap * (pageCount - 1);
+
+                var finalCanvas = document.createElement('canvas');
+                finalCanvas.width = maxWidth;
+                finalCanvas.height = totalHeight;
+                var fctx = finalCanvas.getContext('2d');
+
+                fctx.fillStyle = '#FFFFFF';
+                fctx.fillRect(0, 0, finalCanvas.width, finalCanvas.height);
+
+                var curY = 0;
+                for (var i = 0; i < pageCanvases.length; i++) {
+                    var pcv = pageCanvases[i];
+                    var ox = Math.round((maxWidth - pcv.width) / 2);
+                    fctx.drawImage(pcv, ox, curY);
+                    curY += pcv.height;
+
+                    if (i < pageCanvases.length - 1 && pageGap > 0) {
+                        // 페이지 구분선
+                        fctx.fillStyle = '#E2E8F0';
+                        fctx.fillRect(0, curY + Math.round(pageGap / 2) - 1, maxWidth, 2);
+                        fctx.fillStyle = '#FFFFFF';
+                        curY += pageGap;
+                    }
+                }
+
+                var b64 = finalCanvas.toDataURL('image/png').split(',')[1] || '';
+                window._rhwpRenderedDocImage = { ok: true, b64: b64, count: pageCount };
+                document.title = 'rhwp_doc:image_ready:' + Date.now();
+            } catch(e) {
+                window._rhwpRenderedDocImage = { ok: false, error: String(e) };
+                document.title = 'rhwp_doc:image_ready:' + Date.now();
+            }
+        })();
+        """
+
+        self.web_view.page().runJavaScript(js_render_all)
+
+    def _on_doc_image_rendered(self, raw_res: Any) -> None:
+        """JS로부터 전체 문서 이미지 결과 수신 후 클립보드에 복사"""
+        if not raw_res:
+            self._show_editor_toast("문서 이미지 생성에 실패했습니다.")
+            return
+        try:
+            data = json.loads(raw_res) if isinstance(raw_res, str) else raw_res
+            if data and data.get("ok") and data.get("b64"):
+                b64_str = data["b64"]
+                png_bytes = base64.b64decode(b64_str)
+                qimg = QImage()
+                if qimg.loadFromData(png_bytes, "PNG"):
+                    clipboard = QGuiApplication.clipboard()
+                    clipboard.setImage(qimg)
+                    pages_cnt = data.get("count", 1)
+                    self._show_editor_toast(f"문서 전체({pages_cnt}쪽)가 이미지로 복사되었습니다.")
+                    return
+            error_msg = (data or {}).get("error", "알 수 없는 오류")
+            logger.warning("Render doc image failed: %s", error_msg)
+            self._show_editor_toast(f"문서 이미지 복사 실패: {error_msg}")
+        except Exception as ex:
+            logger.warning("Rendered doc image parse error: %s", ex)
+            self._show_editor_toast("문서 이미지 복사에 실패했습니다.")
+
+    def _show_editor_toast(self, message: str) -> None:
+        """업무관리자 윈도우의 플로팅 토스트 표시 또는 콘솔 로그"""
+        parent = self.parent()
+        while parent:
+            if hasattr(parent, "show_floating_toast"):
+                parent.show_floating_toast(message)
+                return
+            parent = parent.parent()
 
     def _on_bookmark_text_from_js(self, text: str) -> None:
         cleaned = (text or "").strip()
@@ -1006,8 +1192,38 @@ class RhwpEditorWidget(QWidget):
                 self._fallback_editor.insertPlainText(text)
             return
 
-        # rhwp-studio에서는 선택 영역이 있는 상태에서 paste 이벤트 또는 insertTextAtCursor를 실행하면 선택 영역이 대체됨
-        self.insert_text_at_cursor(text)
+        if not self.web_view:
+            return
+
+        json_text = json.dumps(text)
+        js = f"""
+        (function() {{
+            var text = {json_text};
+            try {{
+                var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                var ih = deps && deps.getInputHandler ? deps.getInputHandler() : null;
+                if (ih && ih.cursor) {{
+                    var hasSel = typeof ih.cursor.hasSelection === 'function' ? ih.cursor.hasSelection() : false;
+                    if (!hasSel && window._rhwpLastSelectionRange && window._rhwpLastSelectionRange.start && window._rhwpLastSelectionRange.end) {{
+                        try {{
+                            ih.cursor.clearSelection();
+                            ih.cursor.moveTo(window._rhwpLastSelectionRange.start);
+                            ih.cursor.setAnchor();
+                            ih.cursor.moveTo(window._rhwpLastSelectionRange.end);
+                            hasSel = typeof ih.cursor.hasSelection === 'function' ? ih.cursor.hasSelection() : false;
+                        }} catch(eRestore) {{}}
+                    }}
+                    if (hasSel && typeof ih.deleteSelection === 'function') {{
+                        ih.deleteSelection();
+                    }}
+                }}
+            }} catch(e) {{}}
+            if (window.rhwpStudio && typeof window.rhwpStudio.insertTextAtCursor === 'function') {{
+                window.rhwpStudio.insertTextAtCursor(text);
+            }}
+        }})();
+        """
+        self.web_view.page().runJavaScript(js)
 
     def open_ai_preset(self, preset: str, selected_text: str = "") -> None:
         """AI 원클릭 프리셋 실행 (웹 에디터 플로팅 DIV 패널 또는 폴백 다이얼로그)"""
@@ -1036,6 +1252,9 @@ class RhwpEditorWidget(QWidget):
         js = f"window._rhwpAiSparkleIcon = {sparkle_json};\n" + """
         (function() {
             function notifyMod() {
+                if (window._rhwpIsLoadingDocument) {
+                    return;
+                }
                 document.title = 'rhwp_modified:' + Date.now();
             }
             window._rhwpNotifyMod = notifyMod;
@@ -1085,7 +1304,7 @@ class RhwpEditorWidget(QWidget):
                 window._hasAiContextMenuHook = true;
 
                 function getWasmSelectionInfo() {
-                    var result = { hasSelection: false, text: '' };
+                    var result = { hasSelection: false, text: '', range: null };
                     try {
                         var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
                         var ih = deps && deps.getInputHandler ? deps.getInputHandler() : null;
@@ -1107,6 +1326,11 @@ class RhwpEditorWidget(QWidget):
 
                             // 1. cursor.getSelectionOrdered() 로 범위 획득 후 wasm.copySelection 호출
                             var range = typeof ih.cursor.getSelectionOrdered === 'function' ? ih.cursor.getSelectionOrdered() : null;
+                            if (range && range.start && range.end) {
+                                try {
+                                    result.range = JSON.parse(JSON.stringify(range));
+                                } catch(eClone) {}
+                            }
                             if (range && range.start && range.end && deps.wasm) {
                                 var start = range.start;
                                 var end = range.end;
@@ -1181,9 +1405,13 @@ class RhwpEditorWidget(QWidget):
                     if (validText) {
                         window._rhwpHasSelection = true;
                         window._rhwpLastSelectedText = validText;
+                        if (info.range) {
+                            window._rhwpLastSelectionRange = info.range;
+                        }
                     } else {
                         window._rhwpHasSelection = false;
                         window._rhwpLastSelectedText = '';
+                        window._rhwpLastSelectionRange = null;
                     }
                     return info;
                 }
@@ -1196,7 +1424,7 @@ class RhwpEditorWidget(QWidget):
                 var aiMenuObserver = new MutationObserver(function(mutations) {
                     for (var m of mutations) {
                         for (var node of m.addedNodes) {
-                            if (node.nodeType === 1 && node.classList && node.classList.contains('context-menu')) {
+                            if (node.nodeType === 1 && node.classList && node.classList.contains('context-menu') && !node.classList.contains('ai-submenu')) {
                                 if (node.querySelector('.ai-menu-item')) continue;
 
                                 captureCurrentSelection();
@@ -1208,13 +1436,11 @@ class RhwpEditorWidget(QWidget):
                                 sep.className = 'md-sep';
                                 node.appendChild(sep);
 
-                                var aiIconHtml = '<img src="' + (window._rhwpAiSparkleIcon || '') + '" style="width:13px; height:13px; margin-right:6px; vertical-align:-2px; display:inline-block;" />';
-
                                 if (hasSel) {
                                     // [선택 영역이 있을 때: 하이라이트(북마크) 등록 및 해제]
                                     var hlItem = document.createElement('div');
                                     hlItem.className = 'md-item ai-menu-item';
-                                    hlItem.innerHTML = '<span class="md-label" style="color:#64748B; display:inline-flex; align-items:center;"><span style="margin-right:6px;">🔖</span>하이라이트(북마크) 등록</span><span class="md-shortcut" style="margin-left:auto; color:#64748B; font-size:10px;">형광펜+북마크</span>';
+                                    hlItem.innerHTML = '<span class="md-label">하이라이트(북마크) 등록</span><span class="md-shortcut" style="margin-left:auto; font-size:10px;">형광펜+북마크</span>';
                                     hlItem.addEventListener('click', function(ev) {
                                         ev.stopPropagation();
                                         ev.preventDefault();
@@ -1237,7 +1463,7 @@ class RhwpEditorWidget(QWidget):
 
                                     var hlClearItem = document.createElement('div');
                                     hlClearItem.className = 'md-item ai-menu-item';
-                                    hlClearItem.innerHTML = '<span class="md-label" style="color:#64748B; display:inline-flex; align-items:center;"><span style="margin-right:6px;">🧹</span>하이라이트 색상 지우기</span>';
+                                    hlClearItem.innerHTML = '<span class="md-label">하이라이트 색상 지우기</span>';
                                     hlClearItem.addEventListener('click', function(ev) {
                                         ev.stopPropagation();
                                         ev.preventDefault();
@@ -1256,7 +1482,18 @@ class RhwpEditorWidget(QWidget):
                                     hlSep.className = 'md-sep';
                                     node.appendChild(hlSep);
 
-                                    // [선택 영역이 있을 때: 원클릭 AI 서식/작성 프리셋 4종 - 투명 AI 아이콘, 일반 굵기]
+                                    // [선택 영역이 있을 때: AI 내용 수정 (마우스 오버 시 4개 프리셋 서브메뉴 표시)]
+                                    node.style.overflow = 'visible';
+
+                                    var aiEditItem = document.createElement('div');
+                                    aiEditItem.className = 'md-item ai-menu-item';
+                                    aiEditItem.style.position = 'relative';
+                                    aiEditItem.innerHTML = '<span class="md-label">AI 내용 수정</span><span class="md-shortcut" style="margin-left:auto; font-size:10px;">▸</span>';
+
+                                    var subMenu = document.createElement('div');
+                                    subMenu.className = 'context-menu ai-submenu';
+                                    subMenu.style.cssText = 'display:none; position:absolute; left:100%; top:-4px; min-width:170px; z-index:10001;';
+
                                     var presets = [
                                         { label: '공문서 개조식 다듬기', preset: 'gongmun' },
                                         { label: '3줄 핵심 요약', preset: 'summary' },
@@ -1267,11 +1504,10 @@ class RhwpEditorWidget(QWidget):
                                     presets.forEach(function(item) {
                                         var pItem = document.createElement('div');
                                         pItem.className = 'md-item ai-menu-item';
-                                        pItem.innerHTML = '<span class="md-label" style="color:#2563EB; display:inline-flex; align-items:center;">' + aiIconHtml + item.label + '</span>';
+                                        pItem.innerHTML = '<span class="md-label">' + item.label + '</span>';
                                         pItem.addEventListener('click', function(ev) {
                                             ev.stopPropagation();
                                             ev.preventDefault();
-                                            captureCurrentSelection();
                                             if (node && node.parentNode) node.parentNode.removeChild(node);
                                             var curSel = (window._rhwpLastSelectedText || '').trim();
                                             if (window.rhwpOpenAiPanel) {
@@ -1280,32 +1516,62 @@ class RhwpEditorWidget(QWidget):
                                                 document.title = 'rhwp_ai:preset:' + item.preset + ':' + Date.now();
                                             }
                                         });
-                                        node.appendChild(pItem);
+                                        subMenu.appendChild(pItem);
                                     });
+
+                                    aiEditItem.appendChild(subMenu);
+
+                                    var hideSubTimer = null;
+                                    aiEditItem.addEventListener('mouseenter', function() {
+                                        if (hideSubTimer) {
+                                            clearTimeout(hideSubTimer);
+                                            hideSubTimer = null;
+                                        }
+                                        subMenu.style.display = 'block';
+                                        subMenu.style.left = '100%';
+                                        subMenu.style.right = 'auto';
+                                        subMenu.style.top = '-4px';
+                                        var subRect = subMenu.getBoundingClientRect();
+                                        if (subRect.right > window.innerWidth) {
+                                            subMenu.style.left = 'auto';
+                                            subMenu.style.right = '100%';
+                                        }
+                                        if (subRect.bottom > window.innerHeight) {
+                                            var shiftY = subRect.bottom - window.innerHeight + 8;
+                                            subMenu.style.top = (-4 - shiftY) + 'px';
+                                        }
+                                    });
+                                    aiEditItem.addEventListener('mouseleave', function() {
+                                        hideSubTimer = setTimeout(function() {
+                                            subMenu.style.display = 'none';
+                                        }, 120);
+                                    });
+
+                                    node.appendChild(aiEditItem);
+
+                                    // [선택 영역이 있을 때: AI 번역하기 (연결된 AI 사용)]
+                                    var transItem = document.createElement('div');
+                                    transItem.className = 'md-item ai-menu-item';
+                                    transItem.innerHTML = '<span class="md-label">AI 번역하기</span><span class="md-shortcut" style="margin-left:auto; font-size:10px;">번역</span>';
+                                    transItem.addEventListener('click', function(ev) {
+                                        ev.stopPropagation();
+                                        ev.preventDefault();
+                                        captureCurrentSelection();
+                                        if (node && node.parentNode) node.parentNode.removeChild(node);
+                                        var curSel = (window._rhwpLastSelectedText || '').trim();
+                                        if (window.rhwpOpenAiPanel) {
+                                            window.rhwpOpenAiPanel('translate', curSel);
+                                        } else {
+                                            document.title = 'rhwp_ai:translate:' + Date.now();
+                                        }
+                                    });
+                                    node.appendChild(transItem);
                                 }
 
-                                // [공통: 한글 -> 다국어 변환 (연결된 AI 사용)]
-                                var transItem = document.createElement('div');
-                                transItem.className = 'md-item ai-menu-item';
-                                transItem.innerHTML = '<span class="md-label" style="color:#0284C7; display:inline-flex; align-items:center;">한글 → 다국어 변환 (AI)</span><span class="md-shortcut" style="margin-left:auto; color:#0284C7; font-size:10px;">번역</span>';
-                                transItem.addEventListener('click', function(ev) {
-                                    ev.stopPropagation();
-                                    ev.preventDefault();
-                                    captureCurrentSelection();
-                                    if (node && node.parentNode) node.parentNode.removeChild(node);
-                                    var curSel = (window._rhwpLastSelectedText || '').trim();
-                                    if (window.rhwpOpenAiPanel) {
-                                        window.rhwpOpenAiPanel('translate', curSel);
-                                    } else {
-                                        document.title = 'rhwp_ai:translate:' + Date.now();
-                                    }
-                                });
-                                node.appendChild(transItem);
-
-                                // [공통: AI 대화하기 플로팅 패널 - 원래 💬 아이콘 및 일반 굵기]
+                                // [공통: AI 도우미 (대화하기)]
                                 var chatItem = document.createElement('div');
                                 chatItem.className = 'md-item ai-menu-item';
-                                chatItem.innerHTML = '<span class="md-label" style="color:#2563EB;"><span style="margin-right:6px;">💬</span>AI 도우미 (대화하기)</span><span class="md-shortcut" style="margin-left:auto; color:#6366F1; font-size:10px;">AI</span>';
+                                chatItem.innerHTML = '<span class="md-label">AI 도우미 (대화하기)</span><span class="md-shortcut" style="margin-left:auto; font-size:10px;">AI</span>';
                                 chatItem.addEventListener('click', function(ev) {
                                     ev.stopPropagation();
                                     ev.preventDefault();
@@ -1327,7 +1593,7 @@ class RhwpEditorWidget(QWidget):
 
                                 var piiItem = document.createElement('div');
                                 piiItem.className = 'md-item ai-menu-item';
-                                piiItem.innerHTML = '<span class="md-label" style="color:#475569; display:inline-flex; align-items:center;"><span style="margin-right:6px;">🛡️</span>개인정보 점검</span>';
+                                piiItem.innerHTML = '<span class="md-label">개인정보 점검</span>';
                                 piiItem.addEventListener('click', function(ev) {
                                     ev.stopPropagation();
                                     ev.preventDefault();
@@ -1338,7 +1604,7 @@ class RhwpEditorWidget(QWidget):
 
                                 var lawItem = document.createElement('div');
                                 lawItem.className = 'md-item ai-menu-item';
-                                lawItem.innerHTML = '<span class="md-label" style="color:#475569;"><span style="margin-right:6px;">🔎</span>법령 찾기 (국가법령센터)</span><span class="md-shortcut" style="margin-left:auto; color:#64748B; font-size:10px;">law.go.kr</span>';
+                                lawItem.innerHTML = '<span class="md-label">법령 찾기 (국가법령센터)</span><span class="md-shortcut" style="margin-left:auto; font-size:10px;">law.go.kr</span>';
                                 lawItem.addEventListener('click', function(ev) {
                                     ev.stopPropagation();
                                     ev.preventDefault();
@@ -1348,6 +1614,22 @@ class RhwpEditorWidget(QWidget):
                                     document.title = 'rhwp_ai:law:' + Date.now();
                                 });
                                 node.appendChild(lawItem);
+
+                                // [공통: 문서 전체를 통 이미지로 복사 (클립보드)]
+                                var copyImageSep = document.createElement('div');
+                                copyImageSep.className = 'md-sep';
+                                node.appendChild(copyImageSep);
+
+                                var copyImageItem = document.createElement('div');
+                                copyImageItem.className = 'md-item ai-menu-item';
+                                copyImageItem.innerHTML = '<span class="md-label">문서 이미지로 복사</span><span class="md-shortcut" style="margin-left:auto; font-size:10px;">클립보드</span>';
+                                copyImageItem.addEventListener('click', function(ev) {
+                                    ev.stopPropagation();
+                                    ev.preventDefault();
+                                    if (node && node.parentNode) node.parentNode.removeChild(node);
+                                    document.title = 'rhwp_doc:copy_image:' + Date.now();
+                                });
+                                node.appendChild(copyImageItem);
 
                                 // 팝업이 화면 아래로 삐져나가는 경우 Y축 위치 보정
                                 var rect = node.getBoundingClientRect();
@@ -1417,7 +1699,7 @@ class RhwpEditorWidget(QWidget):
                 '        <option value="한글 원문 + 외국어 병기">한글 원문 + 외국어 나란히 병기 (2개 국어)</option>',
                 '      </select>',
                 '    </div>',
-                '    <div class="rhwp-ai-trans-notice">💡 연결된 AI 엔진으로 다국어 번역을 수행합니다. (외부 유료 AI 연결 시 API 요금 발생 가능)</div>',
+                '    <div class="rhwp-ai-trans-notice">💡 연결된 AI 엔진으로 다국어 번역을 수행합니다.</div>',
                 '  </div>',
                 '  <div id="rhwp-ai-selected-wrap">',
                 '    <div class="rhwp-ai-section-title">',
@@ -1752,6 +2034,7 @@ class RhwpEditorWidget(QWidget):
             var isGenerating = false;
             var currentMode = 'chat';
             var currentSelectedText = '';
+            var currentSelectionRange = null;
             var fullResponse = '';
 
             // 드래그 이동
@@ -1787,6 +2070,7 @@ class RhwpEditorWidget(QWidget):
                 currentMode = mode || 'chat';
                 var cleanSelected = typeof filterSelectionText === 'function' ? filterSelectionText(selectedText) : (selectedText || '').trim();
                 currentSelectedText = cleanSelected;
+                currentSelectionRange = cleanSelected ? (window._rhwpLastSelectionRange || null) : null;
 
                 var titleEl = document.getElementById('rhwp-ai-title');
                 var inputEl = document.getElementById('rhwp-ai-input');
@@ -1805,24 +2089,18 @@ class RhwpEditorWidget(QWidget):
                     transBar.style.display = (currentMode === 'translate') ? 'flex' : 'none';
                 }
 
-                // 번역 모드일 때는 기본적으로 현재 선택된 문서 전체를 번역하는 흐름으로 구성
-                if (currentMode === 'translate') {
-                    selWrap.style.display = 'none';
-                    selTextEl.textContent = '';
-                    btnReplace.style.display = 'none';
-                    if (inputTitleEl) inputTitleEl.textContent = '추가 번역 지시사항 (선택)';
-                } else if (currentSelectedText) {
+                if (currentSelectedText) {
                     selWrap.style.display = 'flex';
                     selTextEl.textContent = currentSelectedText;
                     selCountEl.textContent = '(' + currentSelectedText.length + '자)';
                     btnReplace.style.display = 'inline-block';
                     btnReplace.disabled = true;
-                    if (inputTitleEl) inputTitleEl.textContent = '추가 요청사항';
+                    if (inputTitleEl) inputTitleEl.textContent = (currentMode === 'translate') ? '추가 번역 지시사항 (선택)' : '추가 요청사항';
                 } else {
                     selWrap.style.display = 'none';
                     selTextEl.textContent = '';
                     btnReplace.style.display = 'none';
-                    if (inputTitleEl) inputTitleEl.textContent = '요청사항';
+                    if (inputTitleEl) inputTitleEl.textContent = (currentMode === 'translate') ? '추가 번역 지시사항 (선택)' : '요청사항';
                 }
 
                 respEl.innerHTML = '<span class="rhwp-ai-placeholder" style="color:#94A3B8; pointer-events:none; user-select:none;">AI 변환 결과가 여기에 표시됩니다.</span>';
@@ -1830,8 +2108,10 @@ class RhwpEditorWidget(QWidget):
                 btnInsert.disabled = true;
 
                 if (currentMode === 'translate') {
-                    titleEl.textContent = '한글 → 다국어 변환 (AI)';
-                    inputEl.placeholder = '현재 선택된 문서 본문을 번역합니다. (고유명사 표기 등 추가 요청사항이 있으면 입력하세요)';
+                    titleEl.textContent = 'AI 번역하기';
+                    inputEl.placeholder = currentSelectedText
+                        ? '선택한 본문 문구를 번역합니다. (고유명사 표기 등 추가 요청사항이 있으면 입력하세요)'
+                        : '현재 선택된 문서 본문을 번역합니다. (고유명사 표기 등 추가 요청사항이 있으면 입력하세요)';
                     inputEl.value = '';
                     btnSend.textContent = '번역하기';
                     inputEl.focus();
@@ -2105,23 +2385,39 @@ class RhwpEditorWidget(QWidget):
                 respEl.innerHTML = '<span style="color:#DC2626; font-weight:bold;">[오류 발생]</span><br>' + String(err).replace(/</g, '&lt;');
             };
 
-            // 선택 영역 교체 (선택된 문구를 AI 변환 결과로 즉시 덮어쓰기)
+            // 선택 영역 교체 (선택된 문구를 삭제하고 AI 변환 결과로 덮어쓰기)
             document.getElementById('rhwp-ai-btn-replace').addEventListener('click', function() {
                 var text = fullResponse.trim();
                 if (!text) return;
+                var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                var ih = deps && deps.getInputHandler ? deps.getInputHandler() : null;
+                try {
+                    if (ih && ih.cursor) {
+                        var hasSel = typeof ih.cursor.hasSelection === 'function' ? ih.cursor.hasSelection() : false;
+                        var savedRange = currentSelectionRange || window._rhwpLastSelectionRange;
+                        if (!hasSel && savedRange && savedRange.start && savedRange.end) {
+                            try {
+                                ih.cursor.clearSelection();
+                                ih.cursor.moveTo(savedRange.start);
+                                ih.cursor.setAnchor();
+                                ih.cursor.moveTo(savedRange.end);
+                                hasSel = typeof ih.cursor.hasSelection === 'function' ? ih.cursor.hasSelection() : false;
+                            } catch(eRestore) {}
+                        }
+                        if (hasSel && typeof ih.deleteSelection === 'function') {
+                            ih.deleteSelection();
+                        }
+                    }
+                } catch(eDel) {}
                 if (window.rhwpStudio && typeof window.rhwpStudio.insertTextAtCursor === 'function') {
                     window.rhwpStudio.insertTextAtCursor(text);
-                } else {
-                    var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
-                    var ih = deps && deps.getInputHandler ? deps.getInputHandler() : null;
-                    if (ih && ih.textarea) {
-                        ih.active = true;
-                        if (ih.focusTextarea) ih.focusTextarea();
-                        var dt = new DataTransfer();
-                        dt.setData('text/plain', text);
-                        var ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
-                        ih.textarea.dispatchEvent(ev);
-                    }
+                } else if (ih && ih.textarea) {
+                    ih.active = true;
+                    if (ih.focusTextarea) ih.focusTextarea();
+                    var dt = new DataTransfer();
+                    dt.setData('text/plain', text);
+                    var ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+                    ih.textarea.dispatchEvent(ev);
                 }
                 panel.style.display = 'none';
             });
@@ -2299,6 +2595,7 @@ class RhwpEditorWidget(QWidget):
                 self.server.set_current_blob(hwpx_bytes)
                 js = f"""
                 (async function() {{
+                    window._rhwpIsLoadingDocument = true;
                     try {{
                         var resp = await fetch("/api/current_doc?t=" + Date.now());
                         if (!resp.ok) throw new Error("HTTP " + resp.status);
@@ -2310,6 +2607,10 @@ class RhwpEditorWidget(QWidget):
                         }}
                     }} catch(e) {{
                         console.error("Failed to load document via fetch:", e);
+                    }} finally {{
+                        setTimeout(function() {{
+                            window._rhwpIsLoadingDocument = false;
+                        }}, 600);
                     }}
                 }})();
                 """
@@ -2317,16 +2618,25 @@ class RhwpEditorWidget(QWidget):
                 b64_str = base64.b64encode(hwpx_bytes).decode("ascii")
                 js = f"""
                 (async function() {{
-                    var b64 = "{b64_str}";
-                    var bin = atob(b64);
-                    var len = bin.length;
-                    var bytes = new Uint8Array(len);
-                    for (var i = 0; i < len; i++) {{
-                        bytes[i] = bin.charCodeAt(i);
-                    }}
-                    var deps = window.rhwpStudio?.plugins?.deps;
-                    if (deps && deps.loadDocument) {{
-                        await deps.loadDocument(bytes, "{doc_filename}");
+                    window._rhwpIsLoadingDocument = true;
+                    try {{
+                        var b64 = "{b64_str}";
+                        var bin = atob(b64);
+                        var len = bin.length;
+                        var bytes = new Uint8Array(len);
+                        for (var i = 0; i < len; i++) {{
+                            bytes[i] = bin.charCodeAt(i);
+                        }}
+                        var deps = window.rhwpStudio?.plugins?.deps;
+                        if (deps && deps.loadDocument) {{
+                            await deps.loadDocument(bytes, "{doc_filename}");
+                        }}
+                    }} catch(e) {{
+                        console.error("Failed to load document via b64:", e);
+                    }} finally {{
+                        setTimeout(function() {{
+                            window._rhwpIsLoadingDocument = false;
+                        }}, 600);
                     }}
                 }})();
                 """
@@ -2338,66 +2648,75 @@ class RhwpEditorWidget(QWidget):
             json_text = json.dumps(text)
             js = f"""
             (async function() {{
-                var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
-                if (!deps) return;
-                if (deps.createBlankDocument) {{
-                    try {{
-                        await deps.createBlankDocument();
-                    }} catch(e) {{}}
-                }}
-                var wasm = deps.wasm;
-                var doc = wasm && wasm.doc;
-                if (wasm && wasm.updateStyleShapes) {{
-                    try {{
-                        var fid = wasm.findOrCreateFontId ? wasm.findOrCreateFontId('Pretendard') : -1;
-                        if (fid !== undefined && fid !== null && fid >= 0) {{
-                            var charMods = {{
-                                fontId: fid,
-                                fontSize: 1200,
-                                fontFamilies: ['Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard']
-                            }};
-                            wasm.updateStyleShapes(0, JSON.stringify(charMods), '{{}}');
-                        }}
-                    }} catch(e) {{}}
-                }}
-                var rawText = {json_text};
-                if (doc && rawText) {{
-                    try {{
-                        var lines = rawText.split(/\\r?\\n/);
-                        var currentPara = 0;
-                        for (var i = 0; i < lines.length; i++) {{
-                            var line = lines[i];
-                            if (line.length > 0) {{
-                                doc.insertText(0, currentPara, 0, line);
+                window._rhwpIsLoadingDocument = true;
+                try {{
+                    var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                    if (!deps) return;
+                    if (deps.createBlankDocument) {{
+                        try {{
+                            await deps.createBlankDocument();
+                        }} catch(e) {{}}
+                    }}
+                    var wasm = deps.wasm;
+                    var doc = wasm && wasm.doc;
+                    if (wasm && wasm.updateStyleShapes) {{
+                        try {{
+                            var fid = wasm.findOrCreateFontId ? wasm.findOrCreateFontId('Pretendard') : -1;
+                            if (fid !== undefined && fid !== null && fid >= 0) {{
+                                var charMods = {{
+                                    fontId: fid,
+                                    fontSize: 1200,
+                                    fontFamilies: ['Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard', 'Pretendard']
+                                }};
+                                wasm.updateStyleShapes(0, JSON.stringify(charMods), '{{}}');
                             }}
-                            if (i < lines.length - 1) {{
-                                var resStr = doc.splitParagraph(0, currentPara, line.length, null);
-                                try {{
-                                    var res = JSON.parse(resStr);
-                                    if (res && res.ok && res.paraIdx !== undefined) {{
-                                        currentPara = res.paraIdx;
-                                    }} else {{
+                        }} catch(e) {{}}
+                    }}
+                    var rawText = {json_text};
+                    if (doc && rawText) {{
+                        try {{
+                            var lines = rawText.split(/\\r?\\n/);
+                            var currentPara = 0;
+                            for (var i = 0; i < lines.length; i++) {{
+                                var line = lines[i];
+                                if (line.length > 0) {{
+                                    doc.insertText(0, currentPara, 0, line);
+                                }}
+                                if (i < lines.length - 1) {{
+                                    var resStr = doc.splitParagraph(0, currentPara, line.length, null);
+                                    try {{
+                                        var res = JSON.parse(resStr);
+                                        if (res && res.ok && res.paraIdx !== undefined) {{
+                                            currentPara = res.paraIdx;
+                                        }} else {{
+                                            currentPara += 1;
+                                        }}
+                                    }} catch(e) {{
                                         currentPara += 1;
                                     }}
-                                }} catch(e) {{
-                                    currentPara += 1;
                                 }}
                             }}
+                        }} catch (e) {{
+                            console.error('Error inserting lines:', e);
                         }}
-                    }} catch (e) {{
-                        console.error('Error inserting lines:', e);
                     }}
+                    if (doc && doc.exportHwpx) {{
+                        try {{
+                            var bytes = doc.exportHwpx();
+                            await deps.loadDocument(bytes, "{safe_title}.hwpx");
+                        }} catch (e) {{}}
+                    }}
+                    var fontSelect = document.getElementById('font-name');
+                    if (fontSelect) fontSelect.value = 'Pretendard';
+                    var sizeInput = document.getElementById('font-size');
+                    if (sizeInput) sizeInput.value = '12.0';
+                }} catch(err) {{
+                    console.error('Error creating blank doc:', err);
+                }} finally {{
+                    setTimeout(function() {{
+                        window._rhwpIsLoadingDocument = false;
+                    }}, 600);
                 }}
-                if (doc && doc.exportHwpx) {{
-                    try {{
-                        var bytes = doc.exportHwpx();
-                        await deps.loadDocument(bytes, "{safe_title}.hwpx");
-                    }} catch (e) {{}}
-                }}
-                var fontSelect = document.getElementById('font-name');
-                if (fontSelect) fontSelect.value = 'Pretendard';
-                var sizeInput = document.getElementById('font-size');
-                if (sizeInput) sizeInput.value = '12.0';
             }})();
             """
         self.web_view.page().runJavaScript(js)

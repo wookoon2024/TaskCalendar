@@ -7,7 +7,8 @@
 
   var STORE_KEY = 'tc_page_memos';
   var HOST_ID = '__tc_page_memo_host';
-  var CARD_WIDTH = 280;
+  var CARD_WIDTH = 290;
+  var CARD_HEIGHT = 270;
   var SCHEMA_VERSION = 1;
 
   // 메모 안에서 발생한 이벤트는 페이지(사이트 단축키/스크롤/뒤로가기 등)로 절대 새어나가지 않도록 격리한다.
@@ -112,39 +113,95 @@
 
   // ---------------------------------------------------------------- Shadow DOM
   var STYLE = [
-    '.tc-pm-card{position:fixed;width:' + CARD_WIDTH + 'px;background:#fff;border:1px solid #CBD5E1;border-radius:6px;',
+    '.tc-pm-card{position:fixed;width:' + CARD_WIDTH + 'px;height:' + CARD_HEIGHT + 'px;background:#fff;border:1px solid #CBD5E1;border-radius:8px;',
     'box-shadow:0 8px 24px rgba(15,23,42,.18);font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic","Segoe UI",Roboto,sans-serif;',
-    'font-size:12px;color:#1E293B;z-index:2147483647;pointer-events:auto;overflow:hidden;line-height:1.4;}',
-    '.tc-pm-head{display:flex;align-items:center;gap:4px;background:#2563EB;color:#fff;padding:5px 6px;cursor:move;user-select:none;}',
-    '.tc-pm-grip{cursor:move;opacity:.85;font-size:12px;}',
+    'font-size:12px;color:#1E293B;z-index:2147483647;pointer-events:auto;overflow:hidden;line-height:1.4;box-sizing:border-box;',
+    'display:flex;flex-direction:column;}',
+    '.tc-pm-card:not(.collapsed){resize:both;min-width:220px;min-height:180px;max-width:90vw;max-height:85vh;}',
+    '.tc-pm-card.collapsed{width:44px !important;height:44px !important;min-width:44px !important;min-height:44px !important;',
+    'background:transparent !important;border:none !important;box-shadow:none !important;resize:none !important;',
+    'border-radius:50% !important;overflow:visible !important;}',
+    '.tc-pm-card.collapsed .tc-pm-head,.tc-pm-card.collapsed .tc-pm-body{display:none !important;}',
+    '.tc-pm-bubble{display:none;width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg, #2563EB, #1D4ED8);',
+    'box-shadow:0 4px 14px rgba(37,99,235,.45), 0 2px 6px rgba(0,0,0,.2);align-items:center;justify-content:center;color:#fff;',
+    'font-size:20px;cursor:pointer;user-select:none;position:relative;transition:transform .15s ease, box-shadow .15s ease;}',
+    '.tc-pm-card.collapsed .tc-pm-bubble{display:flex !important;}',
+    '.tc-pm-bubble:hover{transform:scale(1.08);box-shadow:0 6px 18px rgba(37,99,235,.55), 0 3px 8px rgba(0,0,0,.25);}',
+    '.tc-pm-head{display:flex;align-items:center;gap:4px;background:#2563EB;color:#fff;padding:6px 8px;cursor:move;user-select:none;flex-shrink:0;}',
+    '.tc-pm-grip{cursor:move;opacity:.85;font-size:13px;}',
     '.tc-pm-title{flex:1;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
-    '.tc-pm-icon{border:none;background:rgba(255,255,255,.16);color:#fff;width:18px;height:18px;border-radius:3px;cursor:pointer;',
-    'font-size:11px;line-height:1;display:inline-flex;align-items:center;justify-content:center;padding:0;}',
+    '.tc-pm-icon{border:none;background:rgba(255,255,255,.16);color:#fff;width:20px;height:20px;border-radius:4px;cursor:pointer;',
+    'font-size:12px;line-height:1;display:inline-flex;align-items:center;justify-content:center;padding:0;transition:background .12s;}',
     '.tc-pm-icon:hover{background:rgba(255,255,255,.36);}',
     '.tc-pm-del:hover{background:#DC2626;}',
-    '.tc-pm-body{padding:8px;}',
-    '.tc-pm-text{white-space:pre-wrap;word-break:break-word;line-height:1.5;max-height:260px;overflow-y:auto;min-height:18px;}',
+    '.tc-pm-body{padding:8px;flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;}',
+    '.tc-pm-text{white-space:pre-wrap;word-break:break-word;line-height:1.5;overflow-y:auto;flex:1;min-height:0;}',
     '.tc-pm-text.empty{color:#94A3B8;font-style:italic;}',
-    '.tc-pm-card.collapsed .tc-pm-body{display:none;}',
-    '.tc-pm-editor{display:none;flex-direction:column;gap:6px;}',
+    '.tc-pm-link{color:#2563EB;text-decoration:underline;word-break:break-all;cursor:pointer;}',
+    '.tc-pm-link:hover{color:#1D4ED8;}',
+    '.tc-pm-editor{display:none;flex-direction:column;gap:6px;flex:1;min-height:0;overflow:hidden;}',
     '.tc-pm-card.editing .tc-pm-editor{display:flex;}',
     '.tc-pm-card.editing .tc-pm-text{display:none;}',
-    '.tc-pm-input{width:100%;min-height:80px;resize:vertical;box-sizing:border-box;border:1px solid #CBD5E1;border-radius:4px;padding:6px;',
-    'font-family:inherit;font-size:12px;line-height:1.5;color:#1E293B;background:#FAFAFA;}',
+    '.tc-pm-title-input{width:100%;box-sizing:border-box;border:1px solid #CBD5E1;border-radius:4px;padding:5px 7px;',
+    'font-family:inherit;font-size:12px;font-weight:600;color:#1E293B;background:#FAFAFA;flex-shrink:0;}',
+    '.tc-pm-title-input:focus{outline:none;border-color:#2563EB;background:#fff;}',
+    '.tc-pm-input{width:100%;min-height:60px;flex:1;resize:none;box-sizing:border-box;border:1px solid #CBD5E1;border-radius:4px;padding:6px;',
+    'font-family:inherit;font-size:12px;line-height:1.5;color:#1E293B;background:#FAFAFA;overflow-y:auto;}',
     '.tc-pm-input:focus{outline:none;border-color:#2563EB;background:#fff;}',
-    '.tc-pm-match{border:1px solid #E2E8F0;border-radius:4px;background:#F8FAFC;padding:5px 7px;font-size:11px;}',
+    '.tc-pm-match{border:1px solid #E2E8F0;border-radius:4px;background:#F8FAFC;padding:4px 6px;font-size:11px;flex-shrink:0;max-height:85px;overflow-y:auto;}',
     '.tc-pm-match summary{cursor:pointer;color:#1D4ED8;font-weight:600;}',
     '.tc-pm-hint{color:#64748B;margin:4px 0;line-height:1.4;}',
     '.tc-pm-param{display:flex;align-items:center;gap:5px;padding:2px 0;word-break:break-all;}',
     '.tc-pm-param input{margin:0;accent-color:#2563EB;}',
     '.tc-pm-param span{color:#334155;}',
-    '.tc-pm-actions{display:flex;gap:6px;}',
+    '.tc-pm-actions{display:flex;gap:6px;flex-shrink:0;padding-top:2px;}',
     '.tc-pm-btn{flex:1;padding:6px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;}',
     '.tc-pm-save{background:#2563EB;color:#fff;border:none;}',
     '.tc-pm-save:hover{background:#1D4ED8;}',
     '.tc-pm-cancel{background:#F1F5F9;color:#475569;border:1px solid #CBD5E1;font-weight:600;}',
     '.tc-pm-cancel:hover{background:#E2E8F0;}'
   ].join('');
+
+  function linkify(text, container) {
+    container.textContent = '';
+    if (!text) {
+      var empty = h('span', 'tc-pm-text empty', '(내용 없음)');
+      container.appendChild(empty);
+      return;
+    }
+    var URL_REGEX = /(https?:\/\/[^\s<]+|www\.[^\s<]+)/gi;
+    var lastIdx = 0;
+    var match;
+    while ((match = URL_REGEX.exec(text)) !== null) {
+      if (match.index > lastIdx) {
+        container.appendChild(document.createTextNode(text.slice(lastIdx, match.index)));
+      }
+      var rawUrl = match[0];
+      var href = rawUrl;
+      if (!/^https?:\/\//i.test(href)) {
+        href = 'https://' + href;
+      }
+      var a = document.createElement('a');
+      a.className = 'tc-pm-link';
+      a.href = href;
+      a.textContent = rawUrl;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.title = href + ' (새 탭에서 열기)';
+      a.addEventListener('click', function (e) {
+        e.stopPropagation();
+        window.open(this.href, '_blank');
+      });
+      a.addEventListener('mousedown', function (e) {
+        e.stopPropagation();
+      });
+      container.appendChild(a);
+      lastIdx = URL_REGEX.lastIndex;
+    }
+    if (lastIdx < text.length) {
+      container.appendChild(document.createTextNode(text.slice(lastIdx)));
+    }
+  }
 
   function ensureUi() {
     var root = document.body || document.documentElement;
@@ -273,22 +330,94 @@
     });
   }
 
+  function attachBubbleDragAndClick(card, bubble, memo, onExpand) {
+    bubble.addEventListener('mousedown', function (e) {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var rect = card.getBoundingClientRect();
+      var startX = e.clientX;
+      var startY = e.clientY;
+      var origX = rect.left;
+      var origY = rect.top;
+      var moved = false;
+      var dragging = true;
+
+      function onMove(ev) {
+        if (!dragging) return;
+        var dx = ev.clientX - startX;
+        var dy = ev.clientY - startY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+          moved = true;
+        }
+        var pos = clampPosition(origX + dx, origY + dy);
+        card.style.left = pos.x + 'px';
+        card.style.top = pos.y + 'px';
+      }
+      function onUp() {
+        dragging = false;
+        document.removeEventListener('mousemove', onMove, true);
+        document.removeEventListener('mouseup', onUp, true);
+        var r = card.getBoundingClientRect();
+        memo.x = Math.round(r.left);
+        memo.y = Math.round(r.top);
+        memo.updatedAt = Date.now();
+        saveStore();
+
+        if (!moved) {
+          onExpand();
+        }
+      }
+      document.addEventListener('mousemove', onMove, true);
+      document.addEventListener('mouseup', onUp, true);
+    });
+  }
+
   function buildCard(pageKey, memo, startEditing) {
     var card = h('div', 'tc-pm-card');
     card.dataset.memoId = memo.id;
     var pos = clampPosition(memo.x, memo.y);
     card.style.left = pos.x + 'px';
     card.style.top = pos.y + 'px';
-    if (memo.collapsed) card.classList.add('collapsed');
+    if (memo.collapsed) {
+      card.classList.add('collapsed');
+    } else {
+      var initW = Math.max(memo.width || CARD_WIDTH, 240);
+      var initH = Math.max(memo.height || CARD_HEIGHT, 240);
+      card.style.width = initW + 'px';
+      card.style.height = initH + 'px';
+    }
     if (startEditing) card.classList.add('editing');
 
+    // 1. 최소화 시 표시되는 스마트폰 앱 스타일 원모양 버블
+    var bubble = h('div', 'tc-pm-bubble');
+    var bubbleIcon = h('span', null, '📝');
+    bubble.appendChild(bubbleIcon);
+    bubble.title = (memo.title ? memo.title : '페이지 메모') + '\n(클릭하여 펼치기)';
+    card.appendChild(bubble);
+
+    attachBubbleDragAndClick(card, bubble, memo, function () {
+      memo.collapsed = false;
+      memo.updatedAt = Date.now();
+      card.classList.remove('collapsed');
+      var cw = Math.max(memo.width || CARD_WIDTH, 240);
+      var ch = Math.max(memo.height || CARD_HEIGHT, 240);
+      card.style.width = cw + 'px';
+      card.style.height = ch + 'px';
+      saveStore();
+    });
+
+    // 2. 카드 상단 헤더 (주소는 숨기고 작성한 제목 또는 기본 문구 표시)
     var head = h('div', 'tc-pm-head');
     var grip = h('span', 'tc-pm-grip', '⠿');
-    var title = h('span', 'tc-pm-title', pageLabel(pageKey));
-    title.title = pageLabel(pageKey);
-    var btnCollapse = h('button', 'tc-pm-icon', memo.collapsed ? '▢' : '─');
+    var title = h('span', 'tc-pm-title', memo.title || '페이지 메모');
+    title.title = memo.title || '페이지 메모';
+    var btnCollapse = h('button', 'tc-pm-icon', '─');
     btnCollapse.type = 'button';
-    btnCollapse.title = '접기 / 펴기';
+    btnCollapse.title = '접기 (알람 원모양으로 최소화)';
+    var btnSendApp = h('button', 'tc-pm-icon', '📥');
+    btnSendApp.type = 'button';
+    btnSendApp.title = '바로업무로 보내기 (바탕화면 메모로 저장)';
     var btnEdit = h('button', 'tc-pm-icon', '✎');
     btnEdit.type = 'button';
     btnEdit.title = '편집';
@@ -298,22 +427,25 @@
     head.appendChild(grip);
     head.appendChild(title);
     head.appendChild(btnCollapse);
+    head.appendChild(btnSendApp);
     head.appendChild(btnEdit);
     head.appendChild(btnDel);
 
+    // 3. 카드 본문 (링크 자동 감지 클릭 지원)
     var body = h('div', 'tc-pm-body');
     var textView = h('div', 'tc-pm-text');
-    if (memo.text) {
-      textView.textContent = memo.text;
-    } else {
-      textView.classList.add('empty');
-      textView.textContent = '(내용 없음)';
-    }
+    linkify(memo.text, textView);
 
+    // 4. 에디터 (헤더 제목 입력 필드 + 본문 입력)
     var editor = h('div', 'tc-pm-editor');
+    var titleInput = h('input', 'tc-pm-title-input');
+    titleInput.type = 'text';
+    titleInput.placeholder = '메모 제목 (선택사항)';
+    titleInput.value = memo.title || '';
+
     var ta = h('textarea', 'tc-pm-input');
     ta.value = memo.text || '';
-    ta.placeholder = '이 페이지에 대한 메모를 입력하세요';
+    ta.placeholder = '이 페이지에 대한 메모를 입력하세요 (링크 주소 입력 시 자동 연결)';
     var matchBox = buildMatchBox(pageKey);
     var actions = h('div', 'tc-pm-actions');
     var btnSave = h('button', 'tc-pm-btn tc-pm-save', '저장');
@@ -322,6 +454,7 @@
     btnCancel.type = 'button';
     actions.appendChild(btnSave);
     actions.appendChild(btnCancel);
+    editor.appendChild(titleInput);
     editor.appendChild(ta);
     editor.appendChild(matchBox);
     editor.appendChild(actions);
@@ -333,21 +466,49 @@
 
     attachDrag(card, head, memo);
 
+    // 카드 크기 조절 후 마우스 업 시 크기 저장
+    card.addEventListener('mouseup', function () {
+      if (!memo.collapsed && !card.classList.contains('collapsed')) {
+        var resizedW = Math.round(card.offsetWidth);
+        var resizedH = Math.round(card.offsetHeight);
+        if (resizedW > 120 && resizedH > 80 && (resizedW !== memo.width || resizedH !== memo.height)) {
+          memo.width = resizedW;
+          memo.height = resizedH;
+          memo.updatedAt = Date.now();
+          saveStore();
+        }
+      }
+    });
+
     btnCollapse.addEventListener('click', function () {
-      memo.collapsed = !memo.collapsed;
+      memo.collapsed = true;
       memo.updatedAt = Date.now();
-      card.classList.toggle('collapsed', memo.collapsed);
-      btnCollapse.textContent = memo.collapsed ? '▢' : '─';
+      card.classList.add('collapsed');
+      card.style.width = '';
+      card.style.height = '';
       saveStore();
     });
 
+    btnSendApp.addEventListener('click', function () {
+      var mTitle = memo.title || '웹 페이지 메모';
+      var mText = memo.text || '';
+      var curUrl = pageUrl(pageKey);
+      var qs = 'type=memo&title=' + encodeURIComponent(mTitle) +
+               '&desc=' + encodeURIComponent(mText) +
+               '&url=' + encodeURIComponent(curUrl);
+      var targetUrl = 'taskcalendar://add?' + qs;
+      chrome.runtime.sendMessage({ action: 'openProtocolUrl', url: targetUrl });
+    });
+
     btnEdit.addEventListener('click', function () {
+      titleInput.value = memo.title || '';
       ta.value = memo.text || '';
       card.classList.add('editing');
-      ta.focus();
+      titleInput.focus();
     });
 
     btnSave.addEventListener('click', function () {
+      memo.title = titleInput.value.trim();
       memo.text = ta.value.replace(/\s+$/, '');
       memo.updatedAt = Date.now();
       applyMatchFromCard(card, pageKey);
@@ -356,7 +517,7 @@
     });
 
     function exitEditing() {
-      if (!memo.text) {
+      if (!memo.text && !memo.title) {
         removeMemo(pageKey, memo.id);
       } else {
         card.classList.remove('editing');
@@ -364,6 +525,13 @@
     }
 
     // ESC 로 편집 종료 (페이지로 키가 새어나가지 않도록 preventDefault + 격리)
+    titleInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        exitEditing();
+      }
+    });
     ta.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -405,8 +573,8 @@
     if (opts.editId) {
       var card = layer.querySelector('[data-memo-id="' + opts.editId + '"]');
       if (card) {
-        var ta = card.querySelector('.tc-pm-input');
-        if (ta) ta.focus();
+        var inp = card.querySelector('.tc-pm-title-input') || card.querySelector('.tc-pm-input');
+        if (inp) inp.focus();
       }
     }
   }
@@ -441,10 +609,13 @@
       var now = Date.now();
       var memo = {
         id: uid(),
+        title: '',
         text: '',
         color: '#2563EB',
         x: window.innerWidth - CARD_WIDTH - 24,
         y: 90 + (store[key].memos.length * 28),
+        width: CARD_WIDTH,
+        height: CARD_HEIGHT,
         collapsed: false,
         createdAt: now,
         updatedAt: now

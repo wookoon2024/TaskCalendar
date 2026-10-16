@@ -4,6 +4,7 @@ import contextlib
 import html
 import logging
 import os
+import re
 import shutil
 import subprocess
 import zipfile
@@ -24,6 +25,7 @@ from PySide6.QtCore import (
     QSize,
     QStandardPaths,
     Qt,
+    QThread,
     QTimer,
     QUrl,
     Signal,
@@ -103,8 +105,40 @@ from taskcalendar.rich_text_edit import RichTextEdit
 from taskcalendar.models import CalendarEntry, EntryType, RecurrenceType
 from taskcalendar.storage import EncryptedRepository
 from taskcalendar import work_files
+from taskcalendar.work_law_dialog import LawReferenceBanner, LawComparisonDialog
+from taskcalendar.work_law_tracker import (
+    LawReference,
+    extract_laws_from_text,
+    enrich_laws_online,
+    check_for_revisions,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class LawEnrichWorker(QThread):
+    """백그라운드에서 국가법령정보센터 조문 상세 및 개정 정보를 비동기로 조회하는 워커 스레드"""
+
+    finished = Signal(int, list)  # (generation, enriched_refs)
+
+    def __init__(self, generation: int, refs: list[LawReference], parent=None):
+        super().__init__(parent)
+        self.generation = generation
+        self.refs = refs
+        self._is_aborted = False
+
+    def abort(self) -> None:
+        self._is_aborted = True
+
+    def run(self) -> None:
+        try:
+            if self._is_aborted or not self.refs:
+                return
+            enriched = enrich_laws_online(self.refs, timeout=3)
+            if not self._is_aborted:
+                self.finished.emit(self.generation, enriched)
+        except Exception as e:
+            logger.debug(f"LawEnrichWorker error: {e}")
 
 
 def get_file_extension_icon(filename: str) -> str:
@@ -1413,45 +1447,24 @@ class WorkDocumentImportDialog(QDialog):
         self.btn_ai_classify.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_ai_classify.setStyleSheet(f"""
             QPushButton {{
-                background-color: {panel};
-                color: {accent};
-                border: 1px solid {accent};
+                background-color: {accent};
+                color: #FFFFFF;
+                border: none;
                 border-radius: 4px;
-                padding: 2px 10px;
-                font-size: 11px;
-                font-weight: 600;
+                padding: 2px 12px;
+                font-size: 11.5px;
+                font-weight: bold;
             }}
             QPushButton:hover {{
-                background-color: #EFF6FF;
+                opacity: 0.9;
             }}
             QPushButton:disabled {{
-                background-color: #F1F5F9;
+                background-color: #CBD5E1;
                 color: #94A3B8;
-                border-color: #CBD5E1;
             }}
         """)
         self.btn_ai_classify.clicked.connect(self._on_ai_auto_classify_clicked)
         cat_top_row.addWidget(self.btn_ai_classify)
-
-        self.btn_ai_cfg = QPushButton("AI 설정")
-        self.btn_ai_cfg.setFixedHeight(26)
-        self.btn_ai_cfg.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_ai_cfg.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {panel};
-                color: {text_muted};
-                border: 1px solid {line};
-                border-radius: 4px;
-                padding: 2px 8px;
-                font-size: 11px;
-            }}
-            QPushButton:hover {{
-                background-color: #F1F5F9;
-                color: {text};
-            }}
-        """)
-        self.btn_ai_cfg.clicked.connect(self._open_ai_settings)
-        cat_top_row.addWidget(self.btn_ai_cfg)
         f_layout.addLayout(cat_top_row)
 
         self.cat_combo = QComboBox()
@@ -1469,24 +1482,12 @@ class WorkDocumentImportDialog(QDialog):
         """)
         f_layout.addWidget(self.cat_combo)
 
-        # AI 연결 상태 및 외부 유료 AI 과금 안내 박스
-        self.ai_notice_frame = QFrame()
-        ai_notice_layout = QVBoxLayout(self.ai_notice_frame)
-        ai_notice_layout.setContentsMargins(10, 8, 10, 8)
-        ai_notice_layout.setSpacing(4)
-
-        self.lbl_ai_notice = QLabel("")
-        self.lbl_ai_notice.setWordWrap(True)
-        self.lbl_ai_notice.setStyleSheet("font-size: 11px; border: none; line-height: 1.4;")
-        ai_notice_layout.addWidget(self.lbl_ai_notice)
-
+        # AI 분류 추천 결과 라벨 (결과 도출 시에만 표시)
         self.lbl_ai_result = QLabel("")
         self.lbl_ai_result.setWordWrap(True)
         self.lbl_ai_result.setVisible(False)
-        self.lbl_ai_result.setStyleSheet(f"font-size: 11.5px; font-weight: bold; color: {accent}; border: none; margin-top: 2px;")
-        ai_notice_layout.addWidget(self.lbl_ai_result)
-
-        f_layout.addWidget(self.ai_notice_frame)
+        self.lbl_ai_result.setStyleSheet(f"font-size: 11.5px; font-weight: bold; color: {accent}; border: none; padding: 2px 2px;")
+        f_layout.addWidget(self.lbl_ai_result)
 
         title_lbl = QLabel("업무 제목:")
         title_lbl.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {text}; border: none;")
@@ -1564,62 +1565,13 @@ class WorkDocumentImportDialog(QDialog):
         from taskcalendar.work_smart_tools import get_ai_connection_status
         st = get_ai_connection_status()
         connected = st.get("connected", False)
-        is_paid = st.get("is_external_paid", False)
-        notice = st.get("notice_text", "")
 
-        self.lbl_ai_notice.setText(notice)
         if not connected:
-            self.ai_notice_frame.setStyleSheet(
-                "QFrame { background-color: #F8FAFC; border: 1px dashed #CBD5E1; border-radius: 6px; }"
-            )
-            self.lbl_ai_notice.setStyleSheet("font-size: 11px; color: #64748B; border: none;")
             self.btn_ai_classify.setEnabled(False)
-            self.btn_ai_classify.setToolTip("외부 AI가 연결되어 있을 때만 사용 가능합니다. 우측 [AI 설정]에서 연결해 주세요.")
-            self.btn_ai_classify.setStyleSheet("""
-                QPushButton {
-                    background-color: #E2E8F0;
-                    color: #94A3B8;
-                    border: 1px solid #CBD5E1;
-                    border-radius: 4px;
-                    padding: 2px 10px;
-                    font-size: 11.5px;
-                    font-weight: bold;
-                }
-            """)
+            self.btn_ai_classify.setToolTip("AI가 연결되어 있을 때만 사용 가능합니다. 환경설정에서 AI를 연결해 주세요.")
         else:
-            if is_paid:
-                self.ai_notice_frame.setStyleSheet(
-                    "QFrame { background-color: #FFFBEB; border: 1px solid #FDE68A; border-radius: 6px; }"
-                )
-                self.lbl_ai_notice.setStyleSheet("font-size: 11px; color: #B45309; border: none;")
-            else:
-                self.ai_notice_frame.setStyleSheet(
-                    "QFrame { background-color: #F0F9FF; border: 1px solid #BAE6FD; border-radius: 6px; }"
-                )
-                self.lbl_ai_notice.setStyleSheet("font-size: 11px; color: #0369A1; border: none;")
-
             self.btn_ai_classify.setEnabled(True)
             self.btn_ai_classify.setToolTip("업무명과 파일 내용을 분석하여 어떤 분류에 들어가면 좋을지 AI가 추천합니다.")
-            self.btn_ai_classify.setStyleSheet("""
-                QPushButton {
-                    background-color: #EFF6FF;
-                    color: #1D4ED8;
-                    border: 1px solid #93C5FD;
-                    border-radius: 4px;
-                    padding: 2px 10px;
-                    font-size: 11.5px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #DBEAFE;
-                }
-            """)
-
-    def _open_ai_settings(self) -> None:
-        from taskcalendar.ai_assistant import AISettingsDialog
-        dlg = AISettingsDialog(self, palette=self._palette)
-        if dlg.exec():
-            self._refresh_ai_status_ui()
 
     def _extract_quick_snippet(self) -> str:
         """파일에서 분류 판단용 앞부분 텍스트 스니펫을 빠르게 추출 (최대 500자)"""
@@ -1657,7 +1609,7 @@ class WorkDocumentImportDialog(QDialog):
             QMessageBox.information(
                 self,
                 "AI 연결 필요",
-                "AI 자동분류기는 AI가 연결되어 있을 때만 사용할 수 있습니다.\n우측 [AI 설정] 버튼을 눌러 AI를 먼저 연결해 주세요.",
+                "AI 자동분류기는 AI가 연결되어 있을 때만 사용할 수 있습니다.\n환경설정에서 AI를 먼저 연결해 주세요.",
             )
             return
 
@@ -1933,11 +1885,11 @@ class WorkContextMenuGuideDialog(QDialog):
         card_l.setSpacing(6)
         card_l.setContentsMargins(4, 4, 4, 4)
 
-        m1 = QLabel("• <b>TaskCalendar 업무로 등록</b> : 문서 즉시 등록 또는 폴더 일괄 등록")
+        m1 = QLabel("• <b>바로업무 업무로 등록</b> : 문서 즉시 등록 또는 폴더 일괄 등록")
         m1.setStyleSheet("font-size: 11px;")
         card_l.addWidget(m1)
 
-        m2 = QLabel("• <b>TaskCalendar 업무 첨부파일로 등록</b> : 원하는 업무에 첨부파일로 안전 보관")
+        m2 = QLabel("• <b>바로업무 첨부파일로 등록</b> : 원하는 업무에 첨부파일로 안전 보관")
         m2.setStyleSheet("font-size: 11px;")
         card_l.addWidget(m2)
         layout.addWidget(card)
@@ -3584,16 +3536,17 @@ class WorkExportWizardDialog(QDialog):
     - 실행: QProgressDialog 연동 및 저장 폴더 열기 안내
     """
 
-    def __init__(self, parent=None, sheets: list[WorkSheetData] | None = None, categories: list[dict] | None = None, palette: dict | None = None, tabs: list[dict] | None = None):
+    def __init__(self, parent=None, sheets: list[WorkSheetData] | None = None, categories: list[dict] | None = None, palette: dict | None = None, tabs: list[dict] | None = None, repository=None):
         super().__init__(parent)
         self.sheets = sheets or []
         self.categories = categories or []
         self.palette = palette or {}
         self.tabs = tabs or []
+        self.repository = repository or getattr(parent, "repository", None)
 
         self.setWindowTitle("업무 및 편람 내보내기 마법사")
-        self.setMinimumWidth(560)
-        self.setMinimumHeight(520)
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(560)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
         self._init_ui()
@@ -3698,9 +3651,43 @@ class WorkExportWizardDialog(QDialog):
         self._populate_tree()
         s1_layout.addWidget(self.tree, 1)
 
-        self.cb_include_attachments = QCheckBox("첨부파일도 함께 내보내기 (문서별 첨부파일 폴더로 자동 구성)")
+        opt_frame = QFrame()
+        opt_frame.setStyleSheet(f"background-color: {panel}; border: 1px solid {line}; border-radius: 6px; padding: 10px;")
+        opt_layout = QVBoxLayout(opt_frame)
+        opt_layout.setContentsMargins(6, 6, 6, 6)
+        opt_layout.setSpacing(6)
+
+        lbl_opt = QLabel("<b>함께 내보낼 연계 데이터 선택:</b>")
+        lbl_opt.setStyleSheet(f"color: {accent}; font-size: 12px; border: none;")
+        opt_layout.addWidget(lbl_opt)
+
+        opt_grid = QGridLayout()
+        opt_grid.setContentsMargins(0, 0, 0, 0)
+        opt_grid.setHorizontalSpacing(16)
+        opt_grid.setVerticalSpacing(6)
+
+        self.cb_include_attachments = QCheckBox("📎 첨부파일 포함 (문서별 첨부폴더로 구성)")
         self.cb_include_attachments.setChecked(True)
-        s1_layout.addWidget(self.cb_include_attachments)
+        opt_grid.addWidget(self.cb_include_attachments, 0, 0)
+
+        self.cb_include_schedules = QCheckBox("📅 연계 일정 포함 (캘린더 연계 일정 데이터)")
+        self.cb_include_schedules.setChecked(True)
+        opt_grid.addWidget(self.cb_include_schedules, 0, 1)
+
+        self.cb_include_documents = QCheckBox("📑 연계 문서 포함 (Task 연계 문서 링크)")
+        self.cb_include_documents.setChecked(True)
+        opt_grid.addWidget(self.cb_include_documents, 1, 0)
+
+        self.cb_include_bookmarks = QCheckBox("🔖 하이라이트 북마크 포함 (본문 발췌 목록)")
+        self.cb_include_bookmarks.setChecked(True)
+        opt_grid.addWidget(self.cb_include_bookmarks, 1, 1)
+
+        self.cb_include_browser_memos = QCheckBox("🌐 브라우저 페이지 메모 포함 (work/browser 메모 및 웹 연계 정보)")
+        self.cb_include_browser_memos.setChecked(True)
+        opt_grid.addWidget(self.cb_include_browser_memos, 2, 0, 1, 2)
+
+        opt_layout.addLayout(opt_grid)
+        s1_layout.addWidget(opt_frame)
         self.stacked.addWidget(step1_widget)
 
         # -------------------------------------------------------------
@@ -3999,25 +3986,6 @@ class WorkExportWizardDialog(QDialog):
         dest_root = Path(dest_dir_str)
         try:
             dest_root.mkdir(parents=True, exist_ok=True)
-            # 내보내기 전용 구조/매핑 정의 파일(work.json) — 불러오기에서 이걸로 그룹/분류/문서를 복원한다
-            try:
-                wj = {
-                    "version": 1,
-                    "groups": [{"id": t.get("id"), "name": t.get("name")} for t in self.tabs],
-                    "categories": [
-                        {"name": c.get("name"), "parent": c.get("parent_name"), "group": c.get("tab_id")}
-                        for c in self.categories
-                    ],
-                    "documents": [
-                        {"title": s.title, "category": s.category, "group": self._group_name(s.category)}
-                        for s in self.sheets
-                    ],
-                }
-                (dest_root / "work.json").write_text(
-                    json.dumps(wj, ensure_ascii=False, indent=2), encoding="utf-8"
-                )
-            except Exception as e:
-                logger.warning("Failed to write work.json: %s", e)
         except Exception as e:
             QMessageBox.critical(self, "폴더 오류", f"저장 폴더를 생성할 수 없습니다:\n{e}")
             return
@@ -4026,7 +3994,111 @@ class WorkExportWizardDialog(QDialog):
         total = len(sheets)
         is_hwpx = self.rb_hwpx.isChecked()
         include_attachments = self.cb_include_attachments.isChecked()
+        include_schedules = self.cb_include_schedules.isChecked()
+        include_documents = self.cb_include_documents.isChecked()
+        include_bookmarks = self.cb_include_bookmarks.isChecked()
+        include_browser_memos = self.cb_include_browser_memos.isChecked()
         use_subfolders = self.cb_subfolders.isChecked()
+
+        # 브라우저 메모 수집 및 복사
+        all_browser_memos = []
+        if include_browser_memos:
+            try:
+                all_browser_memos = work_files.load_browser_memos()
+                if all_browser_memos:
+                    export_browser_dir = dest_root / "browser"
+                    export_browser_dir.mkdir(parents=True, exist_ok=True)
+                    work_files.export_browser_memos_to_file(
+                        export_browser_dir / "page_memos.json", all_browser_memos
+                    )
+            except Exception as e:
+                logger.warning("Failed to export browser memos: %s", e)
+
+        # 각 업무 문서별 연계 메타데이터 수집
+        docs_meta = []
+        for s in sheets:
+            doc_entry = {
+                "title": s.title,
+                "category": s.category,
+                "group": self._group_name(s.category),
+                "cycle": getattr(s, "cycle", "수시"),
+            }
+            if include_schedules and self.repository and s.db_id:
+                try:
+                    sched_items = self.repository.list_entries_for_work(work_id=s.db_id, work_title=s.title)
+                    doc_entry["schedules"] = [
+                        {
+                            "title": ent.title,
+                            "start_date": ent.start_date,
+                            "end_date": ent.end_date,
+                            "content_text": ent.content_text,
+                            "is_lunar": ent.is_lunar,
+                            "is_event": ent.is_event,
+                            "is_task": ent.is_task,
+                            "repeat_rule": ent.repeat_rule,
+                            "category": ent.category,
+                            "color": ent.color,
+                            "reminder_minutes": ent.reminder_minutes,
+                            "cycle": ent.cycle,
+                            "source_type": ent.source_type,
+                        }
+                        for ent in sched_items
+                    ]
+                except Exception as ex:
+                    logger.warning("Failed to collect schedules for export: %s", ex)
+
+            if include_documents and self.repository and s.db_id:
+                try:
+                    linked_items = self.repository.list_linked_entries_for_work(work_id=s.db_id, entry_type="task")
+                    doc_entry["linked_tasks"] = [
+                        {
+                            "entry_id": lnk.entry_id,
+                            "title": lnk.title,
+                            "entry_type": lnk.entry_type,
+                            "start_date": getattr(lnk, "start_date", ""),
+                            "category": getattr(lnk, "category", ""),
+                        }
+                        for lnk in linked_items
+                    ]
+                except Exception as ex:
+                    logger.warning("Failed to collect linked tasks for export: %s", ex)
+
+            if include_bookmarks:
+                try:
+                    p_loader = getattr(self.parent(), "_load_sheet_bookmarks", None)
+                    bmarks = p_loader(s) if p_loader else getattr(s, "_bookmarks", [])
+                    if bmarks:
+                        doc_entry["bookmarks"] = list(bmarks)
+                except Exception as ex:
+                    logger.warning("Failed to collect bookmarks for export: %s", ex)
+
+            docs_meta.append(doc_entry)
+
+        # 내보내기 전용 구조/매핑 정의 파일(work.json) 저장
+        try:
+            wj = {
+                "version": 2,
+                "exported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "options": {
+                    "include_attachments": include_attachments,
+                    "include_schedules": include_schedules,
+                    "include_documents": include_documents,
+                    "include_bookmarks": include_bookmarks,
+                    "include_browser_memos": include_browser_memos,
+                },
+                "groups": [{"id": t.get("id"), "name": t.get("name")} for t in self.tabs],
+                "categories": [
+                    {"name": c.get("name"), "parent": c.get("parent_name"), "group": c.get("tab_id")}
+                    for c in self.categories
+                ],
+                "documents": docs_meta,
+                "browser_memos": all_browser_memos if include_browser_memos else [],
+            }
+            (dest_root / "work.json").write_text(
+                json.dumps(wj, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+        except Exception as e:
+            logger.warning("Failed to write work.json: %s", e)
 
         progress = QProgressDialog("업무 문서를 내보내는 중입니다...", "취소", 0, total, self)
         progress.setWindowTitle("업무 내보내기 진행")
@@ -4425,6 +4497,15 @@ class WorkManagerDialog(QDialog):
         self.cat_tab_scroll = None
         self.cat_tab_container = None
         self.cat_tab_layout = None
+
+        # 법령 근거 인식 및 개정 추적 관련
+        self._current_law_refs: list[LawReference] = []
+        self._law_scan_generation: int = 0
+        self._law_enrich_worker: LawEnrichWorker | None = None
+        self._law_scan_timer = QTimer(self)
+        self._law_scan_timer.setSingleShot(True)
+        self._law_scan_timer.setInterval(1800)
+        self._law_scan_timer.timeout.connect(self._on_law_scan_timer_timeout)
 
         self._load_data_from_db()
         self._init_ui()
@@ -5098,6 +5179,9 @@ class WorkManagerDialog(QDialog):
         page_editor_layout = QVBoxLayout(self.page_editor)
         page_editor_layout.setContentsMargins(0, 0, 0, 0)
         page_editor_layout.setSpacing(0)
+        self.law_banner = LawReferenceBanner(self.page_editor)
+        self.law_banner.compare_requested.connect(self._on_law_compare_requested)
+        page_editor_layout.addWidget(self.law_banner)
         self.editor = RhwpEditorWidget(self, palette=self.palette)
         self.editor.contentChanged.connect(self._on_editor_text_changed)
         self.editor.personalInfoCheckRequested.connect(self._run_personal_info_check)
@@ -5491,8 +5575,6 @@ class WorkManagerDialog(QDialog):
         self._refresh_category_tree()
         self._refresh_sheet_tabs()
 
-        # 편집 변경 감지 시그널 연결 (저장되지 않은 변경사항 추적)
-        self.editor.contentChanged.connect(self._mark_active_sheet_dirty)
         if hasattr(self.editor, "fullscreenToggleRequested"):
             self.editor.fullscreenToggleRequested.connect(self._toggle_editor_fullscreen)
 
@@ -5963,21 +6045,33 @@ class WorkManagerDialog(QDialog):
             elif clicked == btn_discard:
                 self._reload_sheet_from_db(sheet)
 
+        was_active = (self._active_sheet_index == index)
+
         self._open_sheets.pop(index)
         self.sheet_tab_bar.blockSignals(True)
         self.sheet_tab_bar.removeTab(index)
         self.sheet_tab_bar.blockSignals(False)
 
-        if self._open_sheets:
-            new_idx = max(0, min(self._active_sheet_index, len(self._open_sheets) - 1))
+        if not self._open_sheets:
+            self._active_sheet_index = -1
+            self._clear_editor_view()
+            return
+
+        if was_active:
+            # 현재 활성 탭을 닫은 경우: 남은 탭 중 인접한 탭으로 이동 및 로드
+            new_idx = max(0, min(index, len(self._open_sheets) - 1))
             self.sheet_tab_bar.blockSignals(True)
             self.sheet_tab_bar.setCurrentIndex(new_idx)
             self.sheet_tab_bar.blockSignals(False)
             self._active_sheet_index = new_idx
             self._load_sheet_to_editor(new_idx)
         else:
-            self._active_sheet_index = -1
-            self._clear_editor_view()
+            # 다른 탭을 닫은 경우: 현재 보고 있던 시트는 그대로 유지하며 인덱스만 보정 (불필요한 리로드 및 * 발생 완전 방지)
+            if index < self._active_sheet_index:
+                self._active_sheet_index -= 1
+            self.sheet_tab_bar.blockSignals(True)
+            self.sheet_tab_bar.setCurrentIndex(self._active_sheet_index)
+            self.sheet_tab_bar.blockSignals(False)
 
     def closeEvent(self, event):
         """다이얼로그 닫힐 때 미저장 시트 확인 및 창 상태 저장"""
@@ -6001,6 +6095,11 @@ class WorkManagerDialog(QDialog):
                     self._save_sheet_sync(sheet)
                 elif clicked == btn_discard:
                     self._reload_sheet_from_db(sheet)
+
+        # 실행 중인 법령 온라인 조회 백그라운드 워커 종료
+        if hasattr(self, "_law_enrich_worker") and self._law_enrich_worker and self._law_enrich_worker.isRunning():
+            self._law_enrich_worker.abort()
+            self._law_enrich_worker.wait(200)
 
         self._save_window_state()
         event.accept()
@@ -6334,16 +6433,153 @@ class WorkManagerDialog(QDialog):
         elif action == act_delete:
             self._delete_sheet_permanently(target)
 
-    def _on_close_all_tabs(self) -> None:
-        """열려있는 모든 시트 탭을 닫기 (미저장 시 순차 확인)"""
-        while self._open_sheets:
-            # 맨 뒤 탭부터 차례로 닫기
-            idx = len(self._open_sheets) - 1
-            before_count = len(self._open_sheets)
-            self._on_sheet_tab_close(idx)
-            # 사용자가 취소(Cancel)를 눌러 탭이 닫히지 않은 경우 중단
-            if len(self._open_sheets) == before_count:
-                break
+    def _on_open_all_sheets(self, target_folder_item: QTreeWidgetItem | None = None) -> None:
+        """지정된 업무분류 폴더(또는 미지정 시 전체 트리)에 속한 업무 문서들을 탭에 한꺼번에 열기"""
+        sheets: list[WorkSheetData] = []
+
+        def _walk(node: QTreeWidgetItem):
+            node.setExpanded(True)
+            sh = node.data(0, Qt.UserRole)
+            if isinstance(sh, WorkSheetData) and sh not in sheets:
+                sheets.append(sh)
+            for k in range(node.childCount()):
+                _walk(node.child(k))
+
+        if target_folder_item is not None:
+            _walk(target_folder_item)
+        else:
+            for i in range(self.category_tree.topLevelItemCount()):
+                _walk(self.category_tree.topLevelItem(i))
+
+        if not sheets:
+            self.show_floating_toast("해당 분류에 열 수 있는 업무 문서가 없습니다.")
+            return
+
+        # 에디터 및 우측 패널 복원
+        self.center_stack.setCurrentWidget(self.page_editor)
+        self.right_container.show()
+        if self._right_expanded:
+            self.right_collapsed_bar.hide()
+            self.right_panel.show()
+            self.right_container.setMinimumWidth(130)
+            self.right_container.setMaximumWidth(16777215)
+            sizes = self.splitter.sizes()
+            if len(sizes) == 3 and sizes[2] < 150:
+                target_w = max(self._last_right_width, 310)
+                diff = target_w - sizes[2]
+                new_center = max(200, sizes[1] - diff)
+                self.splitter.setSizes([sizes[0], new_center, target_w])
+        else:
+            self.right_panel.hide()
+            self.right_collapsed_bar.show()
+            self.right_container.setFixedWidth(24)
+
+        self.sheet_tab_bar.blockSignals(True)
+        for sh in sheets:
+            if sh not in self._open_sheets:
+                self._open_sheets.append(sh)
+                idx = self.sheet_tab_bar.addTab(self._get_tab_text(sh))
+                self.sheet_tab_bar.setTabToolTip(idx, sh.title)
+        self.sheet_tab_bar.blockSignals(False)
+
+        # 열린 업무 중 첫 번째 업무 탭으로 포커스 (아직 활성 탭이 없거나 다른 분류를 보고 있던 경우)
+        first_sheet = sheets[0]
+        target_idx = self._open_sheets.index(first_sheet) if first_sheet in self._open_sheets else 0
+        if self._active_sheet_index < 0:
+            self.sheet_tab_bar.blockSignals(True)
+            self.sheet_tab_bar.setCurrentIndex(target_idx)
+            self.sheet_tab_bar.blockSignals(False)
+            self._active_sheet_index = target_idx
+            self._load_sheet_to_editor(target_idx)
+        elif self._active_sheet_index != target_idx and self._open_sheets[self._active_sheet_index] not in sheets:
+            self.sheet_tab_bar.blockSignals(True)
+            self.sheet_tab_bar.setCurrentIndex(target_idx)
+            self.sheet_tab_bar.blockSignals(False)
+            self._switch_sheet_to_editor(target_idx)
+
+    def _on_close_all_tabs(self, target_folder_item: QTreeWidgetItem | None = None) -> None:
+        """지정된 업무분류 폴더(또는 미지정 시 전체)의 열려있는 시트 탭을 한꺼번에 닫기"""
+        if not self._open_sheets:
+            return
+
+        if target_folder_item is not None:
+            folder_sheets: list[WorkSheetData] = []
+
+            def _walk_close(node: QTreeWidgetItem):
+                sh = node.data(0, Qt.UserRole)
+                if isinstance(sh, WorkSheetData) and sh not in folder_sheets:
+                    folder_sheets.append(sh)
+                for k in range(node.childCount()):
+                    _walk_close(node.child(k))
+
+            _walk_close(target_folder_item)
+            targets_to_close = [sh for sh in self._open_sheets if sh in folder_sheets]
+        else:
+            targets_to_close = list(self._open_sheets)
+
+        if not targets_to_close:
+            return
+
+        for sheet in targets_to_close:
+            if sheet.is_dirty and sheet in self._open_sheets:
+                curr_idx = self._open_sheets.index(sheet)
+                if self._active_sheet_index != curr_idx:
+                    self.sheet_tab_bar.blockSignals(True)
+                    self.sheet_tab_bar.setCurrentIndex(curr_idx)
+                    self.sheet_tab_bar.blockSignals(False)
+                    self._active_sheet_index = curr_idx
+                    self._load_sheet_to_editor(curr_idx)
+
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("저장되지 않은 변경사항")
+                msg_box.setText(f"'{sheet.title}' 문서에 저장되지 않은 변경사항이 있습니다.\n\n닫기 전에 저장하시겠습니까?")
+                btn_save = msg_box.addButton("저장(&S)", QMessageBox.ButtonRole.AcceptRole)
+                btn_discard = msg_box.addButton("저장 안 함(&D)", QMessageBox.ButtonRole.DestructiveRole)
+                btn_cancel = msg_box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+                msg_box.setDefaultButton(btn_save)
+                msg_box.exec()
+
+                clicked = msg_box.clickedButton()
+                if clicked == btn_cancel:
+                    return
+                elif clicked == btn_save:
+                    self._save_sheet_sync(sheet)
+                elif clicked == btn_discard:
+                    self._reload_sheet_from_db(sheet)
+
+        active_sheet = (
+            self._open_sheets[self._active_sheet_index]
+            if 0 <= self._active_sheet_index < len(self._open_sheets)
+            else None
+        )
+        was_active_closed = active_sheet in targets_to_close
+
+        self.sheet_tab_bar.blockSignals(True)
+        for sheet in targets_to_close:
+            if sheet in self._open_sheets:
+                idx = self._open_sheets.index(sheet)
+                self._open_sheets.pop(idx)
+                self.sheet_tab_bar.removeTab(idx)
+        self.sheet_tab_bar.blockSignals(False)
+
+        if not self._open_sheets:
+            self._active_sheet_index = -1
+            self._clear_editor_view()
+            return
+
+        if was_active_closed:
+            new_idx = min(max(0, self._active_sheet_index), len(self._open_sheets) - 1)
+            self.sheet_tab_bar.blockSignals(True)
+            self.sheet_tab_bar.setCurrentIndex(new_idx)
+            self.sheet_tab_bar.blockSignals(False)
+            self._active_sheet_index = new_idx
+            self._load_sheet_to_editor(new_idx)
+        elif active_sheet in self._open_sheets:
+            new_idx = self._open_sheets.index(active_sheet)
+            self._active_sheet_index = new_idx
+            self.sheet_tab_bar.blockSignals(True)
+            self.sheet_tab_bar.setCurrentIndex(new_idx)
+            self.sheet_tab_bar.blockSignals(False)
 
     def _on_close_other_tabs(self, keep_idx: int) -> None:
         """지정한 탭을 제외하고 나머지 모든 탭을 닫기"""
@@ -6392,6 +6628,7 @@ class WorkManagerDialog(QDialog):
             attachments=list(src.attachments),
         )
         self._all_sheets.append(new_sheet)
+        self._persist_sheet_file(new_sheet)
         self._refresh_category_tree()
         self.open_sheet(new_sheet)
 
@@ -6528,8 +6765,19 @@ class WorkManagerDialog(QDialog):
             self.search_input.clearFocus()
         QTimer.singleShot(250, self._focus_editor)
 
-        # 로딩 플래그 해제 (약간의 딜레이를 주어 초기 텍스트 이벤트로 dirty 설정되는 것 방지)
-        QTimer.singleShot(300, lambda: setattr(self, "_is_loading_sheet", False))
+        # 로딩 플래그 해제 (충분한 딜레이를 주어 웹 에디터 파싱/렌더링 중 발생하는 초기 변경 이벤트 무시)
+        def _finish_loading():
+            self._is_loading_sheet = False
+            # 로딩 완료 시점에 원본 시트의 is_dirty 상태를 깨끗하게 유지
+            if 0 <= self._active_sheet_index < len(self._open_sheets):
+                curr = self._open_sheets[self._active_sheet_index]
+                if curr.is_dirty:
+                    curr.is_dirty = False
+                    self._update_tab_title(curr)
+
+        QTimer.singleShot(600, _finish_loading)
+        # 법령 근거 스캔 및 개정 여부 비동기 확인
+        QTimer.singleShot(700, self._scan_active_sheet_laws)
 
     def _sync_tree_selection(self, index: int) -> None:
         """좌측 카테고리 트리의 선택 항목을 현재 열린 시트와 동기화 (다단계 폴더 재귀 탐색)"""
@@ -6655,10 +6903,15 @@ class WorkManagerDialog(QDialog):
         action_pii.setToolTip("업무 문서 내 개인정보(주민번호, 연락처, 이메일 등)를 검출하여 조치합니다.")
         action_pii.triggered.connect(self._run_personal_info_check)
 
-        # 3. 다국어 변환
-        action_trans = menu.addAction("다국어 변환")
+        # 3. 🌐 다국어 변환
+        action_trans = menu.addAction("🌐 다국어 변환")
         action_trans.setToolTip("연결된 AI 기능을 사용하여 현재 문서를 다국어로 변환합니다.")
         action_trans.triggered.connect(lambda: self.editor.open_ai_translate())
+
+        # 4. 🌐 브라우저 페이지 메모 관리 & 공유
+        action_browser_memo = menu.addAction("🌐 브라우저 페이지 메모 관리 (공유/내보내기/가져오기)")
+        action_browser_memo.setToolTip("work/browser에 보관된 브라우저 확장 프로그램 메모를 관리하고 외부 파일(.json)로 내보내거나 가져옵니다.")
+        action_browser_memo.triggered.connect(self.open_browser_memo_manager_dialog)
 
         menu.addSeparator()
 
@@ -6731,9 +6984,11 @@ class WorkManagerDialog(QDialog):
             pos = btn.mapToGlobal(QPoint(0, btn.height() + 2))
             menu.exec(pos)
 
-    def _show_template_dropdown_menu(self) -> None:
-        """하위 호환성 유지"""
-        self._show_extra_features_menu()
+    def open_browser_memo_manager_dialog(self) -> None:
+        """브라우저 페이지 메모 관리 및 단독 공유(내보내기/가져오기) 대화상자 실행"""
+        from taskcalendar.qt_browser_memo_dialog import BrowserMemoManagerDialog
+        dlg = BrowserMemoManagerDialog(parent=self, palette=self.palette)
+        dlg.exec()
 
     def open_memo_to_report_dialog(self, initial_title: str = "", initial_memo_text: str = "") -> None:
         """메모로 공문서(보고서·보도자료) HWPX 생성 다이얼로그를 열고 완료 시 새 업무 문서로 오픈"""
@@ -6894,6 +7149,14 @@ class WorkManagerDialog(QDialog):
 
     def _show_image_template_dialog(self) -> None:
         """공문서 직인·결재선·고무인 및 AI 서식 이미지 템플릿 대화상자 표시"""
+        if self._active_sheet_index < 0 or not self._open_sheets:
+            QMessageBox.information(
+                self,
+                "템플릿 적용 안내",
+                "현재 열려있는 업무 페이지가 없습니다.\n먼저 업무 페이지를 열거나 생성한 후 템플릿을 선택해 주세요.",
+            )
+            return
+
         from taskcalendar.image_template_dialog import ImageTemplateDialog
 
         active_editor = self.editor if hasattr(self, "editor") else self
@@ -6901,7 +7164,15 @@ class WorkManagerDialog(QDialog):
         dlg.exec()
 
     def _apply_template_file(self, file_path: Path) -> None:
-        """선택된 템플릿을 현재 에디터에 삽입 또는 새 문서로 적용 (HWPX/HWP 한글 정식 서식 완벽 지원)"""
+        """선택된 템플릿을 현재 열린 에디터 페이지에 적용"""
+        if self._active_sheet_index < 0 or not self._open_sheets:
+            QMessageBox.information(
+                self,
+                "템플릿 적용 안내",
+                "현재 열려있는 업무 페이지가 없습니다.\n먼저 업무 페이지를 열거나 생성한 후 템플릿을 선택해 주세요.",
+            )
+            return
+
         try:
             import re as _re
             stem = _re.sub(r"^\d+_", "", file_path.stem).replace("_", " ").strip()
@@ -6918,52 +7189,6 @@ class WorkManagerDialog(QDialog):
                     content, hwpx_blob = extract_document_content(hwpx_candidate)
                 else:
                     content = file_path.read_text(encoding="utf-8")
-
-            # 열려있는 시트가 없는 경우 새 업무로 자동 생성
-            if self._active_sheet_index < 0 or not self._open_sheets:
-                target_cat_name = self._categories[0] if self._categories else "1. 일반 업무"
-                target_cat_id = None
-                selected = self.category_tree.selectedItems()
-                if selected:
-                    sel_item = selected[0]
-                    sel_sheet = sel_item.data(0, Qt.UserRole)
-                    if isinstance(sel_sheet, WorkSheetData):
-                        target_cat_name = sel_sheet.category
-                        target_cat_id = sel_sheet.category_id
-                    else:
-                        target_cat_name = sel_item.data(0, Qt.UserRole + 2) or sel_item.text(0).replace("📁 ", "").replace("📂 ", "").strip()
-                        target_cat_id = sel_item.data(0, Qt.UserRole + 1)
-
-                db_id = None
-                if self.repository:
-                    db_id = self.repository.upsert_work_item(
-                        work_id=None,
-                        title=stem,
-                        category_name=target_cat_name,
-                        category_id=target_cat_id,
-                        cycle="수시",
-                        content_text=content,
-                        hwpx_blob=hwpx_blob,
-                        sort_order=len(self._all_sheets) + 1,
-                    )
-                new_sheet = WorkSheetData(
-                    db_id=db_id,
-                    sheet_id=f"sheet_{db_id or (len(self._all_sheets) + 1)}",
-                    title=stem,
-                    category=target_cat_name,
-                    category_id=target_cat_id,
-                    cycle="수시",
-                    content_text=content,
-                    hwpx_blob=hwpx_blob,
-                )
-                self._all_sheets.append(new_sheet)
-                if self.repository:
-                    self._load_categories_from_db()
-                    self._refresh_category_combos()
-                self._refresh_category_tree()
-                self.open_sheet(new_sheet)
-                self.show_floating_toast(f"'{stem}' 한글 서식으로 새 업무가 생성되었습니다.")
-                return
 
             # 현재 열려있는 시트에 적용하는 경우
             curr_sheet = self._open_sheets[self._active_sheet_index]
@@ -7047,6 +7272,7 @@ class WorkManagerDialog(QDialog):
             content_text="",
         )
         self._all_sheets.append(new_sheet)
+        self._persist_sheet_file(new_sheet)
         if self.repository:
             self._load_categories_from_db()
             self._refresh_category_combos()
@@ -7560,6 +7786,11 @@ class WorkManagerDialog(QDialog):
             elif sheet.content_text:
                 txt_dest = dest.with_suffix(".txt")
                 txt_dest.write_text(sheet.content_text, encoding="utf-8")
+            else:
+                # 새 업무 생성 직후 본문이 비어 있는 경우에도 work/ 폴더에 동기화용 기본 텍스트 파일 생성
+                txt_dest = dest.with_suffix(".txt")
+                if not dest.exists() and not txt_dest.exists():
+                    txt_dest.write_text(f"[{sheet.title}]\n", encoding="utf-8")
         except Exception as e:
             logger.warning("Failed to persist work file: %s", e)
 
@@ -7728,14 +7959,19 @@ class WorkManagerDialog(QDialog):
             db_items = []
             for it in self.repository.list_work_items():
                 blob = it.get("hwpx_blob")
+                ctext = (it.get("content_text") or "").strip()
+                cat_name = it.get("category_name")
+                cat_id = it.get("category_id")
                 db_items.append({
                     "id": it.get("id"),
                     "title": it.get("title"),
-                    "category_name": it.get("category_name"),
-                    "group": self._group_no(it.get("category_name")),
-                    "cat_path": self._cat_path(it.get("category_name")),
+                    "category_name": cat_name,
+                    "category_id": cat_id,
+                    "group": self._group_no(cat_name, cat_id),
+                    "cat_path": self._cat_path(cat_name, cat_id),
                     "sha1": hashlib.sha1(blob).hexdigest() if blob else None,
                     "hwpx_blob": blob,
+                    "content_text": ctext,
                 })
             known_cats = {c.get("name") for c in self._category_rows if c.get("name")}
             plan = work_files.plan_reconcile(db_items, work_files.scan_work_files(known_cats))
@@ -7758,12 +7994,18 @@ class WorkManagerDialog(QDialog):
             except Exception:
                 pass
 
+        # 방금 '+ 업무'로 제목만 만들어 두고 아직 본문 저장을 안 한 빈 업무(blob/text 모두 없음)는 파일 누락 경고에서 제외
+        real_missing = [
+            d for d in plan["missing"]
+            if d.get("hwpx_blob") or d.get("content_text")
+        ]
+
         # 애매한 항목(파일 없음/새 파일)은 대화형 매핑 팝업으로 처리
-        if not (plan["missing"] or plan["new"]):
+        if not (real_missing or plan["new"]):
             return
         dlg = WorkFileSyncDialog(
             self,
-            missing_docs=plan["missing"],
+            missing_docs=real_missing,
             new_files=plan["new"],
             palette=self.palette,
             tabs=self._category_tabs,
@@ -8205,12 +8447,19 @@ class WorkManagerDialog(QDialog):
             act_add_cat = menu.addAction("📁 새 분류(폴더) 추가")
             act_add_doc = menu.addAction("📄 새 업무 추가")
             menu.addSeparator()
+            act_open_all = menu.addAction("📂 모든 업무 열기")
+            act_close_all = menu.addAction("🚫 모든 업무 닫기")
+            menu.addSeparator()
             act_import = menu.addAction("📥 불러오기 (내보낸 폴더)")
             action = menu.exec(self.category_tree.mapToGlobal(pos))
             if action == act_add_cat:
                 self._on_add_category()
             elif action == act_add_doc:
                 self._on_add_new_sheet()
+            elif action == act_open_all:
+                self._on_open_all_sheets()
+            elif action == act_close_all:
+                self._on_close_all_tabs()
             elif action == act_import:
                 self._on_import_work_folder()
             return
@@ -8220,9 +8469,13 @@ class WorkManagerDialog(QDialog):
             act_open = menu.addAction("📄 열기")
             act_open_hwp = menu.addAction("📝 한글로 열기")
             act_reveal = menu.addAction("📂 탐색기에서 열기")
-            act_demote = menu.addAction("📎 첨부파일로 이동")
+            menu.addSeparator()
+            act_open_all = menu.addAction("📂 모든 업무 열기")
+            act_close_all = menu.addAction("🚫 모든 업무 닫기")
+            menu.addSeparator()
             act_rename = menu.addAction("✏️ 이름 바꾸기")
             act_dup = menu.addAction("📋 복제")
+            act_demote = menu.addAction("📎 첨부파일로 이동")
 
             # 다른 탭으로 이동 서브메뉴 (현재 활성 탭 외의 탭들이 있을 때)
             other_tabs = [t for t in self._category_tabs if t["id"] != self._active_category_tab_id]
@@ -8236,14 +8489,18 @@ class WorkManagerDialog(QDialog):
             menu.addSeparator()
             act_reg_cal = menu.addAction("📅 캘린더에 일정 등록")
             menu.addSeparator()
-            act_delete = menu.addAction("🗑️ 업무 삭제 (DB 영구 삭제)")
-            menu.addSeparator()
             act_add_doc = menu.addAction("➕ 새 업무 추가")
+            menu.addSeparator()
+            act_delete = menu.addAction("🗑️ 업무 삭제 (DB 영구 삭제)")
             action = menu.exec(self.category_tree.mapToGlobal(pos))
             if action in doc_tab_actions:
                 self._move_sheet_to_tab(sheet, doc_tab_actions[action])
             elif action == act_open:
                 self._open_sheet_or_external(sheet)
+            elif action == act_open_all:
+                self._on_open_all_sheets(item.parent())
+            elif action == act_close_all:
+                self._on_close_all_tabs(item.parent())
             elif action == act_open_hwp:
                 self._open_sheet_in_hangul(sheet)
             elif action == act_reveal:
@@ -8307,6 +8564,9 @@ class WorkManagerDialog(QDialog):
                     tab_actions[act_m] = ot["id"]
 
             menu.addSeparator()
+            act_open_all = menu.addAction("📂 모든 업무 열기")
+            act_close_all = menu.addAction("🚫 모든 업무 닫기")
+            menu.addSeparator()
             act_delete = menu.addAction("🗑️ 폴더 삭제")
             menu.addSeparator()
             act_add_cat = menu.addAction("📁 새 루트 분류(폴더) 추가")
@@ -8319,6 +8579,10 @@ class WorkManagerDialog(QDialog):
                 self._on_rename_category(cat_name)
             elif action in tab_actions:
                 self._move_category_to_tab(cat_id, cat_name, tab_actions[action])
+            elif action == act_open_all:
+                self._on_open_all_sheets(item)
+            elif action == act_close_all:
+                self._on_close_all_tabs(item)
             elif action == act_delete:
                 self._on_delete_category(cat_name)
             elif action == act_add_cat:
@@ -8506,6 +8770,7 @@ class WorkManagerDialog(QDialog):
             content_text="",
         )
         self._all_sheets.append(new_sheet)
+        self._persist_sheet_file(new_sheet)
         self._refresh_category_tree()
         self.open_sheet(new_sheet)
 
@@ -10856,6 +11121,26 @@ class WorkManagerDialog(QDialog):
         progress.show()
         QApplication.processEvents()
 
+        # work.json 및 브라우저 메모(browser/page_memos.json) 감지 및 연동 데이터 준비
+        docs_meta_map: dict[str, dict] = {}
+        try:
+            wj_file = root_dir / "work.json"
+            if wj_file.exists():
+                wj_data = json.loads(wj_file.read_text(encoding="utf-8"))
+                for dm in wj_data.get("documents", []):
+                    t = dm.get("title")
+                    if t:
+                        docs_meta_map[t] = dm
+                # 브라우저 메모 복원 (work.json 내 browser_memos)
+                wj_memos = wj_data.get("browser_memos", [])
+                if wj_memos:
+                    work_files.merge_browser_memos(wj_memos)
+            browser_file = root_dir / "browser" / "page_memos.json"
+            if browser_file.exists():
+                work_files.import_browser_memos_from_file(browser_file)
+        except Exception as ex:
+            logger.warning("Failed to parse work.json or restore browser memos during import: %s", ex)
+
         # 기존 카테고리 이름 -> id 매핑 (현재 탭 기준)
         existing_cat_id_map: dict[str, int | None] = {}
         for c in self._category_rows:
@@ -11062,7 +11347,67 @@ class WorkManagerDialog(QDialog):
                     shutil.copy2(file_p, target_file)
             except Exception as e:
                 logger.warning(f"Failed to copy original file to work dir: {e}")
-                self._persist_sheet_file(sheet)
+            # work.json 기반 연계 데이터 복원 (일정, 문서, 북마크)
+            doc_meta = docs_meta_map.get(doc_title) or docs_meta_map.get(file_p.stem)
+            if doc_meta:
+                # 1) 연계 일정 복원
+                schedules_to_restore = doc_meta.get("schedules", [])
+                if schedules_to_restore and self.repository and db_id:
+                    for s_item in schedules_to_restore:
+                        try:
+                            self.repository.add_entry(
+                                start_date=s_item.get("start_date", ""),
+                                end_date=s_item.get("end_date", ""),
+                                title=s_item.get("title", ""),
+                                content_text=s_item.get("content_text", ""),
+                                is_lunar=bool(s_item.get("is_lunar", False)),
+                                is_event=bool(s_item.get("is_event", False)),
+                                is_task=bool(s_item.get("is_task", False)),
+                                repeat_rule=s_item.get("repeat_rule", "none"),
+                                category=s_item.get("category", ""),
+                                color=s_item.get("color", "#2563EB"),
+                                reminder_minutes=int(s_item.get("reminder_minutes", 0)),
+                                cycle=s_item.get("cycle", "수시"),
+                                source_type=s_item.get("source_type", "schedule"),
+                                work_id=db_id,
+                                work_title=doc_title,
+                            )
+                        except Exception as ex:
+                            logger.warning(f"Failed to restore schedule for '{doc_title}': {ex}")
+
+                # 2) 연계 문서(Task) 복원
+                tasks_to_restore = doc_meta.get("linked_tasks", [])
+                if tasks_to_restore and self.repository and db_id:
+                    for t_item in tasks_to_restore:
+                        try:
+                            t_title = t_item.get("title", "")
+                            t_eid = t_item.get("entry_id")
+                            if t_eid and self.repository.get_entry(t_eid):
+                                self.repository.link_entry_to_work(work_id=db_id, entry_id=t_eid, entry_type="task")
+                            elif t_title:
+                                import datetime as _dt
+                                new_eid = self.repository.add_entry(
+                                    start_date=t_item.get("start_date") or _dt.date.today().isoformat(),
+                                    end_date="",
+                                    title=t_title,
+                                    content_text="",
+                                    is_task=True,
+                                    category=t_item.get("category", ""),
+                                    work_id=db_id,
+                                    work_title=doc_title,
+                                )
+                                self.repository.link_entry_to_work(work_id=db_id, entry_id=new_eid, entry_type="task")
+                        except Exception as ex:
+                            logger.warning(f"Failed to restore linked task for '{doc_title}': {ex}")
+
+                # 3) 하이라이트 북마크 복원
+                bookmarks_to_restore = doc_meta.get("bookmarks", [])
+                if bookmarks_to_restore:
+                    try:
+                        self._save_sheet_bookmarks(sheet, bookmarks_to_restore)
+                    except Exception as ex:
+                        logger.warning(f"Failed to restore bookmarks for '{doc_title}': {ex}")
+
             imported_sheets.append(sheet)
 
         progress.setValue(total_files)
@@ -11126,6 +11471,7 @@ class WorkManagerDialog(QDialog):
             categories=self._category_rows,
             palette=self.palette,
             tabs=self._category_tabs,
+            repository=self.repository,
         )
         dlg.exec()
 
@@ -11280,7 +11626,167 @@ class WorkManagerDialog(QDialog):
         self._mark_active_sheet_dirty()
 
     def _on_editor_text_changed(self) -> None:
+        if self._is_loading_sheet or self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
+            return
         self._mark_active_sheet_dirty()
+        if hasattr(self, "_law_scan_timer"):
+            self._law_scan_timer.start()
+
+    def _on_law_scan_timer_timeout(self) -> None:
+        """에디터 내용 변경 디바운스 완료 후 법령 근거 스캔"""
+        self._scan_active_sheet_laws()
+
+    def _manual_scan_sheet_laws(self) -> None:
+        """메뉴 등에서 수동으로 법령 근거 및 개정 여부 점검 실행"""
+        self._scan_active_sheet_laws(show_popup_if_empty=True)
+
+    def _scan_active_sheet_laws(self, show_popup_if_empty: bool = False) -> None:
+        """현재 열린 시트에서 법령 근거를 스캔 (UI 블로킹 전혀 없이 비동기 처리)"""
+        if not hasattr(self, "law_banner") or self._active_sheet_index < 0 or self._active_sheet_index >= len(self._open_sheets):
+            if hasattr(self, "law_banner"):
+                self.law_banner.hide()
+            return
+
+        sheet = self._open_sheets[self._active_sheet_index]
+        content = ""
+        try:
+            content = self.editor.get_cached_html()
+        except Exception:
+            pass
+        if not content or len(content.strip()) < 5:
+            content = sheet.content_text or ""
+
+        if not content or not content.strip():
+            self.law_banner.hide()
+            if show_popup_if_empty:
+                QMessageBox.information(self, "법령 근거 점검", "문서 내용이 비어있어 분석할 수 없습니다.")
+            return
+
+        try:
+            # 1단계: 메인 스레드에서 정규식으로 즉시 추출 (0.1ms 소요, UI 블로킹 0)
+            refs = extract_laws_from_text(content, verify_online=False)
+            self._current_law_refs = refs
+
+            if not refs:
+                self.law_banner.hide()
+                if show_popup_if_empty:
+                    QMessageBox.information(
+                        self,
+                        "법령 근거 점검",
+                        "본문에서 감지된 법령 근거(예: 「개인정보 보호법」 제15조 등)가 없습니다.\n\n"
+                        "법령명 또는 법령 조문 번호가 포함되어 있는지 확인하세요.",
+                    )
+                return
+
+            # 이미 모든 항목이 캐시에서 공식명/시행일/조문이 채워져 완성된 상태인지 확인
+            valid_cached_refs = [r for r in refs if r.official_name or r.mst]
+            all_ready = bool(valid_cached_refs) and all(
+                bool(r.latest_enforce_date or r.enforce_date) and (not r.article_no or bool(r.article_text))
+                for r in valid_cached_refs
+            ) and len(valid_cached_refs) == len(refs)
+
+            if all_ready:
+                self._current_law_refs = valid_cached_refs
+                self.law_banner.update_references(valid_cached_refs)
+                if show_popup_if_empty and valid_cached_refs:
+                    self._on_law_compare_requested(valid_cached_refs[0])
+                return
+
+            # 미완성 항목이 있는 경우 2단계로 바뀌지 않도록 백그라운드 조회 완료 후 처음부터 완성된 결과만 한 번에 표시
+            if self._law_enrich_worker and self._law_enrich_worker.isRunning():
+                self._law_enrich_worker.abort()
+
+            self._law_scan_generation += 1
+            gen = self._law_scan_generation
+
+            self._law_enrich_worker = LawEnrichWorker(gen, refs, self)
+            if show_popup_if_empty:
+                self._law_enrich_worker.finished.connect(
+                    lambda g, er: (self._on_law_enrich_finished(g, er), self._on_law_compare_requested(er[0]) if er else QMessageBox.information(self, "법령 근거 점검", "본문에서 감지된 법령 근거가 없습니다."))
+                )
+            else:
+                self._law_enrich_worker.finished.connect(self._on_law_enrich_finished)
+            self._law_enrich_worker.start()
+        except Exception as e:
+            logger.warning(f"Error scanning law references: {e}")
+
+    def _on_law_enrich_finished(self, gen: int, enriched_refs: list[LawReference]) -> None:
+        """백그라운드 스레드에서 온라인 법령 조회가 완료되었을 때 완성된 배너를 한 번에 표시"""
+        if gen != self._law_scan_generation:
+            return  # 사용자가 다른 시트로 이동했거나 새로운 타이핑이 시작됨
+        valid_refs = [r for r in enriched_refs if r.official_name or r.mst]
+        self._current_law_refs = valid_refs
+        if hasattr(self, "law_banner"):
+            if valid_refs:
+                self.law_banner.update_references(valid_refs)
+            else:
+                self.law_banner.hide()
+
+    def _on_law_compare_requested(self, ref: LawReference) -> None:
+        """법령 대조 및 업데이트 다이얼로그 호출"""
+        try:
+            content = ""
+            try:
+                content = self.editor.get_cached_html()
+            except Exception:
+                pass
+            if not content:
+                if 0 <= self._active_sheet_index < len(self._open_sheets):
+                    content = self._open_sheets[self._active_sheet_index].content_text or ""
+
+            clean_text = html.unescape(re.sub(r"<[^>]+>", " ", content or "")).strip()
+            # 문서 전체 업무 내용을 전달 (최대 4000자까지 안전하게 전달)
+            if len(clean_text) > 4000:
+                matched_str = ref.raw_matched or ref.law_name
+                idx = clean_text.find(matched_str)
+                if idx >= 0:
+                    start = max(0, idx - 200)
+                    end = min(len(clean_text), start + 3800)
+                    context_snippet = clean_text[start:end].strip()
+                else:
+                    context_snippet = clean_text[:4000].strip()
+            else:
+                context_snippet = clean_text
+
+            dlg = LawComparisonDialog(
+                ref=ref,
+                doc_context=context_snippet,
+                all_refs=self._current_law_refs,
+                on_apply_update=self._apply_law_update_to_editor,
+                parent=self,
+            )
+            dlg.exec()
+        except Exception as e:
+            logger.error(f"Error opening law comparison dialog: {e}", exc_info=True)
+            QMessageBox.warning(self, "법령 대조 안내", f"법령 대조 창을 여는 중 오류가 발생했습니다:\n{e}")
+
+    def _apply_law_update_to_editor(self, original_matched: Any, replacement_text: str = "") -> None:
+        """최신 법령 조문을 현재 에디터에 스마트 치환 또는 삽입 (단일 문구 및 복수 문맥 리스트 모두 지원)"""
+        try:
+            pairs: list[tuple[str, str]] = []
+            if isinstance(original_matched, list):
+                pairs = [(str(o).strip(), str(r).strip()) for o, r in original_matched if o and r]
+            elif original_matched and replacement_text:
+                pairs = [(str(original_matched).strip(), str(replacement_text).strip())]
+
+            applied = False
+            if pairs and hasattr(self.editor, "apply_text_replacements"):
+                try:
+                    self.editor.apply_text_replacements(pairs)
+                    applied = True
+                except Exception as ex:
+                    logger.debug(f"apply_text_replacements failed: {ex}")
+
+            if not applied:
+                if pairs:
+                    fallback_txt = "\n\n".join(r for _, r in pairs)
+                    self.editor.insert_text_at_cursor(fallback_txt)
+                elif replacement_text:
+                    self.editor.insert_text_at_cursor(replacement_text)
+
+            self._mark_active_sheet_dirty()
+        except Exception as e:
+            logger.error(f"Failed to apply law update: {e}")
 
     def _open_search_bar(self) -> None:
         """단축키(Ctrl+F)로 검색창 포커스"""

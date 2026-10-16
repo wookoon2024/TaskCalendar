@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <title>페이지 메모 관리 - 바로업무로 보내기</title>
+  <title>바로업무 메모 관리</title>
   <style>
     :root {
       --primary: #2563EB;
@@ -98,13 +98,14 @@
 <body>
   <div class="wrap">
     <div class="page-head">
-      <h1>🗒️ 페이지 메모 관리</h1>
-      <div class="sub">웹 페이지별로 등록한 플로팅 메모를 확인하고, 내보내기/가져오기로 다른 PC와 공유할 수 있습니다.</div>
+      <h1>바로업무 메모 관리</h1>
+      <div class="sub">웹 페이지별로 등록한 메모를 확인하고, 내보내기/가져오기로 다른 PC와 공유할 수 있습니다.</div>
     </div>
 
     <div class="toolbar">
-      <button type="button" class="btn btn-primary" id="btn-export">⬇️ 내보내기 (JSON)</button>
-      <button type="button" class="btn" id="btn-import">⬆️ 가져오기</button>
+      <button type="button" class="btn btn-primary" id="btn-export">내보내기 (JSON)</button>
+      <button type="button" class="btn btn-primary" id="btn-import">가져오기</button>
+      <button type="button" class="btn btn-primary" id="btn-sync-app" title="현재 브라우저의 모든 페이지 메모를 바로업무(work/browser)에 직접 백업합니다.">바로업무(work/browser)로 백업</button>
       <input type="file" id="file-input" accept="application/json,.json" style="display:none">
       <div class="spacer"></div>
       <div class="mode-group">

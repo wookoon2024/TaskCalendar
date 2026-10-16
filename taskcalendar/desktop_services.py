@@ -427,37 +427,37 @@ def register_explorer_context_menus() -> bool:
         except Exception:
             pass
 
-        # 1. 파일 우클릭: "업무로 등록" (*\shell\TaskCalendar.1.WorkDoc)
+        # 1. 파일 우클릭: "바로업무 업무로 등록" (*\shell\TaskCalendar.1.WorkDoc)
         key_doc = r"Software\Classes\*\shell\TaskCalendar.1.WorkDoc"
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_doc, 0, winreg.KEY_SET_VALUE) as key:
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "TaskCalendar 업무로 등록")
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "바로업무 업무로 등록")
             if icon_str:
                 winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_str)
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_doc + r"\command", 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, cmd_import)
 
-        # 2. 파일 우클릭: "업무 첨부파일로 등록" (*\shell\TaskCalendar.2.WorkAttach)
+        # 2. 파일 우클릭: "바로업무 첨부파일로 등록" (*\shell\TaskCalendar.2.WorkAttach)
         key_attach = r"Software\Classes\*\shell\TaskCalendar.2.WorkAttach"
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_attach, 0, winreg.KEY_SET_VALUE) as key:
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "TaskCalendar 업무 첨부파일로 등록")
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "바로업무 첨부파일로 등록")
             if icon_str:
                 winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_str)
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_attach + r"\command", 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, cmd_attach)
 
-        # 3. 폴더 우클릭: "업무로 등록" (Directory\shell\TaskCalendar.1.WorkFolder)
+        # 3. 폴더 우클릭: "바로업무 업무로 등록" (Directory\shell\TaskCalendar.1.WorkFolder)
         key_f_doc = r"Software\Classes\Directory\shell\TaskCalendar.1.WorkFolder"
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_f_doc, 0, winreg.KEY_SET_VALUE) as key:
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "TaskCalendar 업무로 등록")
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "바로업무 업무로 등록")
             if icon_str:
                 winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_str)
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_f_doc + r"\command", 0, winreg.KEY_SET_VALUE) as key:
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, cmd_import_folder)
 
-        # 4. 폴더 우클릭: "업무 첨부파일로 등록" (Directory\shell\TaskCalendar.2.AttachFolder)
+        # 4. 폴더 우클릭: "바로업무 첨부파일로 등록" (Directory\shell\TaskCalendar.2.AttachFolder)
         key_f_attach = r"Software\Classes\Directory\shell\TaskCalendar.2.AttachFolder"
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_f_attach, 0, winreg.KEY_SET_VALUE) as key:
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "TaskCalendar 업무 첨부파일로 등록")
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, "바로업무 첨부파일로 등록")
             if icon_str:
                 winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon_str)
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, key_f_attach + r"\command", 0, winreg.KEY_SET_VALUE) as key:
@@ -534,18 +534,19 @@ def force_window_to_foreground(hwnd: int) -> None:
     try:
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
+        hwnd_ptr = ctypes.c_void_p(int(hwnd))
 
         # 1. Ensure window is not minimized
         SW_RESTORE = 9
         SW_SHOW = 5
-        if user32.IsIconic(hwnd):
-            user32.ShowWindow(hwnd, SW_RESTORE)
+        if user32.IsIconic(hwnd_ptr):
+            user32.ShowWindow(hwnd_ptr, SW_RESTORE)
         else:
-            user32.ShowWindow(hwnd, SW_SHOW)
+            user32.ShowWindow(hwnd_ptr, SW_SHOW)
 
         # 2. AttachThreadInput bypass to steal focus legally
         fg_hwnd = user32.GetForegroundWindow()
-        fg_thread_id = user32.GetWindowThreadProcessId(fg_hwnd, None)
+        fg_thread_id = user32.GetWindowThreadProcessId(ctypes.c_void_p(fg_hwnd), None) if fg_hwnd else 0
         cur_thread_id = kernel32.GetCurrentThreadId()
 
         attached = False
@@ -556,25 +557,25 @@ def force_window_to_foreground(hwnd: int) -> None:
         user32.keybd_event(0x12, 0, 0, 0)
         user32.keybd_event(0x12, 0, 2, 0)
 
-        # 4. Z-order toggle: Set HWND_TOPMOST then HWND_NOTOPMOST
-        HWND_TOPMOST = -1
-        HWND_NOTOPMOST = -2
+        # 4. Z-order toggle: Set HWND_TOPMOST then HWND_NOTOPMOST (use c_void_p for 64-bit HWND)
+        HWND_TOPMOST = ctypes.c_void_p(-1)
+        HWND_NOTOPMOST = ctypes.c_void_p(-2)
         SWP_NOMOVE = 0x0002
         SWP_NOSIZE = 0x0001
         SWP_SHOWWINDOW = 0x0040
         flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
 
-        user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags)
-        user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
-        user32.BringWindowToTop(hwnd)
-        user32.SetForegroundWindow(hwnd)
+        user32.SetWindowPos(hwnd_ptr, HWND_TOPMOST, 0, 0, 0, 0, flags)
+        user32.SetWindowPos(hwnd_ptr, HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+        user32.BringWindowToTop(hwnd_ptr)
+        user32.SetForegroundWindow(hwnd_ptr)
 
         if attached:
             user32.AttachThreadInput(cur_thread_id, fg_thread_id, False)
 
         # 5. SwitchToThisWindow fallback
         if hasattr(user32, "SwitchToThisWindow"):
-            user32.SwitchToThisWindow(hwnd, True)
+            user32.SwitchToThisWindow(hwnd_ptr, True)
     except Exception:
         logger.exception("force_window_to_foreground failed")
 

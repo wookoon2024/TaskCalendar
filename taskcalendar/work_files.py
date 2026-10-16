@@ -32,6 +32,159 @@ def work_root() -> Path:
     return runtime_root() / "work"
 
 
+def browser_root() -> Path:
+    """브라우저 메모 및 연계 정보 루트 (work/browser)"""
+    p = work_root() / "browser"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def browser_memos_path() -> Path:
+    """브라우저 메모 기본 동기화 파일 (work/browser/page_memos.json)"""
+    return browser_root() / "page_memos.json"
+
+
+def load_browser_memos() -> list[dict]:
+    """work/browser/page_memos.json에서 브라우저 메모 목록을 읽어 정규화된 리스트로 반환한다."""
+    import json
+    p = browser_memos_path()
+    if not p.exists():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            if "memos" in data and isinstance(data["memos"], list):
+                return data["memos"]
+            if "pages" in data and isinstance(data["pages"], dict):
+                # 크롬 확장 프로그램 원본 store 구조 ({ url: { memos: [...] } }) 지원
+                flat = []
+                for p_key, page in data["pages"].items():
+                    p_url = page.get("url") or p_key
+                    p_title = page.get("title", "")
+                    for m in page.get("memos", []):
+                        m_copy = dict(m)
+                        if "url" not in m_copy:
+                            m_copy["url"] = p_url
+                        if "title" not in m_copy or not m_copy["title"]:
+                            m_copy["title"] = p_title
+                        if "content" not in m_copy and "text" in m_copy:
+                            m_copy["content"] = m_copy["text"]
+                        flat.append(m_copy)
+                return flat
+    except Exception:
+        pass
+    return []
+
+
+def save_browser_memos(memos: list[dict]) -> bool:
+    """work/browser/page_memos.json에 브라우저 메모 목록을 저장한다."""
+    import datetime
+    import json
+    p = browser_memos_path()
+    try:
+        payload = {
+            "version": 1,
+            "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "count": len(memos),
+            "memos": memos,
+        }
+        p.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+def merge_browser_memos(new_memos: list[dict], overwrite_existing: bool = False) -> tuple[int, int]:
+    """
+    기존 브라우저 메모에 새 메모들을 스마트 병합(Merge)한다.
+    반환값: (새로 추가된 개수, 갱신된 개수)
+    """
+    existing = load_browser_memos()
+    existing_map = {}
+    for m in existing:
+        mid = str(m.get("id") or "")
+        key = mid if mid else (m.get("url", ""), m.get("content", ""), m.get("created_at", ""))
+        existing_map[key] = m
+
+    added_count = 0
+    updated_count = 0
+
+    for m in new_memos:
+        mid = str(m.get("id") or "")
+        key = mid if mid else (m.get("url", ""), m.get("content", ""), m.get("created_at", ""))
+        if key in existing_map:
+            if overwrite_existing:
+                existing_map[key] = m
+                updated_count += 1
+        else:
+            existing_map[key] = m
+            added_count += 1
+
+    merged = list(existing_map.values())
+    save_browser_memos(merged)
+    return added_count, updated_count
+
+
+def export_browser_memos_to_file(target_path: Path | str, memos: list[dict] | None = None) -> bool:
+    """브라우저 메모 목록을 지정한 파일(.json)로 내보낸다."""
+    import datetime
+    import json
+    tgt = Path(target_path)
+    tgt.parent.mkdir(parents=True, exist_ok=True)
+    if memos is None:
+        memos = load_browser_memos()
+    try:
+        payload = {
+            "version": 1,
+            "exported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "count": len(memos),
+            "memos": memos,
+        }
+        tgt.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
+def import_browser_memos_from_file(source_path: Path | str, overwrite: bool = False) -> tuple[int, int]:
+    """지정한 파일(.json)에서 브라우저 메모를 읽어와 현재 work/browser에 병합한다."""
+    import json
+    src = Path(source_path)
+    if not src.exists():
+        return 0, 0
+    try:
+        data = json.loads(src.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            memos = data
+        elif isinstance(data, dict):
+            if "memos" in data and isinstance(data["memos"], list):
+                memos = data["memos"]
+            elif "pages" in data and isinstance(data["pages"], dict):
+                memos = []
+                for p_key, page in data["pages"].items():
+                    p_url = page.get("url") or p_key
+                    p_title = page.get("title", "")
+                    for m in page.get("memos", []):
+                        m_copy = dict(m)
+                        if "url" not in m_copy:
+                            m_copy["url"] = p_url
+                        if "title" not in m_copy or not m_copy["title"]:
+                            m_copy["title"] = p_title
+                        if "content" not in m_copy and "text" in m_copy:
+                            m_copy["content"] = m_copy["text"]
+                        memos.append(m_copy)
+            else:
+                memos = []
+        else:
+            memos = []
+        return merge_browser_memos(memos, overwrite_existing=overwrite)
+    except Exception:
+        return 0, 0
+
+
+
 def sanitize_component(name: str, fallback: str = "무제") -> str:
     """
     문자열을 Windows 파일/폴더 이름으로 안전하게 변환한다.

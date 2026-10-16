@@ -233,6 +233,10 @@ class QtGlobalHotkeyManager:
             msg = MSG()
             while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_REMOVE):
                 if msg.message == WM_HOTKEY and int(msg.wParam) == self.hotkey_id:
+                    try:
+                        user32.AllowSetForegroundWindow(-1)
+                    except Exception:
+                        pass
                     self._signal.triggered.emit()
             time.sleep(0.03)
 
@@ -2537,16 +2541,29 @@ class MainWindow(QMainWindow):
             self.repository.set_setting("hotkey_migrated_v2", "1")
         self.repository.save()
 
+    def _is_window_in_foreground(self, win: QWidget) -> bool:
+        if win is None or not win.isVisible() or win.isMinimized():
+            return False
+        if win.isActiveWindow():
+            return True
+        try:
+            fg_hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if fg_hwnd and int(fg_hwnd) == int(win.winId()):
+                return True
+        except Exception:
+            pass
+        return False
+
     def _toggle_task_manager(self) -> None:
         dlg = getattr(self, "_task_manager_dialog", None)
-        if dlg is not None and dlg.isVisible() and not dlg.isMinimized():
+        if dlg is not None and self._is_window_in_foreground(dlg):
             dlg.hide()
         else:
             self._open_task_manager()
 
     def _toggle_work_manager(self) -> None:
         dlg = getattr(self, "_work_manager_dialog", None)
-        if dlg is not None and dlg.isVisible() and not dlg.isMinimized():
+        if dlg is not None and self._is_window_in_foreground(dlg):
             dlg.hide()
         else:
             self._open_work_manager()
@@ -2571,10 +2588,15 @@ class MainWindow(QMainWindow):
             for dlg in all_dlgs:
                 dlg.hide()
         else:
+            from taskcalendar.desktop_services import force_window_to_foreground
             for dlg in all_dlgs:
                 dlg.show()
                 dlg.raise_()
                 dlg.activateWindow()
+            try:
+                force_window_to_foreground(int(all_dlgs[-1].winId()))
+            except Exception:
+                pass
 
     def _show_from_tray(self) -> None:
         self._restore_window_state()
@@ -2612,6 +2634,8 @@ class MainWindow(QMainWindow):
             self._last_normal_geometry = QRect(current_geometry)
 
     def _restore_window_state(self) -> None:
+        from taskcalendar.desktop_services import force_window_to_foreground
+
         self._calendar_clicked_since_restore = False
         self._suspend_window_state_tracking = True
         if self._last_window_was_maximized:
@@ -2620,8 +2644,12 @@ class MainWindow(QMainWindow):
             self.showNormal()
             if self._last_normal_geometry.isValid():
                 self.setGeometry(self._last_normal_geometry)
-        self.activateWindow()
         self.raise_()
+        self.activateWindow()
+        try:
+            force_window_to_foreground(int(self.winId()))
+        except Exception:
+            pass
         QTimer.singleShot(0, self._finish_window_restore)
 
     def _finish_window_restore(self) -> None:
@@ -6519,21 +6547,33 @@ class MainWindow(QMainWindow):
     def _open_task_manager(self) -> None:
         """업무 관리 대시보드 창 열기"""
         try:
+            from taskcalendar.desktop_services import force_window_to_foreground
             from taskcalendar.qt_task_manager import TaskManagerDialog
-            if getattr(self, "_task_manager_dialog", None) is None or not self._task_manager_dialog.isVisible() or self._task_manager_dialog.parent() is not None:
-                if getattr(self, "_task_manager_dialog", None) is not None and self._task_manager_dialog.parent() is not None:
+
+            dlg = getattr(self, "_task_manager_dialog", None)
+            if dlg is None or dlg.parent() is not None:
+                if dlg is not None and dlg.parent() is not None:
                     try:
-                        self._task_manager_dialog.close()
+                        dlg.close()
                     except Exception:
                         pass
-                self._task_manager_dialog = TaskManagerDialog(None, self.repository, self)
-                self._task_manager_dialog.show()
+                dlg = TaskManagerDialog(None, self.repository, self)
+                self._task_manager_dialog = dlg
             else:
-                self._task_manager_dialog.apply_palette(self.palette)
-                self._task_manager_dialog.reload_tasks()
-                self._task_manager_dialog.show()
-                self._task_manager_dialog.raise_()
-                self._task_manager_dialog.activateWindow()
+                dlg.apply_palette(self.palette)
+                dlg.reload_tasks()
+
+            if dlg.isMinimized():
+                dlg.setWindowState((dlg.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+            dlg.show()
+            dlg.raise_()
+            dlg.activateWindow()
+            try:
+                hwnd = int(dlg.winId())
+                force_window_to_foreground(hwnd)
+                QTimer.singleShot(30, lambda h=hwnd: force_window_to_foreground(h))
+            except Exception:
+                pass
         except Exception:
             logger.exception("Failed to open TaskManagerDialog")
 
@@ -6549,15 +6589,27 @@ class MainWindow(QMainWindow):
     def _open_work_manager(self) -> None:
         """신규 단위업무 및 편람/인수인계 창 열기"""
         try:
+            from taskcalendar.desktop_services import force_window_to_foreground
             from taskcalendar.qt_work_manager import WorkManagerDialog
-            if getattr(self, "_work_manager_dialog", None) is None:
-                self._work_manager_dialog = WorkManagerDialog(None, self.repository, self)
-                self._work_manager_dialog.show()
+
+            dlg = getattr(self, "_work_manager_dialog", None)
+            if dlg is None:
+                dlg = WorkManagerDialog(None, self.repository, self)
+                self._work_manager_dialog = dlg
             else:
-                self._work_manager_dialog.apply_palette(self.palette)
-                self._work_manager_dialog.show()
-                self._work_manager_dialog.raise_()
-                self._work_manager_dialog.activateWindow()
+                dlg.apply_palette(self.palette)
+
+            if dlg.isMinimized():
+                dlg.setWindowState((dlg.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+            dlg.show()
+            dlg.raise_()
+            dlg.activateWindow()
+            try:
+                hwnd = int(dlg.winId())
+                force_window_to_foreground(hwnd)
+                QTimer.singleShot(30, lambda h=hwnd: force_window_to_foreground(h))
+            except Exception:
+                pass
         except Exception:
             logger.exception("Failed to open WorkManagerDialog")
 
@@ -6635,6 +6687,39 @@ class MainWindow(QMainWindow):
                         QTimer.singleShot(200, lambda: dlg.import_work_folder(target_path))
                     elif action == "attach_work_folder":
                         QTimer.singleShot(200, lambda: dlg.import_attachment_folder(target_path))
+                return
+            elif action == "sync_memos":
+                # 브라우저 확장 프로그램에서 전달된 페이지 메모 데이터 work/browser/page_memos.json에 저장 및 병합
+                try:
+                    raw_json = data.get("data", "")
+                    if raw_json:
+                        parsed = json.loads(raw_json)
+                        from taskcalendar import work_files
+                        memos_to_merge = []
+                        if isinstance(parsed, list):
+                            memos_to_merge = parsed
+                        elif isinstance(parsed, dict):
+                            if "memos" in parsed and isinstance(parsed["memos"], list):
+                                memos_to_merge = parsed["memos"]
+                            elif "pages" in parsed and isinstance(parsed["pages"], dict):
+                                for p_key, page in parsed["pages"].items():
+                                    p_url = page.get("url") or p_key
+                                    p_title = page.get("title", "")
+                                    for m in page.get("memos", []):
+                                        m_copy = dict(m)
+                                        if "url" not in m_copy:
+                                            m_copy["url"] = p_url
+                                        if "title" not in m_copy or not m_copy["title"]:
+                                            m_copy["title"] = p_title
+                                        if "content" not in m_copy and "text" in m_copy:
+                                            m_copy["content"] = m_copy["text"]
+                                        memos_to_merge.append(m_copy)
+                        added, updated = work_files.merge_browser_memos(memos_to_merge, overwrite_existing=True)
+                        bm_path = work_files.browser_memos_path()
+                        logger.info(f"[receive_external_entry] Synced browser memos -> {bm_path} (+{added}, ~{updated})")
+                        self.show_toast(f"브라우저 페이지 메모 {len(memos_to_merge)}건이 바로업무(work/browser)에 저장되었습니다.")
+                except Exception as ex:
+                    logger.warning(f"[receive_external_entry] Failed to sync browser memos: {ex}")
                 return
             elif action != "add":
                 logger.warning(f"[receive_external_entry] Unknown action: {action}")

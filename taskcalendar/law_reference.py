@@ -13,8 +13,12 @@ import re
 from urllib.parse import quote
 
 import requests
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 LAW_SEARCH_API = "https://www.law.go.kr/DRF/lawSearch.do"
+LAW_SERVICE_API = "https://www.law.go.kr/DRF/lawService.do"
 LAW_DETAIL_BASE = "https://www.law.go.kr/lsInfoP.do"
 LAW_SEARCH_PAGE = "https://www.law.go.kr/unSc.do?target=law&query="
 LAW_HOME = "https://www.law.go.kr"
@@ -186,6 +190,7 @@ def _fetch(target: str, term: str, timeout: int) -> list[LawSearchResult]:
             },
             headers=_HEADERS,
             timeout=timeout,
+            verify=False,
         )
     except Exception:
         return []
@@ -248,28 +253,33 @@ def search_laws(query: str, limit: int = 20, timeout: int = 20,
     if not results:
         return []
 
-    q_norm = query.replace(" ", "")
+    q_norm = re.sub(r"[\s\·\ㆍ\(\)\-\_]", "", query)
 
-    def is_exact(r: LawSearchResult) -> bool:
+    def match_quality(r: LawSearchResult) -> int:
         if not q_norm:
-            return False
-        name_norm = r.name.replace(" ", "")
-        return q_norm in name_norm or name_norm in q_norm
+            return 9
+        name_norm = re.sub(r"[\s\·\ㆍ\(\)\-\_]", "", r.name)
+        if q_norm == name_norm:
+            return 0 if r.is_current else 2  # 완전 일치
+        if q_norm in name_norm:
+            ratio = len(q_norm) / len(name_norm)
+            if ratio >= 0.35:
+                return 1 if r.is_current else 3  # 검색어가 법령명의 유의미한 비중 차지
+        if name_norm in q_norm:
+            return 1 if r.is_current else 3
 
-    def rank_tier(r: LawSearchResult) -> int:
-        ex = is_exact(r)
-        if ex and r.is_current:
-            return 0  # 검색어 일치 + 현행 법령 (최우선)
-        elif r.is_current:
-            return 1  # 관련 법령 + 현행 법령
-        elif ex:
-            return 2  # 검색어 일치 + 연혁/시행예정
-        else:
-            return 3  # 관련 법령 + 연혁/시행예정
+        # 핵심어 검사 ('...에 관한 법률' 등)
+        core_q = re.sub(r"(에관한|에따른)?(법률|시행령|시행규칙|규정|규칙|조례|법)$", "", q_norm)
+        core_n = re.sub(r"(에관한|에따른)?(법률|시행령|시행규칙|규정|규칙|조례|법)$", "", name_norm)
+        if core_q and core_n and (core_q == core_n or core_q in core_n or core_n in core_q):
+            return 1 if r.is_current else 3
+
+        # 단순 부분 포함이나 무관한 법령은 최하위 등급
+        return 8 if r.is_current else 9
 
     def sort_key(r: LawSearchResult) -> tuple:
         return (
-            rank_tier(r),
+            match_quality(r),
             _KIND_RANK.get(r.law_kind, 9),
             -_enforce_num(r.enforce_date),
         )
@@ -294,3 +304,95 @@ def build_search_page_url(query: str) -> str:
 
 def build_home_url() -> str:
     return LAW_HOME
+
+
+def get_law_detail(mst: str, target: str = "law", timeout: int = 15) -> dict | None:
+    """국가법령정보센터 DRF lawService.do 로 법령 상세 본문(조문 목록 등)을 조회한다."""
+    try:
+        resp = requests.get(
+            LAW_SERVICE_API,
+            params={
+                "OC": _OC,
+                "target": target,
+                "MST": str(mst).strip(),
+                "type": "XML",
+            },
+            headers=_HEADERS,
+            timeout=timeout,
+            verify=False,
+        )
+        if resp.status_code != 200:
+            return None
+
+        try:
+            import defusedxml.ElementTree as ET
+        except ImportError:
+            import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(resp.content)
+        law_name = root.findtext(".//기본정보/법령명_한글") or root.findtext(".//법령명_한글") or ""
+        enforce_date = _fmt_date(root.findtext(".//시행일자") or "")
+        promulgate_date = _fmt_date(root.findtext(".//공포일자") or "")
+        revision_type = root.findtext(".//제개정구분명") or ""
+        office = root.findtext(".//소관부처명") or ""
+
+        articles: dict[tuple[int, int], dict] = {}
+        for art in root.findall(".//조문단위"):
+            no_raw = art.findtext("조문번호") or ""
+            sub_no_raw = art.findtext("조문가지번호") or "0"
+            try:
+                art_no = int(re.sub(r"\D", "", no_raw) or "0")
+                sub_no = int(re.sub(r"\D", "", sub_no_raw) or "0")
+            except Exception:
+                continue
+
+            title = (art.findtext("조문제목") or "").strip()
+            content = (art.findtext("조문내용") or "").strip()
+
+            hangs = []
+            for hang in art.findall(".//항"):
+                h_no = (hang.findtext("항번호") or "").strip()
+                h_content = (hang.findtext("항내용") or "").strip()
+                hos = []
+                for ho in hang.findall(".//호"):
+                    ho_no = (ho.findtext("호번호") or "").strip()
+                    ho_content = (ho.findtext("호내용") or "").strip()
+                    hos.append(f"  {ho_no} {ho_content}".strip())
+                hang_text = f"{h_no} {h_content}".strip()
+                if hos:
+                    hang_text += "\n" + "\n".join(hos)
+                if hang_text:
+                    hangs.append(hang_text)
+
+            full_text = content
+            if hangs:
+                full_text = content + "\n" + "\n".join(hangs)
+
+            key = (art_no, sub_no)
+            articles[key] = {
+                "article_no": art_no,
+                "sub_article_no": sub_no,
+                "title": title,
+                "content": content,
+                "full_text": full_text.strip(),
+            }
+
+        return {
+            "mst": str(mst).strip(),
+            "name": law_name.strip(),
+            "enforce_date": enforce_date,
+            "promulgate_date": promulgate_date,
+            "revision_type": revision_type,
+            "office": office,
+            "articles": articles,
+        }
+    except Exception:
+        return None
+
+
+def get_law_article(mst: str, article_no: int, sub_article_no: int = 0) -> dict | None:
+    """특정 조문(예: 제15조 또는 제15조의2)의 원문 데이터를 조회한다."""
+    detail = get_law_detail(mst)
+    if not detail or "articles" not in detail:
+        return None
+    return detail["articles"].get((article_no, sub_article_no))

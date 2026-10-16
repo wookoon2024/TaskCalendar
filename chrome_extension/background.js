@@ -1872,32 +1872,54 @@ function triggerCapture(tab, clickedLinkUrl, clickedSelection, fallbackUrl, targ
     };
     var hasCustomRule = !!(rawRule && ((rawRule.selectors && Object.keys(rawRule.selectors).some(k => rawRule.selectors[k])) || (rawRule.templates && Object.keys(rawRule.templates).some(k => rawRule.templates[k])) || (rawRule.patterns && Object.keys(rawRule.patterns).some(k => rawRule.patterns[k])) || Object.keys(rawRule).some(k => rawRule[k])));
 
-    // 모든 프레임(iframe 포함) 대상으로 스크립트 실행하여 최적 결과 수집
-    chrome.scripting.executeScript(
-      {
-        target: { tabId: tab.id, allFrames: true },
-        func: extractRowData,
-        args: [linkUrl, selection, ruleToUse]
-      },
-      (results) => {
-        if (chrome.runtime.lastError) {
-          console.warn("[TaskCalendar BG] Error executing in allFrames:", chrome.runtime.lastError.message);
-          // allFrames 실패 시 최상위 프레임 단독 재시도
-          chrome.scripting.executeScript(
-            {
-              target: { tabId: tab.id },
-              func: extractRowData,
-              args: [linkUrl, selection, ruleToUse]
-            },
-            (fallbackResults) => {
-              handleCaptureResults(fallbackResults, tab, linkUrl, selection, pageUrl, domain, hasCustomRule, rawRule, targetFrameId);
-            }
-          );
-          return;
+    const runAllFramesExtract = () => {
+      chrome.scripting.executeScript(
+        {
+          target: { tabId: tab.id, allFrames: true },
+          func: extractRowData,
+          args: [linkUrl, selection, ruleToUse]
+        },
+        (results) => {
+          if (chrome.runtime.lastError) {
+            chrome.scripting.executeScript(
+              {
+                target: { tabId: tab.id },
+                func: extractRowData,
+                args: [linkUrl, selection, ruleToUse]
+              },
+              (fallbackResults) => {
+                handleCaptureResults(fallbackResults, tab, linkUrl, selection, pageUrl, domain, hasCustomRule, rawRule, targetFrameId);
+              }
+            );
+            return;
+          }
+          handleCaptureResults(results, tab, linkUrl, selection, pageUrl, domain, hasCustomRule, rawRule, targetFrameId);
         }
-        handleCaptureResults(results, tab, linkUrl, selection, pageUrl, domain, hasCustomRule, rawRule, targetFrameId);
-      }
-    );
+      );
+    };
+
+    // 우클릭 등으로 클릭한 프레임(targetFrameId)이 명확한 경우, 느린 외부 광고/트래커 iframe을 기다리지 않고 해당 프레임만 즉시 추출!
+    if (typeof targetFrameId === 'number') {
+      chrome.scripting.executeScript(
+        {
+          target: { tabId: tab.id, frameIds: [targetFrameId] },
+          func: extractRowData,
+          args: [linkUrl, selection, ruleToUse]
+        },
+        (singleResults) => {
+          if (!chrome.runtime.lastError && singleResults && singleResults.length > 0 && singleResults[0].result) {
+            var r0 = singleResults[0].result;
+            if (r0.linkText || r0.selectedText || r0.hasTarget || r0.author || r0.department || r0.detectedDate || targetFrameId > 0) {
+              handleCaptureResults(singleResults, tab, linkUrl, selection, pageUrl, domain, hasCustomRule, rawRule, targetFrameId);
+              return;
+            }
+          }
+          runAllFramesExtract();
+        }
+      );
+    } else {
+      runAllFramesExtract();
+    }
   });
 }
 
@@ -1919,10 +1941,20 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   triggerCapture(tab, info.linkUrl || "", info.selectionText || "", info.frameUrl || info.pageUrl || "", info.frameId);
 });
 
-// 2. 확장 프로그램 툴바 아이콘 클릭 (Gmail 등 자체 우클릭 메뉴가 있는 사이트 대응)
+// 2. 확장 프로그램 툴바 아이콘 클릭 시 바로업무 메모 관리(memo_manager.html)로 바로 이동
 if (chrome.action && chrome.action.onClicked) {
   chrome.action.onClicked.addListener((tab) => {
-    triggerCapture(tab, "", "", tab.url || "");
+    var memoUrl = chrome.runtime.getURL("memo_manager.html");
+    chrome.tabs.query({ url: memoUrl }, (tabs) => {
+      if (tabs && tabs.length > 0) {
+        chrome.tabs.update(tabs[0].id, { active: true });
+        if (tabs[0].windowId) {
+          chrome.windows.update(tabs[0].windowId, { focused: true });
+        }
+      } else {
+        chrome.tabs.create({ url: memoUrl });
+      }
+    });
   });
 }
 

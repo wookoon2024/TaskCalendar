@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "바로업무로 보내기",
-  "version": "1.17.1",
+  "version": "1.19.0",
   "description": "웹 페이지에서 바로업무로 일정/업무/메모를 등록하고, 페이지별 플로팅 메모를 남깁니다",
   "permissions": ["contextMenus", "activeTab", "scripting", "storage", "tabs"],
   "host_permissions": ["<all_urls>"],
   "action": {
-    "default_title": "바로업무로 보내기 (Ctrl+Shift+K)",
+    "default_title": "바로업무 메모 관리",
     "default_icon": {
       "16": "icon16.png",
       "48": "icon48.png",
