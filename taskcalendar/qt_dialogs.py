@@ -7033,9 +7033,30 @@ class SettingsDialog(QDialog):
         chrome_layout.setContentsMargins(14, 12, 14, 12)
         chrome_layout.setSpacing(10)
 
+        ext_ver = self._get_chrome_extension_version()
+
+        chrome_title_layout = QHBoxLayout()
+        chrome_title_layout.setContentsMargins(0, 0, 0, 0)
+        chrome_title_layout.setSpacing(8)
+
         chrome_title = QLabel("크롬 확장프로그램 연동 (바로업무로 보내기)")
         chrome_title.setObjectName("sectionTitle")
-        chrome_layout.addWidget(chrome_title)
+        chrome_title_layout.addWidget(chrome_title)
+
+        ver_badge = QLabel(f"버전: {ext_ver}")
+        ver_badge.setStyleSheet(f"""
+            background-color: {self.palette.get("panel_alt", "#F1F5F9")};
+            color: {self.palette.get("accent", "#0284C7")};
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 10px;
+            border: 1px solid {self.palette.get("line", "#CBD5E0")};
+        """)
+        chrome_title_layout.addWidget(ver_badge)
+        chrome_title_layout.addStretch(1)
+
+        chrome_layout.addLayout(chrome_title_layout)
 
         chrome_desc = QLabel(
             "인터넷 서핑 또는 웹 업무 화면에서 드래그한 텍스트나 기사, 현재 웹페이지를\n"
@@ -7825,6 +7846,30 @@ class SettingsDialog(QDialog):
             )
         except Exception as e:
             QMessageBox.warning(self, "오류", f"파일을 여는 중 오류가 발생했습니다.\n{e}")
+
+    def _get_chrome_extension_version(self) -> str:
+        """chrome_extension/manifest.json에서 버전을 읽어와 'v1.19.0' 형태로 반환"""
+        import json
+        import zipfile
+        try:
+            ext_dir = self._get_chrome_extension_dir()
+            m_path = ext_dir / "manifest.json"
+            if m_path.exists():
+                data = json.loads(m_path.read_text(encoding="utf-8"))
+                ver = data.get("version")
+                if ver:
+                    return f"v{ver}" if not str(ver).startswith("v") else str(ver)
+            zip_p = self._ensure_chrome_extension_zip()
+            if zip_p and zip_p.exists():
+                with zipfile.ZipFile(zip_p, "r") as zf:
+                    if "manifest.json" in zf.namelist():
+                        data = json.loads(zf.read("manifest.json").decode("utf-8"))
+                        ver = data.get("version")
+                        if ver:
+                            return f"v{ver}" if not str(ver).startswith("v") else str(ver)
+        except Exception:
+            pass
+        return "v1.19.0"
 
     def _get_chrome_extension_dir(self) -> Path:
         from taskcalendar.paths import runtime_root, package_root
