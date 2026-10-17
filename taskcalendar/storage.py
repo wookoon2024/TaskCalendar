@@ -1690,8 +1690,195 @@ class EncryptedRepository:
         self.connection.execute("DELETE FROM work_categories WHERE id = ?", (cat_id,))
         self.save()
 
+    def cleanup_duplicate_work_categories(self) -> int:
+        """
+        동기화 시 번호 접두사가 포함되어 중복 생성된 카테고리(예: '1.내부감사')를
+        원래 정상 카테고리('내부감사')로 정리 및 통합하고 중복 항목을 정리한다.
+        """
+        from taskcalendar.work_files import strip_category_prefix
+        import re
+
+        cats = self.list_work_categories()
+        clean_cats: dict[tuple[int, str], int] = {}
+        for c in cats:
+            name = str(c.get("name") or "").strip()
+            if not re.match(r"^\d+[\.\-_ ]", name):
+                tab = int(c.get("tab_id") or 1)
+                clean_cats[(tab, name)] = c["id"]
+                clean_cats[(0, name)] = c["id"]
+
+        dotted_cats = [c for c in cats if re.match(r"^\d+[\.\-_ ]", str(c.get("name") or "").strip())]
+        merged_count = 0
+        for dc in dotted_cats:
+            raw_name = str(dc.get("name") or "").strip()
+            clean_name = strip_category_prefix(raw_name)
+            tab_id = int(dc.get("tab_id") or 1)
+            target_cid = clean_cats.get((tab_id, clean_name)) or clean_cats.get((0, clean_name))
+
+            items = self.connection.execute(
+                "SELECT id, title FROM work_items WHERE category_id = ?", (dc["id"],)
+            ).fetchall()
+            for it in items:
+                title = str(it["title"] or "").strip()
+                if title.isdigit() and len(title) <= 2:
+                    self.connection.execute("DELETE FROM work_items WHERE id = ?", (it["id"],))
+                    continue
+                if target_cid:
+                    existing = self.connection.execute(
+                        "SELECT id FROM work_items WHERE category_id = ? AND title = ?",
+                        (target_cid, title),
+                    ).fetchone()
+                    if existing:
+                        self.connection.execute("DELETE FROM work_items WHERE id = ?", (it["id"],))
+                    else:
+                        self.connection.execute(
+                            "UPDATE work_items SET category_id = ? WHERE id = ?",
+                            (target_cid, it["id"]),
+                        )
+                else:
+                    self.connection.execute(
+                        "UPDATE work_categories SET name = ? WHERE id = ?",
+                        (clean_name, dc["id"]),
+                    )
+                    clean_cats[(tab_id, clean_name)] = dc["id"]
+                    clean_cats[(0, clean_name)] = dc["id"]
+                    target_cid = dc["id"]
+
+            if target_cid != dc["id"]:
+                self.connection.execute("DELETE FROM work_categories WHERE id = ?", (dc["id"],))
+            merged_count += 1
+
+        # 일반 행정 루트에 직접 귀속된 기본 업무 문서들을 세부 하위 분류(문서 관리, 회의 운영, 차량·자산 관리)로 자동 정상화
+        subcat_map = {
+            "공문 발송 및 결재 관리": "문서 관리",
+            "공문서 원본 보관 및 이관": "문서 관리",
+            "부서 비상연락망 서식": "문서 관리",
+            "[제출서류]서비스 개발 부문 (2)": "문서 관리",
+            "부서 주간업무 회의 준비": "회의 운영",
+            "회의록 작성 및 결재": "회의 운영",
+            "공무차량 운행일지 관리": "차량·자산 관리",
+        }
+        for title, sub_name in subcat_map.items():
+            tgt_cid = clean_cats.get((1, sub_name)) or clean_cats.get((0, sub_name))
+            if tgt_cid:
+                existing_in_tgt = self.connection.execute(
+                    "SELECT id FROM work_items WHERE category_id = ? AND title = ?",
+                    (tgt_cid, title),
+                ).fetchone()
+                if existing_in_tgt:
+                    # 대상 분류에 이미 해당 업무가 있으면 루트에 남은 중복은 삭제
+                    self.connection.execute(
+                        "DELETE FROM work_items WHERE title = ? AND category_id = (SELECT id FROM work_categories WHERE name = '일반 행정' AND parent_id IS NULL LIMIT 1) AND id != ?",
+                        (title, existing_in_tgt["id"]),
+                    )
+                else:
+                    self.connection.execute(
+                        "UPDATE work_items SET category_id = ? WHERE title = ? AND category_id = (SELECT id FROM work_categories WHERE name = '일반 행정' AND parent_id IS NULL LIMIT 1)",
+                        (tgt_cid, title),
+                    )
+
+        # 동일 카테고리 내 중복 업무 항목 자동 정리
+        dups_removed = self.cleanup_duplicate_work_items()
+        self.save()
+        return merged_count + dups_removed
+
+    def cleanup_duplicate_work_items(self) -> int:
+        """
+        동일한 카테고리(폴더) 내에 동일한 제목을 가진 중복 업무 항목을 정리한다.
+        - 내용(hwpx_blob 등)이 보존된 것을 우선 유지
+        - 중복 항목의 첨부파일, RAG 인덱스 및 레코드를 안전하게 정리
+        - 디스크 상의 중복 사본 파일 (예: '제목 (1).hwpx')도 함께 정리
+        """
+        rows = self.connection.execute(
+            """
+            SELECT id, category_id, title, hwpx_blob, updated_at, created_at
+            FROM work_items
+            ORDER BY category_id, title, id
+            """
+        ).fetchall()
+
+        from collections import defaultdict
+        grouped = defaultdict(list)
+        for r in rows:
+            cid = r["category_id"]
+            title = (r["title"] or "").strip()
+            grouped[(cid, title)].append(r)
+
+        deleted_count = 0
+        from taskcalendar import work_files
+
+        for (cid, title), items in grouped.items():
+            if len(items) <= 1:
+                continue
+
+            def _sort_key(it):
+                blob_len = len(it["hwpx_blob"]) if it["hwpx_blob"] else 0
+                has_blob = 1 if blob_len > 0 else 0
+                return (has_blob, blob_len, it["updated_at"] or "", -it["id"])
+
+            sorted_items = sorted(items, key=_sort_key, reverse=True)
+            keep_item = sorted_items[0]
+            dups_to_delete = sorted_items[1:]
+
+            for dup in dups_to_delete:
+                dup_id = dup["id"]
+                try:
+                    self.delete_all_work_attachment_files(dup_id)
+                except Exception:
+                    pass
+                self.connection.execute("DELETE FROM work_items WHERE id = ?", (dup_id,))
+                self.connection.execute("DELETE FROM work_attachments WHERE work_id = ?", (dup_id,))
+                self.connection.execute("DELETE FROM work_rag_chunks WHERE work_id = ?", (dup_id,))
+                try:
+                    self.connection.execute("DELETE FROM work_rag_fts WHERE work_id = ?", (dup_id,))
+                except Exception:
+                    pass
+                deleted_count += 1
+
+            # 디스크 상의 중복 파일 정리 (예: [제출서류]서비스 개발 부문 (2) (1).hwpx)
+            try:
+                c_row = self.connection.execute(
+                    "SELECT name, parent_id, tab_id, sort_order FROM work_categories WHERE id = ?",
+                    (cid,)
+                ).fetchone()
+                if c_row:
+                    grp = str(c_row["tab_id"] or "1")
+                    cat_path = self._category_chain_name(c_row["name"] or "", c_row["parent_id"], c_row["sort_order"])
+                    c_dir = work_files.category_dir(grp, cat_path)
+                    if c_dir.exists():
+                        stem = work_files.sheet_file_stem(title)
+                        stem_lower = stem.lower()
+                        for f in list(c_dir.iterdir()):
+                            if f.is_file() and f.suffix.lower() in (".hwpx", ".hwp"):
+                                f_stem_lower = f.stem.lower()
+                                if f_stem_lower != stem_lower and f_stem_lower.startswith(stem_lower) and ("(" in f_stem_lower):
+                                    try:
+                                        f.unlink()
+                                    except Exception:
+                                        pass
+            except Exception:
+                pass
+
+        if deleted_count > 0:
+            self.save()
+        return deleted_count
+
     def update_work_item_category(self, work_id: int, category_id: int) -> None:
-        """업무 항목의 소속 카테고리(분류) 변경"""
+        """업무 항목의 소속 카테고리(분류) 변경 (중복 시 기존 항목에 병합/정리)"""
+        row = self.connection.execute("SELECT title, hwpx_blob FROM work_items WHERE id = ?", (work_id,)).fetchone()
+        if row:
+            title = (row["title"] or "").strip()
+            existing = self.connection.execute(
+                "SELECT id, hwpx_blob FROM work_items WHERE category_id = ? AND title = ? AND id != ?",
+                (category_id, title, work_id),
+            ).fetchone()
+            if existing:
+                # 대상 카테고리에 이미 동일한 제목의 업무가 있다면, 내용(blob)을 보존하며 중복 행 제거
+                if not existing["hwpx_blob"] and row["hwpx_blob"]:
+                    self.connection.execute("UPDATE work_items SET hwpx_blob = ? WHERE id = ?", (row["hwpx_blob"], existing["id"]))
+                self.delete_work_item(work_id)
+                return
+
         now = datetime.now().isoformat()
         self.connection.execute(
             "UPDATE work_items SET category_id = ?, updated_at = ? WHERE id = ?",
@@ -1755,7 +1942,7 @@ class EncryptedRepository:
         hwpx_blob: bytes | None = None,
         sort_order: int = 0,
     ) -> int:
-        """업무 항목 생성 또는 수정 및 RAG 인덱싱 연동"""
+        """업무 항목 생성 또는 수정 및 RAG 인덱싱 연동 (동일 분류 내 동일 업무명 중복 생성 방지)"""
         now = datetime.now().isoformat()
         cat_id = category_id
         if cat_id is None:
@@ -1767,6 +1954,19 @@ class EncryptedRepository:
             else:
                 cat_id = self.add_work_category(category_name.strip())
 
+        clean_title = title.strip()
+
+        # 중복 방지: 동일 카테고리 내 동일 제목의 업무가 이미 존재하면 해당 ID를 재사용하여 갱신(UPDATE) 처리
+        if work_id is None or work_id <= 0:
+            existing = self.connection.execute(
+                "SELECT id, hwpx_blob FROM work_items WHERE category_id = ? AND title = ?",
+                (cat_id, clean_title),
+            ).fetchone()
+            if existing:
+                work_id = existing["id"]
+                if hwpx_blob is None and existing["hwpx_blob"]:
+                    hwpx_blob = existing["hwpx_blob"]
+
         if work_id is None or work_id <= 0:
             cursor = self.connection.execute(
                 """
@@ -1775,7 +1975,7 @@ class EncryptedRepository:
                     content_text, content_html, hwpx_blob, sort_order, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (cat_id, title.strip(), cycle, assignee.strip(), deadline.strip(),
+                (cat_id, clean_title, cycle, assignee.strip(), deadline.strip(),
                  content_text, content_html, hwpx_blob, sort_order, now, now),
             )
             work_id = cursor.lastrowid
@@ -1788,7 +1988,7 @@ class EncryptedRepository:
                         content_text = ?, content_html = ?, hwpx_blob = ?, sort_order = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (cat_id, title.strip(), cycle, assignee.strip(), deadline.strip(),
+                    (cat_id, clean_title, cycle, assignee.strip(), deadline.strip(),
                      content_text, content_html, hwpx_blob, sort_order, now, work_id),
                 )
             else:
@@ -1799,19 +1999,32 @@ class EncryptedRepository:
                         content_text = ?, content_html = ?, sort_order = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (cat_id, title.strip(), cycle, assignee.strip(), deadline.strip(),
+                    (cat_id, clean_title, cycle, assignee.strip(), deadline.strip(),
                      content_text, content_html, sort_order, now, work_id),
                 )
 
-        self._update_work_rag_index(work_id, title, category_name, content_text)
+        self._update_work_rag_index(work_id, clean_title, category_name, content_text)
         self.save()
         return work_id
 
     def update_work_item_title(self, work_id: int, title: str) -> None:
-        """업무문서 제목만 변경(파일명 기반 rename 자동 반영용)"""
+        """업무문서 제목만 변경 (동일 분류 내 중복 방지)"""
+        clean_title = (title or "").strip()
+        if not clean_title:
+            return
+        row = self.connection.execute("SELECT category_id FROM work_items WHERE id = ?", (work_id,)).fetchone()
+        if row:
+            cid = row["category_id"]
+            existing = self.connection.execute(
+                "SELECT id FROM work_items WHERE category_id = ? AND title = ? AND id != ?",
+                (cid, clean_title, work_id),
+            ).fetchone()
+            if existing:
+                # 같은 분류에 이미 동일 제목의 업무가 있다면 중복 방지를 위해 변경 건너뜀
+                return
         self.connection.execute(
             "UPDATE work_items SET title = ?, updated_at = ? WHERE id = ?",
-            (title, datetime.now().isoformat(), work_id),
+            (clean_title, datetime.now().isoformat(), work_id),
         )
         self.save()
 

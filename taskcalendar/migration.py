@@ -47,8 +47,16 @@ def _move_or_merge_dir(src: Path, dst: Path) -> None:
     """src 디렉토리의 파일과 하위 폴더들을 dst로 이동/병합한다."""
     if not src.exists() or not src.is_dir():
         return
+    try:
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+    except Exception:
+        app = None
+
     dst.mkdir(parents=True, exist_ok=True)
-    for item in list(src.iterdir()):
+    for idx, item in enumerate(list(src.iterdir())):
+        if idx % 10 == 0 and app:
+            app.processEvents()
         target = dst / item.name
         try:
             if item.is_dir():
@@ -58,6 +66,18 @@ def _move_or_merge_dir(src: Path, dst: Path) -> None:
                     shutil.move(str(item), str(target))
             else:
                 if target.exists() and target.resolve() != item.resolve():
+                    try:
+                        if target.read_bytes() == item.read_bytes():
+                            item.unlink()
+                            continue
+                    except Exception:
+                        pass
+                    if item.suffix.lower() == ".txt" and target.with_suffix(".hwpx").exists():
+                        try:
+                            item.unlink()
+                            continue
+                        except Exception:
+                            pass
                     target = unique_path(target)
                 if target.resolve() != item.resolve():
                     shutil.move(str(item), str(target))
@@ -102,6 +122,103 @@ def _get_category_sort_orders(db_file: Path) -> dict[tuple[int, str], int]:
     return mapping
 
 
+def _get_category_metadata(db_file: Path) -> dict[str, dict]:
+    """
+    clean_name -> {"tab_id": int, "parent_name": str, "sort_order": int} 매핑을 생성한다.
+    """
+    metadata: dict[str, dict] = {}
+    if not db_file.exists():
+        return metadata
+    try:
+        from taskcalendar.storage import unprotect_bytes
+
+        raw_enc = db_file.read_bytes()
+        plain_bytes = unprotect_bytes(raw_enc)
+        conn = sqlite3.connect(":memory:")
+        try:
+            conn.deserialize(plain_bytes)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT id, name, parent_id, tab_id, sort_order FROM work_categories").fetchall()
+            id_map = {r["id"]: r for r in rows}
+            for r in rows:
+                clean = strip_category_prefix(str(r["name"] or "").strip())
+                if not clean:
+                    continue
+                tab = int(r["tab_id"] or 1)
+                order = int(r["sort_order"] or 1)
+                p_id = r["parent_id"]
+                parent_name = ""
+                if p_id and p_id in id_map:
+                    pr = id_map[p_id]
+                    p_clean = strip_category_prefix(str(pr["name"] or "").strip())
+                    p_order = int(pr["sort_order"] or 1)
+                    parent_name = f"{p_order}.{p_clean}"
+                metadata[clean] = {
+                    "tab_id": tab,
+                    "parent_name": parent_name,
+                    "sort_order": order,
+                }
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.debug("Could not read category metadata from DB: %s", e)
+    return metadata
+
+
+def _update_migration_progress(msg: str, val: int, prog_state: list) -> None:
+    """마이그레이션 진행 상태 로깅 (프로그램 시작 시 사용자 방해 모달 팝업 억제)."""
+    logger.info("[Data Migration %d%%] %s", val, msg)
+
+
+def _clean_and_merge_work_dirs(work_root_dir: Path, cat_meta_map: dict) -> None:
+    """
+    data/work 하위의 모든 폴더명을 깔끔한 분류명(숫자 접두사 제거)으로 통합하고,
+    오배치된 탭 폴더를 올바른 탭으로 이전한다.
+    """
+    if not work_root_dir.exists() or not work_root_dir.is_dir():
+        return
+    reserved_names = {"attachments", "attach", "browser", "templates"}
+
+    # 1. 탭 간 오배치된 폴더 이전
+    for grp_dir in list(work_root_dir.iterdir()):
+        if not grp_dir.is_dir() or not grp_dir.name.isdigit():
+            continue
+        curr_tab = int(grp_dir.name)
+        for cat_dir in list(grp_dir.iterdir()):
+            if not cat_dir.is_dir() or cat_dir.name.lower() in reserved_names:
+                continue
+            clean = strip_category_prefix(cat_dir.name)
+            meta = cat_meta_map.get(clean)
+            if meta and meta.get("tab_id") and meta["tab_id"] != curr_tab:
+                tgt_tab = meta["tab_id"]
+                p_name = strip_category_prefix(meta.get("parent_name", ""))
+                tgt_parent = work_root_dir / str(tgt_tab)
+                if p_name:
+                    tgt_parent = tgt_parent / p_name
+                target_dir = tgt_parent / clean
+                if target_dir.resolve() != cat_dir.resolve():
+                    _move_or_merge_dir(cat_dir, target_dir)
+
+    # 2. 깊은 하위 폴더부터 번호 접두사를 제거하여 clean_name으로 병합/이름 변경
+    for grp_dir in list(work_root_dir.iterdir()):
+        if not grp_dir.is_dir() or not grp_dir.name.isdigit():
+            continue
+        all_dirs = sorted(
+            [d for d in grp_dir.rglob("*") if d.is_dir() and d.name.lower() not in reserved_names],
+            key=lambda d: len(d.parts),
+            reverse=True,
+        )
+        for d in all_dirs:
+            if not d.exists():
+                continue
+            name = d.name
+            clean = strip_category_prefix(name)
+            if clean != name:
+                target = d.parent / clean
+                if target.resolve() != d.resolve():
+                    _move_or_merge_dir(d, target)
+
+
 def migrate_to_data_root() -> None:
     """
     기존 루트에 흩어져 있던 db, work, attachments, 업무 템플릿 폴더들을
@@ -110,8 +227,24 @@ def migrate_to_data_root() -> None:
     root = runtime_root()
     d_root = data_root()
 
+    old_db_dir = root / "db"
+    old_work_dir = root / "work"
+    root_att = root / "attachments"
+    old_tpl_dir = root / "업무 템플릿"
+
+    # 실제 구버전 폴더가 존재하는지 확인하여 필요할 때만 프로그레스 창을 표시
+    has_legacy = any(
+        d.exists() and d.is_dir() and d.resolve() != d_root.resolve() and any(d.iterdir())
+        for d in (old_db_dir, old_work_dir, root_att, old_tpl_dir)
+    )
+    prog_state = []
+    if has_legacy:
+        _update_migration_progress("새로운 data/ 저장소 구조로 안전하게 이전하고 있습니다...", 5, prog_state)
+
     # 0. 필수 기본 디렉토리 무조건 생성
     try:
+        if has_legacy:
+            _update_migration_progress("필수 기본 디렉토리를 생성하고 있습니다...", 10, prog_state)
         data_root().mkdir(parents=True, exist_ok=True)
         db_dir().mkdir(parents=True, exist_ok=True)
         calendar_attachments_root().mkdir(parents=True, exist_ok=True)
@@ -128,6 +261,8 @@ def migrate_to_data_root() -> None:
     old_db_dir = root / "db"
     new_db_dir = db_dir()
     if old_db_dir.exists() and old_db_dir.resolve() != new_db_dir.resolve():
+        if has_legacy:
+            _update_migration_progress("데이터베이스 파일을 data/db 로 이전하고 있습니다...", 20, prog_state)
         old_db = old_db_dir / "taskcalendar.db.enc"
         new_db = db_path()
         if old_db.exists() and not new_db.exists():
@@ -159,6 +294,8 @@ def migrate_to_data_root() -> None:
     # 2. 루트 직하의 attachments/ 가 있으면 calendar 첨부로 이전
     root_att = root / "attachments"
     if root_att.exists() and root_att.is_dir() and root_att.resolve() != calendar_attachments_root().resolve():
+        if has_legacy:
+            _update_migration_progress("첨부파일을 data/calendar 로 이전하고 있습니다...", 35, prog_state)
         _move_or_merge_dir(root_att, calendar_attachments_root())
 
     # 3. 브라우저 메모 마이그레이션:
@@ -171,6 +308,8 @@ def migrate_to_data_root() -> None:
     if old_work_dir.exists():
         old_work_browser = old_work_dir / "browser"
         if old_work_browser.exists():
+            if has_legacy:
+                _update_migration_progress("브라우저 메모를 이전하고 있습니다...", 45, prog_state)
             _move_or_merge_dir(old_work_browser, new_browser_dir)
 
     # 4. 업무 서식 템플릿 마이그레이션:
@@ -178,6 +317,8 @@ def migrate_to_data_root() -> None:
     new_tpl_dir = work_templates_root()
     old_tpl_dir = root / "업무 템플릿"
     if old_tpl_dir.exists() and old_tpl_dir.is_dir() and old_tpl_dir.resolve() != new_tpl_dir.resolve():
+        if has_legacy:
+            _update_migration_progress("업무 서식 템플릿을 이전하고 있습니다...", 55, prog_state)
         try:
             for item in old_tpl_dir.iterdir():
                 target = new_tpl_dir / item.name
@@ -196,11 +337,16 @@ def migrate_to_data_root() -> None:
     if old_work_dir.exists():
         old_work_attach = old_work_dir / "attach"
         if old_work_attach.exists() and old_work_attach.is_dir():
+            if has_legacy:
+                _update_migration_progress("업무 첨부파일을 data/work/attachments 로 이전하고 있습니다...", 65, prog_state)
             _move_or_merge_dir(old_work_attach, new_work_att_dir)
 
     # 6. 업무 본문 문서 및 분류 폴더 번호 체계 마이그레이션:
     #    work/1/인사 -> data/work/1/1.인사/ (번호 자동 부여)
+    if has_legacy:
+        _update_migration_progress("업무 문서 및 분류 폴더 체계를 마이그레이션하고 있습니다...", 75, prog_state)
     cat_order_map = _get_category_sort_orders(db_path())
+    cat_meta_map = _get_category_metadata(db_path())
 
     def _migrate_group_categories(src_grp_dir: Path, dst_grp_dir: Path, tab_id: int):
         if not src_grp_dir.exists() or not src_grp_dir.is_dir():
@@ -212,22 +358,10 @@ def migrate_to_data_root() -> None:
 
         # 폴더 정렬
         subdirs.sort(key=lambda d: d.name)
-        fallback_order = 1
         for d in subdirs:
             raw_name = d.name
             clean_name = strip_category_prefix(raw_name)
-            # 번호가 이미 있는지 확인
-            if re.match(r"^\d+[\.\-_ ]", raw_name):
-                numbered_name = raw_name
-            else:
-                # DB에서 sort_order 조회
-                order = cat_order_map.get((tab_id, clean_name)) or cat_order_map.get((0, clean_name))
-                if not order:
-                    order = fallback_order
-                numbered_name = f"{order}.{clean_name}"
-                fallback_order = max(fallback_order + 1, order + 1)
-
-            target_cat_dir = dst_grp_dir / numbered_name
+            target_cat_dir = dst_grp_dir / clean_name
             if target_cat_dir.resolve() != d.resolve():
                 _move_or_merge_dir(d, target_cat_dir)
 
@@ -260,17 +394,30 @@ def migrate_to_data_root() -> None:
                 dst_grp = new_work_dir / name
                 _migrate_group_categories(item, dst_grp, tab_num)
             else:
-                # 탭 구분 없이 1차 폴더가 카테고리인 레거시 구조 처리 -> 그룹 1로 편입
-                dst_grp = new_work_dir / "1"
-                _migrate_group_categories(w_dir, dst_grp, 1)
-                break
+                # 탭 구분 없이 1차 폴더가 카테고리인 레거시 구조 처리
+                clean_name = strip_category_prefix(name)
+                meta = cat_meta_map.get(clean_name)
+                target_tab = meta["tab_id"] if meta else 1
+                parent_name = strip_category_prefix(meta.get("parent_name", "")) if meta else ""
 
-    # 첨부 디렉토리(work/attachments/) 하위의 그룹별 카테고리 폴더도 번호 체계로 동기화
+                dst_folder = new_work_dir / str(target_tab)
+                if parent_name:
+                    dst_folder = dst_folder / parent_name
+                target_cat_dir = dst_folder / clean_name
+                if target_cat_dir.resolve() != item.resolve():
+                    _move_or_merge_dir(item, target_cat_dir)
+
+    # 첨부 디렉토리(work/attachments/) 하위의 그룹별 카테고리 폴더도 정리
     if new_work_att_dir.exists():
         for grp_dir in list(new_work_att_dir.iterdir()):
             if grp_dir.is_dir() and grp_dir.name.isdigit():
                 tab_num = int(grp_dir.name)
                 _migrate_group_categories(grp_dir, grp_dir, tab_num)
+
+    # 6-1. data/work 및 data/work/attachments 하위의 폴더명 정제(번호 제거) 및 오배치 정리
+    _clean_and_merge_work_dirs(new_work_dir, cat_meta_map)
+    if new_work_att_dir.exists():
+        _clean_and_merge_work_dirs(new_work_att_dir, cat_meta_map)
 
     # 7. data 루트 직하의 레거시 파일 정리
     stale_root_db = d_root / "taskcalendar.db.enc"
@@ -289,19 +436,29 @@ def migrate_to_data_root() -> None:
     if stale_root_att.exists() and stale_root_att.is_dir():
         _move_or_merge_dir(stale_root_att, calendar_attachments_root())
 
-    # 8. DB 내 첨부파일 경로 갱신
+    # 8. DB 내 첨부파일 경로 갱신 및 중복 카테고리 정리
+    if has_legacy:
+        _update_migration_progress("데이터베이스 첨부파일 및 분류 체계를 정리하고 있습니다...", 90, prog_state)
     try:
         from taskcalendar.storage import EncryptedRepository
         repo = EncryptedRepository(db_path())
         repo.migrate_work_attachments_into_work_tree()
+        repo.cleanup_duplicate_work_categories()
     except Exception as e:
         logger.debug("Work attachments DB path migration error: %s", e)
 
-    # 7. 비어 있는 구 디렉토리 정리
+    # 9. 비어 있는 구 디렉토리 정리
     for old_d in (old_db_dir, old_work_dir, root_att):
         try:
             if old_d.exists() and old_d.is_dir() and old_d.resolve() != d_root.resolve() and not any(old_d.iterdir()):
                 old_d.rmdir()
                 logger.info("Removed empty legacy directory: %s", old_d)
+        except Exception:
+            pass
+
+    if prog_state:
+        _update_migration_progress("마이그레이션이 성공적으로 완료되었습니다.", 100, prog_state)
+        try:
+            prog_state[0].close()
         except Exception:
             pass

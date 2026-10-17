@@ -35,17 +35,11 @@ def strip_category_prefix(name: str) -> str:
 
 def format_numbered_category(name: str, sort_order: int | None = None) -> str:
     """
-    카테고리명에 번호 접두사를 붙여 반환.
-    - 이미 '1.', '2.', '01.', '1- ' 등의 접두사가 붙어 있으면 그대로 사용.
-    - 없으면 sort_order(기본값 1)를 붙여 '1.기본업무' 형태로 포맷.
+    카테고리 폴더명 반환.
+    사용자 친화적인 폴더 구조를 위해 임의의 숫자 접두사 없이 깔끔한 분류명을 반환한다.
     """
-    s = (name or "").strip()
-    if not s:
-        return "1.미분류"
-    if re.match(r"^\d+[\.\-_ ]", s):
-        return s
-    order = sort_order if (sort_order is not None and sort_order > 0) else 1
-    return f"{order}.{s}"
+    clean = strip_category_prefix(name)
+    return clean or "미분류"
 
 
 def work_root() -> Path:
@@ -60,6 +54,20 @@ def browser_root() -> Path:
     from taskcalendar.paths import browser_root as _browser_root
 
     return _browser_root()
+
+
+def work_templates_root() -> Path:
+    """업무 템플릿 서식 루트 (data/work/templates)"""
+    from taskcalendar.paths import work_templates_root as _tpl_root
+
+    return _tpl_root()
+
+
+def work_attachments_root() -> Path:
+    """업무 첨부파일 루트 (data/work/attachments)"""
+    from taskcalendar.paths import work_attachments_root as _att_root
+
+    return _att_root()
 
 
 def browser_memos_path() -> Path:
@@ -342,8 +350,16 @@ def scan_work_files(known_categories: set | None = None) -> list[dict]:
     out: list[dict] = []
     if not root.is_dir():
         return out
-    known = {c for c in (known_categories or set())}
-    for p in root.rglob("*"):
+    known = {strip_category_prefix(c) for c in (known_categories or set()) if c}
+    try:
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+    except Exception:
+        app = None
+
+    for idx, p in enumerate(root.rglob("*")):
+        if idx % 15 == 0 and app:
+            app.processEvents()
         rel_parts = p.relative_to(root).parts
         if rel_parts and rel_parts[0] in SYSTEM_WORK_DIRS:
             continue  # 첨부, 템플릿, 브라우저 메모 등 시스템 디렉토리는 업무 항목이 아님
@@ -354,11 +370,20 @@ def scan_work_files(known_categories: set | None = None) -> list[dict]:
             cat = p.parent.name
         try:
             if p.is_file():
+                ext = p.suffix.lower()
+                sha = ""
+                # 업무 에디터 확장자이고 30MB 이하인 파일만 1회 해시 계산 (대용량/바이너리 병목 차단)
+                if ext in EDITOR_EXTENSIONS:
+                    try:
+                        if p.stat().st_size <= 30 * 1024 * 1024:
+                            sha = file_sha256(p)
+                    except Exception:
+                        sha = ""
                 out.append({
                     "path": p, "group": group, "category": cat, "stem": p.stem,
-                    "ext": p.suffix.lower(), "size": p.stat().st_size, "sha256": file_sha256(p), "sha1": file_sha256(p), "is_dir": False,
+                    "ext": ext, "size": p.stat().st_size, "sha256": sha, "sha1": sha, "is_dir": False,
                 })
-            elif p.is_dir() and len(rel_parts) >= 3 and p.name not in known:
+            elif p.is_dir() and len(rel_parts) >= 3 and strip_category_prefix(p.name) not in known:
                 out.append({
                     "path": p, "group": group, "category": cat, "stem": p.name,
                     "ext": "", "size": 0, "sha256": "", "sha1": "", "is_dir": True,
@@ -371,10 +396,19 @@ def scan_work_files(known_categories: set | None = None) -> list[dict]:
         for f in out
         if (not f["is_dir"]) and f["ext"] in NATIVE_EXTENSIONS
     }
+    # .hwpx와 .hwp가 둘 다 있으면 최신 포맷인 .hwpx를 우선
+    hwpx_keys = {
+        (f["group"], f["category"], f["stem"])
+        for f in out
+        if (not f["is_dir"]) and f["ext"] == ".hwpx"
+    }
     out = [
         f for f in out
-        if f["is_dir"] or f["ext"] in NATIVE_EXTENSIONS
-        or (f["group"], f["category"], f["stem"]) not in native_keys
+        if f["is_dir"]
+        or (
+            (f["ext"] in NATIVE_EXTENSIONS or (f["group"], f["category"], f["stem"]) not in native_keys)
+            and (f["ext"] != ".hwp" or (f["group"], f["category"], f["stem"]) not in hwpx_keys)
+        )
     ]
     return out
 
@@ -425,8 +459,29 @@ def plan_reconcile(db_items: list[dict], disk_files: list[dict]) -> dict:
             renamed.append((db, hit))
             renamed_db.add(id(db))
 
+    # 이미 matched 또는 renamed된 DB 업무와 동일한 (그룹, 순수분류경로, 제목)을 가진 남은 디스크 파일은
+    # 중복 사본(예: 번호 폴더와 미부여 폴더가 공존하는 경우)이므로 'DB에 없는 새 파일'로 오인되지 않도록 제외
+    resolved_keys = {
+        (
+            sanitize_component(str(db.get("group") or "1"), "1"),
+            "/".join(strip_category_prefix(p) for p in cat_relpath(db.get("cat_path") or db.get("category_name") or "미분류").split("/")),
+            sheet_file_stem(db.get("title") or "")
+        )
+        for db, _ in (matched + renamed)
+    }
+
     missing = [db for db in missing_candidates if id(db) not in renamed_db]
-    new = [f for f in disk_files if id(f) not in used]
+    new = []
+    for f in disk_files:
+        if id(f) in used:
+            continue
+        f_cat_clean = "/".join(strip_category_prefix(p) for p in str(f.get("category", "")).split("/"))
+        f_grp = sanitize_component(str(f.get("group") or "1"), "1")
+        f_stem = sheet_file_stem(f.get("stem") or "")
+        if (f_grp, f_cat_clean, f_stem) in resolved_keys:
+            continue
+        new.append(f)
+
     return {"matched": matched, "renamed": renamed, "missing": missing, "new": new}
 
 
@@ -481,27 +536,52 @@ def move_sheet_files(grp_old, old_cat, grp_new, new_cat, title):
     """업무의 본문 파일 + 첨부폴더를 새 분류로 이동. (이전경로, 새경로) 목록 반환."""
     moves = []
     stem = sheet_file_stem(title)
+    raw_title = (title or "").strip()
     old_dir = category_dir(grp_old, old_cat)
     new_dir = category_dir(grp_new, new_cat)
     if old_dir.is_dir():
         new_dir.mkdir(parents=True, exist_ok=True)
-        for src in list(old_dir.glob(f"{stem}.*")):
-            if src.is_file():
-                dest = unique_path(new_dir / src.name)
+        # glob() 대신 iterdir() 사용: 대괄호([제출서류] 등)가 와일드카드 패턴으로 해석되는 치명적 버그 방지
+        for src in list(old_dir.iterdir()):
+            if src.is_file() and (src.stem == stem or src.stem == raw_title or src.name == raw_title):
+                dest = new_dir / src.name
+                if dest.resolve() == src.resolve():
+                    continue
+                if dest.exists():
+                    try:
+                        dest.unlink()
+                    except Exception:
+                        dest = unique_path(dest)
                 try:
                     src.rename(dest)
                     moves.append((src, dest))
                 except Exception:
                     pass
+        # 이전 분류 폴더가 비어 있으면 상위로 정리
+        try:
+            grp_work_root = work_root() / sanitize_component(str(grp_old), "1")
+            prune_empty_parent_dirs(old_dir, grp_work_root)
+        except Exception:
+            pass
+
     old_att = attach_dir(grp_old, old_cat, title)
     if old_att.is_dir():
         new_att = attach_dir(grp_new, new_cat, title)
         new_att.parent.mkdir(parents=True, exist_ok=True)
-        if new_att.exists():
-            new_att = unique_path(new_att)
+        if new_att.exists() and new_att.resolve() != old_att.resolve():
+            try:
+                import shutil
+                shutil.rmtree(new_att, ignore_errors=True)
+            except Exception:
+                new_att = unique_path(new_att)
         try:
             old_att.rename(new_att)
             moves.append((old_att, new_att))
+        except Exception:
+            pass
+        try:
+            att_root = work_root() / ATTACH_ROOT / sanitize_component(str(grp_old), "1")
+            prune_empty_parent_dirs(old_att.parent, att_root)
         except Exception:
             pass
     return moves
