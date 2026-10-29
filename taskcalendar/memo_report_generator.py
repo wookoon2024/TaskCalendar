@@ -943,35 +943,6 @@ class MemoToReportDialog(QDialog):
         row2.addWidget(self.edit_title, 1)
 
         opt_card_lay.addLayout(row2)
-
-        # 3행: 관련 법령 표 연동 옵션
-        row3 = QHBoxLayout()
-        row3.setSpacing(8)
-
-        self.chk_include_law = QCheckBox("관련 법령 표 포함")
-        self.chk_include_law.setChecked(False)
-        self.chk_include_law.setToolTip("생성될 공문서 본문에 선택한 관련 법령 및 근거 규정 표를 자동으로 삽입합니다.")
-        self.chk_include_law.setStyleSheet("border: none; font-weight: bold;")
-        row3.addWidget(self.chk_include_law)
-
-        self.edit_law_keyword = QLineEdit()
-        self.edit_law_keyword.setFixedHeight(ctrl_h)
-        self.edit_law_keyword.setPlaceholderText("법령 검색어 입력 (미입력 시 제목·메모에서 자동 추출)")
-        row3.addWidget(self.edit_law_keyword, 1)
-
-        self.btn_search_law = QPushButton("법령 조회")
-        self.btn_search_law.setFixedHeight(ctrl_h)
-        self.btn_search_law.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_search_law.setStyleSheet(self._sub_btn_style())
-        self.btn_search_law.setToolTip("국가법령정보센터에서 법령을 실시간 검색하여 보고서에 넣을 법령을 선택합니다.")
-        self.btn_search_law.clicked.connect(self._on_search_law_clicked)
-        row3.addWidget(self.btn_search_law)
-
-        self.lbl_law_status = QLabel("")
-        self.lbl_law_status.setStyleSheet(f"color: {accent}; font-size: 11px; border: none;")
-        row3.addWidget(self.lbl_law_status)
-
-        opt_card_lay.addLayout(row3)
         right_lay.addWidget(opt_card)
 
         # 메모 원문 입력/편집
@@ -1116,94 +1087,9 @@ class MemoToReportDialog(QDialog):
         if t:
             self.edit_title.setText(t)
         self.edit_memo.setPlainText(desc or t)
-        if not self.edit_law_keyword.text().strip():
-            kw = extract_keywords_for_law(t, desc)
-            if kw:
-                self.edit_law_keyword.setText(kw)
-
-    def _on_search_law_clicked(self) -> None:
-        kw = self.edit_law_keyword.text().strip()
-        if not kw:
-            kw = extract_keywords_for_law(self.edit_title.text(), self.edit_memo.toPlainText())
-            if kw:
-                self.edit_law_keyword.setText(kw)
-        if not kw:
-            self.status_lbl.setText("• 법령 검색어를 입력하거나 메모에 관련 내용을 작성하세요")
-            if hasattr(self, "lbl_law_status"):
-                self.lbl_law_status.setText("검색어를 입력해 주세요.")
-            return
-
-        self.btn_search_law.setEnabled(False)
-        self.btn_search_law.setText("조회 중...")
-        self.status_lbl.setText(f"• 국가법령정보센터에서 '{kw}' 관련 법령 조회 중...")
-        if hasattr(self, "lbl_law_status"):
-            self.lbl_law_status.setText(f"'{kw}' 검색 중...")
-        self._law_worker = _LawSearchWorker(kw, self)
-        self._law_worker.finished_laws.connect(self._on_law_search_finished)
-        self._law_worker.start()
-
-    def _on_law_search_finished(self, items: list[dict[str, Any]]) -> None:
-        self.btn_search_law.setEnabled(True)
-        self.btn_search_law.setText("법령 조회")
-        raw_items = list(items or [])
-        if not raw_items:
-            self.status_lbl.setText(f"• 일치하는 법령이 없습니다 (검색어: {self.edit_law_keyword.text()})")
-            if hasattr(self, "lbl_law_status"):
-                self.lbl_law_status.setText("일치 법령 없음")
-            return
-
-        # 법령 선택 팝업 다이얼로그 띄워 사용자가 직접 선택하도록 함
-        kw = self.edit_law_keyword.text().strip()
-        dlg = _LawSelectionDialog(self, keyword=kw, law_items=raw_items, palette=self._palette)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            selected_items = dlg.get_selected_items()
-            if selected_items:
-                self._law_items = selected_items
-                self.chk_include_law.setChecked(True)
-                names = ", ".join(str(x.get("name", "")) for x in self._law_items[:2])
-                self.status_lbl.setText(f"• 관련 법령 {len(self._law_items)}건 선택 완료: {names}")
-                if hasattr(self, "lbl_law_status"):
-                    self.lbl_law_status.setText(f"{len(self._law_items)}건 선택됨")
-            else:
-                self._law_items = []
-                self.chk_include_law.setChecked(False)
-                self.status_lbl.setText("• 선택된 법령이 없어 법령 표가 제외됩니다.")
-                if hasattr(self, "lbl_law_status"):
-                    self.lbl_law_status.setText("선택 없음")
-        else:
-            # 사용자가 취소했을 때, 기존 선택이 없으면 상태 유지
-            if not self._law_items:
-                if hasattr(self, "lbl_law_status"):
-                    self.lbl_law_status.setText("선택 취소")
 
     def _ensure_laws_if_checked(self) -> list[dict[str, Any]]:
-        if not self.chk_include_law.isChecked():
-            return []
-        if self._law_items:
-            return self._law_items
-        kw = self.edit_law_keyword.text().strip() or extract_keywords_for_law(
-            self.edit_title.text(), self.edit_memo.toPlainText()
-        )
-        if not kw:
-            return []
-        try:
-            from taskcalendar.law_reference import search_laws
-
-            results = search_laws(kw, limit=3) or []
-            self._law_items = [
-                {
-                    "name": r.name,
-                    "type": r.law_kind or "법령",
-                    "ministry": r.office or "-",
-                    "enforce_date": r.enforce_date or "",
-                    "law_no": r.mst or "",
-                    "url": getattr(r, "url", ""),
-                }
-                for r in results
-            ]
-        except Exception:
-            self._law_items = []
-        return self._law_items
+        return []
 
     def _collect_options(self) -> tuple[str, str, str, str, str, str, str, str]:
         title = self.edit_title.text().strip() or "업무 보고서"

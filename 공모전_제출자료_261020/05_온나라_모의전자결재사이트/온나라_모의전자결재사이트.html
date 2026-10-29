@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>온나라 전자결재 시스템 - 결재대기함</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "Pretendard", "Malgun Gothic", -apple-system, BlinkMacSystemFont, sans-serif; background-color: #f4f6f9; color: #333; }
+    
+    /* 상단 헤더 */
+    .gov-header { background: linear-gradient(135deg, #1b3a6b 0%, #0d2346 100%); color: #fff; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 4px rgba(0,0,0,0.15); }
+    .gov-header .brand { display: flex; align-items: center; gap: 12px; font-size: 18px; font-weight: bold; letter-spacing: -0.5px; }
+    .gov-header .brand span { background: #007bff; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: normal; }
+    .gov-header .user-info { font-size: 13px; display: flex; align-items: center; gap: 16px; }
+    .gov-header .user-badge { background: rgba(255,255,255,0.15); padding: 4px 10px; border-radius: 20px; }
+
+    /* 메인 컨테이너 */
+    .container { max-width: 1280px; margin: 24px auto; padding: 0 20px; display: grid; grid-template-columns: 240px 1fr; gap: 20px; }
+    @media (max-width: 900px) { .container { grid-template-columns: 1fr; } }
+
+    /* 좌측 사이드바 */
+    .sidebar { background: #fff; border-radius: 8px; border: 1px solid #d9e0ea; padding: 16px; height: fit-content; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .btn-create { width: 100%; background: #0056b3; color: white; border: none; padding: 12px; border-radius: 6px; font-weight: bold; font-size: 14px; cursor: pointer; margin-bottom: 16px; transition: background 0.2s; }
+    .btn-create:hover { background: #004494; }
+    .menu-title { font-size: 12px; font-weight: bold; color: #718096; margin-bottom: 8px; text-transform: uppercase; }
+    .menu-list { list-style: none; margin-bottom: 20px; }
+    .menu-list li { margin-bottom: 4px; }
+    .menu-list a { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; text-decoration: none; color: #4a5568; font-size: 13px; border-radius: 6px; transition: all 0.15s; }
+    .menu-list a:hover { background: #edf2f7; color: #1a202c; }
+    .menu-list a.active { background: #e8f0fe; color: #1a73e8; font-weight: bold; }
+    .menu-count { font-weight: bold; }
+
+    /* 메인 콘텐츠 영역 */
+    .main-content { min-width: 0; background: #fff; border-radius: 8px; border: 1px solid #d9e0ea; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .content-header { display: flex; justify-content: space-between; align-items: flex-end; padding-bottom: 16px; border-bottom: 2px solid #1b3a6b; margin-bottom: 20px; }
+    .page-title { font-size: 20px; font-weight: bold; color: #1b3a6b; display: flex; align-items: center; gap: 8px; }
+    .page-desc { font-size: 13px; color: #666; margin-top: 4px; }
+
+    /* 결재 목록 테이블 */
+    .table-container { overflow-x: auto; }
+    .doc-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; text-align: center; }
+    .doc-table th { background: #edf2f7; color: #2d3748; font-weight: 600; padding: 12px 8px; border-top: 1px solid #cbd5e0; border-bottom: 1px solid #cbd5e0; white-space: nowrap; }
+    .doc-table th:nth-child(1) { width: 50px; }
+    .doc-table th:nth-child(2) { width: 90px; }
+    .doc-table th:nth-child(4) { width: 100px; }
+    .doc-table th:nth-child(5) { width: 80px; }
+    .doc-table th:nth-child(6) { width: 100px; }
+    .doc-table th:nth-child(7) { width: 80px; }
+    .doc-table td { padding: 12px 8px; border-bottom: 1px solid #e2e8f0; color: #4a5568; }
+    .doc-table tr:hover { background-color: #f7fafc; cursor: pointer; }
+    @media (max-width: 1100px) {
+      .doc-table { font-size: 12px; }
+      .doc-table th, .doc-table td { padding: 10px 4px; }
+      .doc-table th:nth-child(1) { width: 36px; }
+      .doc-table th:nth-child(2) { width: 70px; }
+      .doc-table th:nth-child(4) { width: 82px; }
+      .doc-table th:nth-child(5) { width: 62px; }
+      .doc-table th:nth-child(6) { width: 84px; }
+      .doc-table th:nth-child(7) { width: 70px; }
+    }
+    
+    .doc-table td.title-col { text-align: left; font-weight: 500; overflow: hidden; }
+    .doc-table td.title-col a { color: #1a365d; text-decoration: none; display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; transition: color 0.15s; }
+    .doc-table td.title-col a:hover { color: #0056b3; text-decoration: underline; }
+    
+    .badge-status { padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; }
+    .status-wait { background: #feebc8; color: #c05621; }
+    .status-prog { background: #bee3f8; color: #2b6cb0; }
+    .status-done { background: #c6f6d5; color: #22543d; }
+
+    /* 문서 상세 플로팅 팝업 */
+    .doc-modal-overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); display: none; align-items: center; justify-content: center; padding: 24px; z-index: 1000; }
+    .doc-modal-overlay.open { display: flex; animation: overlay-in 0.15s ease-out; }
+    .doc-modal { width: 100%; max-width: 620px; max-height: 86vh; display: flex; flex-direction: column; background: #fff; border-radius: 10px; box-shadow: 0 18px 48px rgba(15, 23, 42, 0.28); overflow: hidden; animation: modal-in 0.18s ease-out; }
+    .doc-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 16px 20px; background: linear-gradient(135deg, #1b3a6b 0%, #0d2346 100%); color: #fff; }
+    .doc-modal-heading { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    .doc-modal-type { align-self: flex-start; background: rgba(255,255,255,0.18); border-radius: 4px; padding: 2px 8px; font-size: 11px; }
+    .doc-modal-heading h2 { font-size: 16px; line-height: 1.4; font-weight: 600; word-break: keep-all; }
+    .doc-modal-close { flex: none; width: 28px; height: 28px; border: none; border-radius: 6px; background: rgba(255,255,255,0.15); color: #fff; font-size: 18px; line-height: 1; cursor: pointer; transition: background 0.15s; }
+    .doc-modal-close:hover { background: rgba(255,255,255,0.3); }
+    .doc-modal-body { padding: 20px; overflow-y: auto; }
+    .doc-modal-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .doc-modal-table th, .doc-modal-table td { border: 1px solid #e2e8f0; padding: 9px 12px; text-align: left; vertical-align: top; }
+    .doc-modal-table th { background: #f7fafc; color: #4a5568; width: 110px; white-space: nowrap; font-weight: 600; }
+    .doc-modal-table td { color: #2d3748; }
+    .doc-modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid #e2e8f0; background: #fafbfc; }
+    .doc-modal-footer button { padding: 8px 16px; border: none; border-radius: 5px; font-size: 12px; cursor: pointer; }
+    .btn-modal-ghost { background: #4a5568; color: #fff; }
+    .btn-modal-ghost:hover { background: #2d3748; }
+    .btn-modal-primary { background: #0056b3; color: #fff; font-weight: bold; }
+    .btn-modal-primary:hover { background: #004494; }
+
+    @keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes modal-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+  </style>
+</head>
+<body>
+
+  <!-- 상단 정부 포털 헤더 -->
+  <header class="gov-header">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      온나라 표준 전자결재 시스템
+      <span>모의 시연 사이트</span>
+    </div>
+    <div class="user-info">
+      <div class="user-badge">기획예산과 | 홍길동 주무관 (시연자)</div>
+      <span style="font-size: 12px; opacity: 0.8;">2026-10-20 (화) 17:30</span>
+    </div>
+  </header>
+
+  <div class="container">
+    <!-- 좌측 메뉴 -->
+    <aside class="sidebar">
+      <button class="btn-create" onclick="alert('시연 모드: 신규 기안 작성창입니다.');">✏️ 신규 기안 작성</button>
+      
+      <div class="menu-title">결재함 목록</div>
+      <ul class="menu-list">
+        <li><a href="#" class="active">📥 결재 대기함 <span class="menu-count">4</span></a></li>
+        <li><a href="#">📤 기안 진행함 <span class="menu-count">2</span></a></li>
+        <li><a href="#">📁 완료 문서함 <span class="menu-count">128</span></a></li>
+        <li><a href="#">📋 부서 수신함 <span class="menu-count">6</span></a></li>
+      </ul>
+
+      <div class="menu-title">업무 지원 편람</div>
+      <ul class="menu-list">
+        <li><a href="#">📖 2026 행정예산 지침</a></li>
+        <li><a href="#">🏢 부서별 서무 안내</a></li>
+      </ul>
+    </aside>
+
+    <!-- 우측 메인 영역 -->
+    <main class="main-content">
+      <div class="content-header">
+        <div>
+          <h1 class="page-title">📥 결재 대기함</h1>
+          <p class="page-desc">처리 대기 중인 전자결재 문서 목록입니다. 문서 제목을 클릭하면 문서 상세 정보를 확인할 수 있습니다.</p>
+        </div>
+      </div>
+
+      <!-- 전자결재 목록 테이블 -->
+      <div class="table-container">
+        <table class="doc-table">
+          <thead>
+            <tr>
+              <th>번호</th>
+              <th>문서구분</th>
+              <th>문서제목 (기안명)</th>
+              <th>기안부서</th>
+              <th>기안자</th>
+              <th>기안일시</th>
+              <th>결재상태</th>
+            </tr>
+          </thead>
+          <tbody>
+            <!-- 문서 1 -->
+            <tr id="doc-row-1">
+              <td>1</td>
+              <td>공문</td>
+              <td class="title-col">
+                <a href="#doc1" class="doc-title" data-docno="기획-2026-1042">2026년도 하반기 스마트 행정업무 개선 종합계획 보고</a>
+              </td>
+              <td class="dept-name">기획예산과</td>
+              <td class="author-name">김철수</td>
+              <td class="date-col">2026-10-20</td>
+              <td><span class="badge-status status-wait">결재대기</span></td>
+            </tr>
+
+            <!-- 문서 2 -->
+            <tr id="doc-row-2">
+              <td>2</td>
+              <td>일반보고</td>
+              <td class="title-col">
+                <a href="#doc2" class="doc-title" data-docno="서무-2026-0891">청사 공용차량 운용 현황 점검 및 유류대 정산 품의</a>
+              </td>
+              <td class="dept-name">총무과</td>
+              <td class="author-name">이영희</td>
+              <td class="date-col">2026-10-19</td>
+              <td><span class="badge-status status-wait">결재대기</span></td>
+            </tr>
+
+            <!-- 문서 3 -->
+            <tr id="doc-row-3">
+              <td>3</td>
+              <td>지출품의</td>
+              <td class="title-col">
+                <a href="#doc3" class="doc-title" data-docno="회계-2026-1520">2026년 상반기 전산정보시스템 유지보수 용역 기성 검사원 승인</a>
+              </td>
+              <td class="dept-name">정보통신과</td>
+              <td class="author-name">박상우</td>
+              <td class="date-col">2026-10-18</td>
+              <td><span class="badge-status status-prog">진행중</span></td>
+            </tr>
+
+            <!-- 문서 4 -->
+            <tr id="doc-row-4">
+              <td>4</td>
+              <td>계획서</td>
+              <td class="title-col">
+                <a href="#doc4" class="doc-title" data-docno="인사-2026-0412">하반기 정기인사 인수인계 지식 편람(바통) 작성 및 제출 협조 안내</a>
+              </td>
+              <td class="dept-name">행정지원과</td>
+              <td class="author-name">정민수</td>
+              <td class="date-col">2026-10-17</td>
+              <td><span class="badge-status status-wait">결재대기</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- 문서 상세 플로팅 팝업 -->
+  <div class="doc-modal-overlay" id="docModal" aria-hidden="true">
+    <div class="doc-modal" role="dialog" aria-modal="true" aria-labelledby="docModalTitle">
+      <div class="doc-modal-header">
+        <div class="doc-modal-heading">
+          <span class="doc-modal-type" id="docModalType"></span>
+          <h2 id="docModalTitle"></h2>
+        </div>
+        <button class="doc-modal-close" type="button" aria-label="닫기" data-close-modal>×</button>
+      </div>
+      <div class="doc-modal-body">
+        <table class="doc-modal-table">
+          <tbody>
+            <tr>
+              <th>문서관리번호</th>
+              <td id="docModalNo"></td>
+              <th>보존연한</th>
+              <td id="docModalRetention"></td>
+            </tr>
+            <tr>
+              <th>기안부서</th>
+              <td id="docModalDept"></td>
+              <th>기안자</th>
+              <td id="docModalAuthor"></td>
+            </tr>
+            <tr>
+              <th>기안일시</th>
+              <td id="docModalDate"></td>
+              <th>공개여부</th>
+              <td id="docModalDisclosure"></td>
+            </tr>
+            <tr>
+              <th>관련 법령</th>
+              <td colspan="3" id="docModalLaw"></td>
+            </tr>
+            <tr>
+              <th>업무 요약</th>
+              <td colspan="3" id="docModalSummary"></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="doc-modal-footer">
+        <button class="btn-modal-ghost" type="button">첨부문서(HWPX) 열기</button>
+        <button class="btn-modal-primary" type="button">결재 승인(서명)</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const DOC_DETAILS = {
+      "기획-2026-1042": {
+        type: "공문",
+        title: "2026년도 하반기 스마트 행정업무 개선 종합계획 보고",
+        retention: "10년 (준영구)",
+        dept: "기획예산과",
+        author: "김철수",
+        date: "2026-10-20 09:14",
+        disclosure: "공개 (대국민 알림)",
+        law: "행정 효율과 협업 촉진에 관한 규정 제10조(문서의 작성), 공공기록물 관리에 관한 법률 시행령",
+        summary: "전 부서 순환보직 대비 인수인계 공백 제로화를 위한 TaskCalendar 기반 스마트 행정업무 개선 시범사업 추진 계획 승인 건."
+      },
+      "서무-2026-0891": {
+        type: "일반보고",
+        title: "청사 공용차량 운용 현황 점검 및 유류대 정산 품의",
+        retention: "5년",
+        dept: "총무과",
+        author: "이영희",
+        date: "2026-10-19 14:32",
+        disclosure: "공개",
+        law: "공유재산 및 물품 관리법 제47조(공용차량의 관리), 지방자치단체 세출예산 집행기준",
+        summary: "2026년 3분기 청사 공용차량 12대의 운행 기록과 유류비 집행 내역을 점검하고, 10월분 유류대 1,240천원을 정산하고자 함."
+      },
+      "회계-2026-1520": {
+        type: "지출품의",
+        title: "2026년 상반기 전산정보시스템 유지보수 용역 기성 검사원 승인",
+        retention: "5년",
+        dept: "정보통신과",
+        author: "박상우",
+        date: "2026-10-18 11:05",
+        disclosure: "공개",
+        law: "지방자치단체를 당사자로 하는 계약에 관한 법률 시행령 제69조(검사), 지방회계법 제25조",
+        summary: "2026년 상반기 전산정보시스템 유지보수 용역(계약금액 87,600천원)의 기성 부분 43,800천원에 대한 검사 완료 및 대금 지급 승인 건."
+      },
+      "인사-2026-0412": {
+        type: "계획서",
+        title: "하반기 정기인사 인수인계 지식 편람(바통) 작성 및 제출 협조 안내",
+        retention: "10년 (준영구)",
+        dept: "행정지원과",
+        author: "정민수",
+        date: "2026-10-17 16:48",
+        disclosure: "공개 (대국민 알림)",
+        law: "지방공무원 인사기록·통계 및 인사사무 처리 규정, 행정업무의 운영 및 혁신에 관한 규정 제16조(업무의 인수·인계)",
+        summary: "하반기 정기인사 시행에 대비하여 전 부서 단위업무별 인수인계 지식 편람(바통)을 11월 10일까지 작성·제출하도록 협조 요청하는 안내 문서."
+      }
+    };
+
+    const modal = document.getElementById("docModal");
+    let lastFocus = null;
+
+    function openDocModal(docno) {
+      const doc = DOC_DETAILS[docno];
+      if (!doc) return;
+      document.getElementById("docModalType").textContent = doc.type;
+      document.getElementById("docModalTitle").textContent = doc.title;
+      document.getElementById("docModalNo").textContent = docno;
+      document.getElementById("docModalRetention").textContent = doc.retention;
+      document.getElementById("docModalDept").textContent = doc.dept;
+      document.getElementById("docModalAuthor").textContent = doc.author;
+      document.getElementById("docModalDate").textContent = doc.date;
+      document.getElementById("docModalDisclosure").textContent = doc.disclosure;
+      document.getElementById("docModalLaw").textContent = doc.law;
+      document.getElementById("docModalSummary").textContent = doc.summary;
+      lastFocus = document.activeElement;
+      modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
+      modal.querySelector(".doc-modal-close").focus();
+    }
+
+    function closeDocModal() {
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+      if (lastFocus) lastFocus.focus();
+    }
+
+    document.querySelectorAll(".doc-title").forEach((link) => {
+      link.title = link.textContent.trim();
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        openDocModal(link.dataset.docno);
+      });
+    });
+
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) closeDocModal();
+    });
+    modal.querySelector("[data-close-modal]").addEventListener("click", closeDocModal);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && modal.classList.contains("open")) closeDocModal();
+    });
+  </script>
+
+</body>
+</html>

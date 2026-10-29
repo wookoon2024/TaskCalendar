@@ -1,0 +1,682 @@
+{
+  "version": 2,
+  "exported_at": "2026-10-21 09:00:00",
+  "description": "2026 공공 AI 대전환 챌린지 업무 인수인계 모의데이터 (기획예산과)",
+  "options": {
+    "include_attachments": true,
+    "include_schedules": true,
+    "include_documents": true,
+    "include_bookmarks": true,
+    "include_browser_memos": true
+  },
+  "groups": [
+    {
+      "id": 1,
+      "name": "서무복무"
+    },
+    {
+      "id": 2,
+      "name": "예산회계"
+    },
+    {
+      "id": 3,
+      "name": "현안사업"
+    }
+  ],
+  "categories": [
+    {
+      "name": "출장여비",
+      "parent": null,
+      "group": 1
+    },
+    {
+      "name": "물품자산",
+      "parent": null,
+      "group": 1
+    },
+    {
+      "name": "복무관리",
+      "parent": null,
+      "group": 1
+    },
+    {
+      "name": "보안기록물",
+      "parent": null,
+      "group": 1
+    },
+    {
+      "name": "예산편성",
+      "parent": null,
+      "group": 2
+    },
+    {
+      "name": "집행정산",
+      "parent": null,
+      "group": 2
+    },
+    {
+      "name": "결산",
+      "parent": null,
+      "group": 2
+    },
+    {
+      "name": "계약관리",
+      "parent": null,
+      "group": 2
+    },
+    {
+      "name": "스마트행정",
+      "parent": null,
+      "group": 3
+    },
+    {
+      "name": "민원처리",
+      "parent": null,
+      "group": 3
+    },
+    {
+      "name": "법령규정",
+      "parent": null,
+      "group": 3
+    },
+    {
+      "name": "통계보고",
+      "parent": null,
+      "group": 3
+    }
+  ],
+  "documents": [
+    {
+      "title": "출장신청서",
+      "category": "출장여비",
+      "group": "1",
+      "cycle": "수시",
+      "schedules": [
+        {
+          "title": "정부세종청사 스마트행정 협의 출장",
+          "start_date": "2026-10-28",
+          "end_date": "2026-10-28",
+          "color": "#D9FBE5",
+          "cycle": "수시",
+          "reminder_minutes": 60,
+          "content_text": "정부세종청사 스마트행정 협의 출장\n08:20 KTX 1204호 서울 출발. 중앙동 3층 중회의실 협의."
+        }
+      ],
+      "linked_tasks": [
+        {
+          "title": "[행정지원과-3401] 관외출장명령 및 여비지급 결재",
+          "category": "전자결재 연계",
+          "start_date": "2026-10-21",
+          "department": "행정지원과",
+          "assignee": "정민수"
+        }
+      ],
+      "bookmarks": [
+        "출장 목적: 행정안전부 차세대 스마트행정 플랫폼 시범사업 협의",
+        "KTX 왕복 예약: 1204-5890-3321",
+        "근거: 국가공무원 복무규정 제13조"
+      ]
+    },
+    {
+      "title": "여비정산내역",
+      "category": "출장여비",
+      "group": "1",
+      "cycle": "월간",
+      "schedules": [],
+      "linked_tasks": [
+        {
+          "title": "[총무과-2874] 10월분 여비 정산 지출품의",
+          "category": "회계 연계",
+          "start_date": "2026-10-22",
+          "department": "총무과",
+          "assignee": "이영희"
+        }
+      ],
+      "bookmarks": [
+        "출장 완료일로부터 5일 이내 정산 원칙",
+        "법인카드 사용분은 증빙 별도 첨부"
+      ]
+    },
+    {
+      "title": "물품관리대장",
+      "category": "물품자산",
+      "group": "1",
+      "cycle": "월간",
+      "schedules": [
+        {
+          "title": "부서 공용물품 정기 재고조사",
+          "start_date": "2026-10-30",
+          "end_date": "2026-10-30",
+          "color": "#DCEBFF",
+          "cycle": "월간",
+          "reminder_minutes": 30,
+          "content_text": "부서 공용물품 정기 재고조사\nPC 2대, 복합기, 문서스캐너, 세단기 수불 실태 확인."
+        }
+      ],
+      "linked_tasks": [],
+      "bookmarks": [
+        "행정망 PC 식별번호 102030401 (취득금액 115만원)",
+        "노후 빔프로젝터 램프 수명 70% 모니터링"
+      ]
+    },
+    {
+      "title": "불용품처분계획",
+      "category": "물품자산",
+      "group": "1",
+      "cycle": "수시",
+      "schedules": [
+        {
+          "title": "물품심사위원회 개최",
+          "start_date": "2026-11-13",
+          "end_date": "2026-11-13",
+          "color": "#D9FBE5",
+          "cycle": "수시",
+          "reminder_minutes": 60,
+          "content_text": "물품심사위원회 개최\n11. 13.(금) 14:00, 3층 중회의실. 불용품 처분 대상 4종 심의."
+        }
+      ],
+      "linked_tasks": [
+        {
+          "title": "[총무과-2850] 2026년 정기 불용품 처분 계획",
+          "category": "물품 관리",
+          "start_date": "2026-10-15",
+          "department": "총무과",
+          "assignee": "이영희"
+        }
+      ],
+      "bookmarks": [
+        "처분 대상",
+        "물품심사위원회 심의"
+      ]
+    },
+    {
+      "title": "복무처리지침",
+      "category": "복무관리",
+      "group": "1",
+      "cycle": "수시",
+      "schedules": [
+        {
+          "title": "부서원 유연근무(시차출퇴근제) 신청 마감",
+          "start_date": "2026-10-22",
+          "end_date": "2026-10-22",
+          "color": "#FFE9D2",
+          "cycle": "주간",
+          "reminder_minutes": 10,
+          "content_text": "부서원 유연근무(시차출퇴근제) 신청 마감\n매주 목요일 18:00까지 e-사람 신청 및 과장 결재."
+        }
+      ],
+      "linked_tasks": [],
+      "bookmarks": [
+        "근무시간 09:00 ~ 18:00 (점심 12:00 ~ 13:00)",
+        "병가 6일 초과 시 의사 진단서 필수",
+        "출장여비 정산은 5일 이내"
+      ]
+    },
+    {
+      "title": "연가사용현황",
+      "category": "복무관리",
+      "group": "1",
+      "cycle": "월간",
+      "schedules": [],
+      "linked_tasks": [],
+      "bookmarks": [
+        "4명 평균 연가 사용률 75%",
+        "12월 연가 집중 대비 대체근무자 지정 필요"
+      ]
+    },
+    {
+      "title": "초과근무수당신청",
+      "category": "복무관리",
+      "group": "1",
+      "cycle": "월간",
+      "schedules": [
+        {
+          "title": "10월분 초과근무수당 신청 마감",
+          "start_date": "2026-11-27",
+          "end_date": "2026-11-27",
+          "color": "#FFE0EC",
+          "cycle": "월간",
+          "reminder_minutes": 60,
+          "content_text": "10월분 초과근무수당 신청 마감\n65시간 1,284천원. e-사람 입력 후 결재 상신."
+        }
+      ],
+      "linked_tasks": [],
+      "bookmarks": [
+        "월 20시간 초과 시 과장 사전 승인",
+        "실제 근무기록과 대조 후 신청"
+      ]
+    },
+    {
+      "title": "보안점검일지",
+      "category": "보안기록물",
+      "group": "1",
+      "cycle": "월간",
+      "schedules": [
+        {
+          "title": "부서 정기 보안점검의 날",
+          "start_date": "2026-11-02",
+          "end_date": "2026-11-02",
+          "color": "#EFE4FF",
+          "cycle": "월간",
+          "reminder_minutes": 30,
+          "content_text": "부서 정기 보안점검의 날\n비밀번호 변경 주기 점검 및 출력물 보관 상태 확인."
+        }
+      ],
+      "linked_tasks": [],
+      "bookmarks": [
+        "PC 비밀번호 3개월마다 변경",
+        "보안 USB만 사용 허용"
+      ]
+    },
+    {
+      "title": "기록물이관계획",
+      "category": "보안기록물",
+      "group": "1",
+      "cycle": "수시",
+      "schedules": [
+        {
+          "title": "2026년 기록물 이관 완료",
+          "start_date": "2026-12-10",
+          "end_date": "2026-12-10",
+          "color": "#DCEBFF",
+          "cycle": "수시",
+          "reminder_minutes": 60,
+          "content_text": "2026년 기록물 이관 완료\n일반문서 428건, 시행문 1,240건 기록관 이관."
+        }
+      ],
+      "linked_tasks": [
+        {
+          "title": "[기록관-0912] 2026년 기록물 이관 일정 통보",
+          "category": "기록물 관리",
+          "start_date": "2026-11-03",
+          "department": "기록관",
+          "assignee": "정민수"
+        }
+      ],
+      "bookmarks": [
+        "미편철 문서 11. 14.까지 정비",
+        "이관 목록 확정 12. 05."
+      ]
+    },
+    {
+      "title": "2026년도_세출예산서",
+      "category": "예산편성",
+      "group": "2",
+      "cycle": "분기",
+      "schedules": [
+        {
+          "title": "2026년 3분기 예산 집행실적 제출 마감",
+          "start_date": "2026-10-23",
+          "end_date": "2026-10-23",
+          "color": "#FFE0EC",
+          "cycle": "분기",
+          "reminder_minutes": 60,
+          "content_text": "2026년 3분기 예산 집행실적 제출 마감\n16:00까지 기획예산과 취합 제출. 상반기 집행률 79.3%."
+        }
+      ],
+      "linked_tasks": [
+        {
+          "title": "[기획예산과-10250] 2026년 상반기 재정집행 실적 통보",
+          "category": "재정 집행",
+          "start_date": "2026-10-20",
+          "department": "기획예산과",
+          "assignee": "홍길동"
+        }
+      ],
+      "bookmarks": [
+        "예산 총액 2억 2,050만원",
+        "전산개발비 잔액 1,700만원 명시이월 예정",
+        "자산취득비 3,150만원 조기집행 완료"
+      ]
+    },
+    {
+      "title": "2027년_본예산_요구서",
+      "category": "예산편성",
+      "group": "2",
+      "cycle": "연간",
+      "schedules": [
+        {
+          "title": "2027년 본예산 요구서 제출",
+          "start_date": "2026-11-20",
+          "end_date": "2026-11-20",
+          "color": "#FFE9D2",
+          "cycle": "연간",
+          "reminder_minutes": 60,
+          "content_text": "2027년 본예산 요구서 제출\n부서 요구서 취합 후 예산팀 제출. 신규사업 4건."
+        }
+      ],
+      "linked_tasks": [],
+      "bookmarks": [
+        "요구 총액 2,480,000천원 (전년 대비 12.5% 증가)",
+        "스마트 업무바통 고도화 120,000천원 신규 반영"
+      ]
+    },
+    {
+      "title": "예산편성지침",
+      "category": "예산편성",
+      "group": "2",
+      "cycle": "연간",
+      "schedules": [],
+      "linked_tasks": [],
+      "bookmarks": [
+        "신규사업은 타당성 검토 필수",
+        "경상경비 전년 대비 5% 절감 편성"
+      ]
+    },
+    {
+      "title": "분기별_집행실적",
+      "category": "집행정산",
+      "group": "2",
+      "cycle": "분기",
+      "schedules": [
+        {
+          "title": "3분기 집행실적 취합 마감",
+          "start_date": "2026-10-23",
+          "end_date": "2026-10-23",
+          "color": "#FFE0EC",
+          "cycle": "분기",
+          "reminder_minutes": 60,
+          "content_text": "3분기 집행실적 취합 마감\n부서별 집행률 점검 및 미집행 사유 정리."
+        }
+      ],
+      "linked_tasks": [],
+      "bookmarks": [
+        "3분기 집행률 79.3%",
+        "4분기 집행 계획 580,000천원"
+      ]
+    },
+    {
+      "title": "지출품의서",
+      "category": "집행정산",
+      "group": "2",
+      "cycle": "월간",
+      "schedules": [
+        {
+          "title": "10월분 공공요금 지출품의 상신",
+          "start_date": "2026-10-29",
+          "end_date": "2026-10-29",
+          "color": "#D9FBE5",
+          "cycle": "월간",
+          "reminder_minutes": 30,
+          "content_text": "10월분 공공요금 지출품의 상신\n전기·상하수도·통신요금 4,286천원."
+        }
+      ],
+      "linked_tasks": [],
+      "bookmarks": [
+        "지출과목: 일반운영비-공공요금",
+        "채주: 한국전력공사 외 2개 기관"
+      ]
+    },
+    {
+      "title": "법인카드_사용내역",
+      "category": "집행정산",
+      "group": "2",
+      "cycle": "월간",
+      "schedules": [],
+      "linked_tasks": [],
+      "bookmarks": [
+        "9월 법인카드 집행 150,300원",
+        "도서·다과 등 소액 집행 위주"
+      ]
+    },
+    {
+      "title": "결산보고서_초안",
+      "category": "결산",
+      "group": "2",
+      "cycle": "연간",
+      "schedules": [
+        {
+          "title": "2026년 결산 추계 자료 제출",
+          "start_date": "2026-11-06",
+          "end_date": "2026-11-06",
+          "color": "#EFE4FF",
+          "cycle": "연간",
+          "reminder_minutes": 60,
+          "content_text": "2026년 결산 추계 자료 제출\n집행률 89.4%, 불용 233,000천원. 이월 심사 대비."
+        }
+      ],
+      "linked_tasks": [],
+      "bookmarks": [
+        "총괄: 예산 2,205,000천원 / 집행 1,972,000천원",
+        "전산개발비 170,000천원 명시이월 요청"
+      ]
+    },
+    {
+      "title": "용역계약현황",
+      "category": "계약관리",
+      "group": "2",
+      "cycle": "월간",
+      "schedules": [
+        {
+          "title": "전산정보시스템 유지보수 기성검사",
+          "start_date": "2026-11-12",
+          "end_date": "2026-11-12",
+          "color": "#DCEBFF",
+          "cycle": "수시",
+          "reminder_minutes": 30,
+          "content_text": "전산정보시스템 유지보수 기성검사\n상반기 기성 43,800천원 현장 검사."
+        }
+      ],
+      "linked_tasks": [],
+      "bookmarks": [
+        "유지보수 계약 87,600천원",
+        "기성 검사 후 대금 지급"
+      ]
+    },
+    {
+      "title": "과업지시서",
+      "category": "계약관리",
+      "group": "2",
+      "cycle": "수시",
+      "schedules": [],
+      "linked_tasks": [],
+      "bookmarks": [
+        "정기점검 월 1회",
+        "장애 대응 4시간 이내",
+        "취약점 조치율 100%"
+      ]
+    },
+    {
+      "title": "스마트행정_추진계획",
+      "category": "스마트행정",
+      "group": "3",
+      "cycle": "수시",
+      "schedules": [
+        {
+          "title": "공공 AI 대전환 챌린지 최종 제출",
+          "start_date": "2026-11-11",
+          "end_date": "2026-11-11",
+          "color": "#FFE0EC",
+          "cycle": "수시",
+          "reminder_minutes": 120,
+          "content_text": "공공 AI 대전환 챌린지 최종 제출\n소스·실행물 등록, 구동안내서·시연영상 제출."
+        },
+        {
+          "title": "정부혁신박람회 결선 시연",
+          "start_date": "2026-11-25",
+          "end_date": "2026-11-25",
+          "color": "#DCEBFF",
+          "cycle": "수시",
+          "reminder_minutes": 60,
+          "content_text": "정부혁신박람회 결선 시연\n킨텍스 현장 시연 및 발표."
+        }
+      ],
+      "linked_tasks": [
+        {
+          "title": "[디지털혁신과-1120] 공공 AI 대전환 챌린지 참가계획 수립",
+          "category": "혁신 과제",
+          "start_date": "2026-10-18",
+          "department": "디지털혁신과",
+          "assignee": "김철수"
+        }
+      ],
+      "bookmarks": [
+        "목표: 업무 파악 기간 10일 → 1시간",
+        "중점과제 4개 추진"
+      ]
+    },
+    {
+      "title": "추진일정",
+      "category": "스마트행정",
+      "group": "3",
+      "cycle": "수시",
+      "schedules": [],
+      "linked_tasks": [],
+      "bookmarks": [
+        "1단계 업무 구조화 → 2단계 일정 연계 → 3단계 문서 연계 → 4단계 AI 지원"
+      ]
+    },
+    {
+      "title": "민원처리대장",
+      "category": "민원처리",
+      "group": "3",
+      "cycle": "주간",
+      "schedules": [
+        {
+          "title": "민원 회신 검토 및 발송",
+          "start_date": "2026-10-27",
+          "end_date": "2026-10-27",
+          "color": "#FFE9D2",
+          "cycle": "주간",
+          "reminder_minutes": 30,
+          "content_text": "민원 회신 검토 및 발송\n접수번호 1838~1845 처리 결과 확인."
+        }
+      ],
+      "linked_tasks": [],
+      "bookmarks": [
+        "민원 처리 기한 14일",
+        "연장 시 10일 이내 추가"
+      ]
+    },
+    {
+      "title": "민원회신문",
+      "category": "민원처리",
+      "group": "3",
+      "cycle": "수시",
+      "schedules": [],
+      "linked_tasks": [
+        {
+          "title": "[민원봉사과-4210] 가로등 점등 시간 조정 민원 회신",
+          "category": "민원 처리",
+          "start_date": "2026-10-22",
+          "department": "민원봉사과",
+          "assignee": "박상우"
+        }
+      ],
+      "bookmarks": [
+        "민원 2026-민원-1842",
+        "회신 기한 10. 28."
+      ]
+    },
+    {
+      "title": "민원응대_FAQ",
+      "category": "민원처리",
+      "group": "3",
+      "cycle": "수시",
+      "schedules": [],
+      "linked_tasks": [],
+      "bookmarks": [
+        "처리 기한 14일, 연장 10일",
+        "결과는 문자·우편 안내"
+      ]
+    },
+    {
+      "title": "자치법규_정비계획",
+      "category": "법령규정",
+      "group": "3",
+      "cycle": "수시",
+      "schedules": [
+        {
+          "title": "자치법규 정비 협의회",
+          "start_date": "2026-11-18",
+          "end_date": "2026-11-18",
+          "color": "#D9FBE5",
+          "cycle": "수시",
+          "reminder_minutes": 30,
+          "content_text": "자치법규 정비 협의회\n정비 대상 3건 부서 협의 및 의견 수렴."
+        }
+      ],
+      "linked_tasks": [],
+      "bookmarks": [
+        "정비 대상 3건",
+        "법제심사 의뢰 11. 24."
+      ]
+    },
+    {
+      "title": "관련법령발췌",
+      "category": "법령규정",
+      "group": "3",
+      "cycle": "수시",
+      "schedules": [],
+      "linked_tasks": [],
+      "bookmarks": [
+        "지방재정법 제36조·제47조",
+        "국가공무원 복무규정 제13조",
+        "행정업무의 운영 및 혁신에 관한 규정 제10조"
+      ]
+    },
+    {
+      "title": "주간업무보고",
+      "category": "통계보고",
+      "group": "3",
+      "cycle": "주간",
+      "schedules": [],
+      "linked_tasks": [],
+      "bookmarks": [
+        "매주 월요일 09:30 보고회",
+        "담당자별 실적 취합"
+      ]
+    },
+    {
+      "title": "주요업무_추진실적",
+      "category": "통계보고",
+      "group": "3",
+      "cycle": "분기",
+      "schedules": [
+        {
+          "title": "하반기 성과평가 자료 제출",
+          "start_date": "2026-11-13",
+          "end_date": "2026-11-13",
+          "color": "#EFE4FF",
+          "cycle": "분기",
+          "reminder_minutes": 60,
+          "content_text": "하반기 성과평가 자료 제출\n4개 분야 18개 지표 실적 정리."
+        }
+      ],
+      "linked_tasks": [],
+      "bookmarks": [
+        "예산 집행률 79.3% (목표 75%)",
+        "민원 기한 준수율 96%"
+      ]
+    },
+    {
+      "title": "업무보고_요약",
+      "category": "통계보고",
+      "group": "3",
+      "cycle": "월간",
+      "schedules": [],
+      "linked_tasks": [],
+      "bookmarks": [
+        "3분기 달성률 평균 97.8%",
+        "4분기 중점 4개 과제"
+      ]
+    }
+  ],
+  "browser_memos": [
+    {
+      "url": "https://on-nara.go.kr/approval/doc/2026-10250",
+      "title": "온나라 전자결재: 2026년도 상반기 재정집행 실적 통보",
+      "memo": "3분기 취합 시 상반기 집행률(79.3%)과 불용 예상액을 함께 표기할 것."
+    },
+    {
+      "url": "https://law.go.kr/법령/지방재정법",
+      "title": "국가법령정보센터: 지방재정법 제47조(예산의 목적 외 사용금지)",
+      "memo": "전용·이체 요건 확인. 12월 이월 심사 전 법무담당관실 협의 필요."
+    },
+    {
+      "url": "https://www.gov.kr/portal/notice/2026-1120",
+      "title": "정부24: 2027년도 지방자치단체 예산편성 운영기준 안내",
+      "memo": "신규사업 타당성 검토 서식이 개정됨. 요구서 작성 시 새 서식 적용."
+    }
+  ]
+}

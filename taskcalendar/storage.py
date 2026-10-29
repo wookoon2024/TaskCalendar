@@ -4,8 +4,11 @@ import calendar
 import ctypes
 import json
 import logging
+import os
 import shutil
 import sqlite3
+import sys
+import threading
 import time
 import traceback
 from ctypes import wintypes
@@ -141,6 +144,264 @@ def decrypt_secret(enc_hex: str) -> str:
         return ""
 
 
+# ── 진단 로그 헬퍼 ──────────────────────────────────────────────────────
+# 부팅 직후 DB 를 못 읽는 현상의 원인(보안 프로그램 개입 / 파일 손상 / 암호화 키 문제)을
+# 구분하기 위해, 파일이 "실제로 어떤 바이트로 읽혔는지"와 실행 환경을 남긴다.
+
+_DPAPI_HEADER = bytes.fromhex("01000000d08c9ddf0115d1118c7a00c04fc297eb")
+_SQLITE_HEADER = b"SQLite format 3\x00"
+
+
+def _classify_header(head: bytes) -> str:
+    if not head:
+        return "empty"
+    if head.startswith(_DPAPI_HEADER[:8]):
+        return "dpapi"
+    if head.startswith(_SQLITE_HEADER):
+        return "sqlite_plain"
+    if not any(head):
+        return "all_zero"
+    return "unknown"
+
+
+def _file_fingerprint(path: Path) -> str:
+    """파일 크기/수정시각/속성/앞부분 바이트를 한 줄로 요약한다."""
+    try:
+        if not path.exists():
+            return f"{path.name}: missing"
+        st = path.stat()
+        attrs = getattr(st, "st_file_attributes", 0)
+        flags = []
+        for bit, name in ((0x1, "readonly"), (0x4, "system"), (0x400, "reparse"), (0x800, "compressed"),
+                          (0x1000, "offline"), (0x4000, "efs_encrypted"), (0x400000, "recall_on_access")):
+            if attrs & bit:
+                flags.append(name)
+        with path.open("rb") as fh:
+            head = fh.read(64)
+            tail = b""
+            if st.st_size > 64:
+                fh.seek(-16, os.SEEK_END)
+                tail = fh.read(16)
+        zero_ratio = "n/a"
+        if st.st_size <= 64 * 1024 * 1024:
+            data = path.read_bytes()
+            if data:
+                zero_ratio = f"{data.count(0) / len(data):.3f}"
+        ascii_head = "".join(chr(b) if 32 <= b < 127 else "." for b in head[:48])
+        return (
+            f"{path.name}: size={st.st_size} mtime={datetime.fromtimestamp(st.st_mtime).isoformat(timespec='seconds')} "
+            f"attrs=0x{attrs:x}[{','.join(flags)}] kind={_classify_header(head)} zero_ratio={zero_ratio}\n"
+            f"    head={head[:32].hex(' ')}\n    ascii={ascii_head}\n    tail={tail.hex(' ')}"
+        )
+    except Exception as exc:
+        return f"{path.name}: fingerprint_failed {type(exc).__name__}: {exc}"
+
+
+def _try_decrypt_report(path: Path) -> str:
+    """현재 시점에 이 파일을 복호화+SQLite 로 열 수 있는지 시험한 결과."""
+    try:
+        if not path.exists():
+            return "missing"
+        raw = path.read_bytes()
+        if not raw:
+            return "empty"
+        try:
+            plain = unprotect_bytes(raw)
+        except OSError as exc:
+            return f"unprotect_failed winerror={getattr(exc, 'winerror', None)} {exc}"
+        if not _can_deserialize_sqlite_blob(plain):
+            return f"unprotect_ok_but_sqlite_invalid plain_head={plain[:16].hex(' ')}"
+        temp_conn = sqlite3.connect(":memory:")
+        try:
+            temp_conn.deserialize(plain)
+            count = temp_conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+            last = temp_conn.execute("SELECT MAX(updated_at) FROM entries").fetchone()[0]
+        finally:
+            temp_conn.close()
+        return f"OK entries={count} last_updated={last}"
+    except Exception as exc:
+        return f"check_failed {type(exc).__name__}: {exc}"
+
+
+def _system_uptime_seconds() -> float:
+    try:
+        kernel32.GetTickCount64.restype = ctypes.c_ulonglong
+        return kernel32.GetTickCount64() / 1000.0
+    except Exception:
+        return -1.0
+
+
+def _foreign_loaded_modules() -> list[str]:
+    """프로세스에 로드된 DLL 중 Windows/파이썬 번들 외의 것(보안·DRM 후킹 DLL 추정)."""
+    try:
+        psapi = ctypes.WinDLL("psapi")
+        psapi.EnumProcessModules.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+        psapi.GetModuleFileNameExW.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.LPWSTR, wintypes.DWORD]
+        process = wintypes.HANDLE(-1)  # GetCurrentProcess() 의사 핸들
+        modules = (ctypes.c_void_p * 1024)()
+        needed = wintypes.DWORD()
+        if not psapi.EnumProcessModules(process, modules, ctypes.sizeof(modules), ctypes.byref(needed)):
+            return ["enum_failed"]
+        count = min(needed.value // ctypes.sizeof(ctypes.c_void_p), 1024)
+        windir = os.environ.get("WINDIR", r"C:\Windows").lower()
+        own_roots = [str(Path(sys.executable).parent).lower()]
+        meipass = getattr(sys, "_MEIPASS", "")
+        if meipass:
+            own_roots.append(str(meipass).lower())
+        result: list[str] = []
+        buf = ctypes.create_unicode_buffer(1024)
+        for i in range(count):
+            if not modules[i]:
+                continue
+            if not psapi.GetModuleFileNameExW(process, ctypes.c_void_p(modules[i]), buf, 1024):
+                continue
+            name = buf.value
+            lowered = name.lower()
+            if lowered.startswith(windir) or any(lowered.startswith(r) for r in own_roots):
+                continue
+            result.append(name)
+        return result
+    except Exception as exc:
+        return [f"enum_error {exc}"]
+
+
+def _environment_report(include_modules: bool) -> str:
+    lines = [
+        f"pid={os.getpid()} user={os.environ.get('USERNAME', '')} domain={os.environ.get('USERDOMAIN', '')} "
+        f"computer={os.environ.get('COMPUTERNAME', '')}",
+        f"exe={sys.executable} frozen={getattr(sys, 'frozen', False)} meipass={getattr(sys, '_MEIPASS', '')}",
+        f"argv={sys.argv[1:]} uptime_since_boot={_system_uptime_seconds():.0f}s",
+    ]
+    temp_dir = Path(os.environ.get("TEMP", ""))
+    try:
+        mei_dirs = sorted(temp_dir.glob("_MEI*"), key=lambda p: p.stat().st_mtime)
+        lines.append(f"temp={temp_dir} leftover_MEI_dirs={len(mei_dirs)}")
+        for p in mei_dirs[-5:]:
+            lines.append(f"    {p.name} mtime={datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec='seconds')}")
+    except Exception as exc:
+        lines.append(f"temp_scan_failed {exc}")
+    if include_modules:
+        mods = _foreign_loaded_modules()
+        lines.append(f"foreign_modules({len(mods)}):")
+        lines.extend(f"    {m}" for m in mods[:60])
+    return "\n".join(lines)
+
+
+# ── 진단 코드 ────────────────────────────────────────────────────────────
+# 업무망 로그 파일을 밖으로 가져올 수 없으므로, 각 로그 종류에 번호를 붙이고
+# 날짜별로 "코드×횟수" 를 한 줄로 요약한 파일을 남긴다. 사용자는 이 번호만 전달하면 된다.
+
+DIAG_STAGE_CODES: dict[str, int] = {
+    "startup_snapshot": 10,
+    "load_encrypted_sqlite_ok": 11,
+    "quit_save_done": 12,
+    "windows_session_ending": 13,
+    "load_skip_empty": 20,
+    "load_unprotect_failed": 21,
+    "load_plain_sqlite_fallback_ok": 22,
+    "load_plain_sqlite_fallback_failed": 23,
+    "load_encrypted_sqlite_invalid": 24,
+    "load_recovered_from_auto_backup": 25,
+    "load_backup_candidate_failed": 26,
+    "load_failed_preventing_overwrite": 27,
+    "load_no_usable_candidate": 28,
+    "database_error_during_init": 29,
+    "database_recovery": 29,
+    "database_recovery_move_failed": 30,
+    "save_blocked_due_to_load_failure": 31,
+    "save_write_failed": 32,
+    "quit_save_verify_failed": 33,
+    "quit_save_exception": 34,
+    "vacuum_failed": 35,
+    "auto_vacuum_failed": 35,
+}
+
+DIAG_CODE_DESCRIPTIONS: dict[int, str] = {
+    10: "프로그램 시작",
+    11: "DB 정상 로드",
+    12: "종료 시 저장 정상 (다시 읽어 확인 OK)",
+    13: "윈도우 종료/로그오프 신호 받음",
+    20: "DB 파일이 비어 있음",
+    21: "DB 해독 실패",
+    22: "해독 실패 → 평문 DB 로 읽음",
+    23: "해독 실패 → 평문 DB 로도 못 읽음",
+    24: "해독은 됐지만 DB 내용 이상",
+    25: "자동 백업에서 복구함 (최근 저장분 유실 가능!)",
+    26: "백업 후보 파일 읽기 실패",
+    27: "복구할 백업 없음 → 덮어쓰기 차단",
+    28: "읽을 수 있는 DB 없음",
+    29: "DB 손상 오류 → 초기화 복구",
+    30: "손상 파일 이동 실패",
+    31: "로드 실패 상태라 저장 차단 (비상 파일로 저장)",
+    32: "DB 파일 쓰기 실패",
+    33: "종료 저장 후 다시 읽기 실패",
+    34: "종료 저장 중 예외",
+    35: "DB 정리(vacuum) 실패",
+    50: "[원인] 실패 파일 = 정상 암호화 형식 (키/권한 문제 의심)",
+    51: "[원인] 실패 파일 = 알 수 없는 머리말 (보안·DRM 개입 의심)",
+    52: "[원인] 실패 파일 = 전부 0 (디스크 기록 손상)",
+    53: "[원인] 실패 파일 = 평문 SQLite",
+    54: "[원인] 실패 시 외부(보안·DRM 추정) DLL 감지",
+    55: "[환경] 부팅 후 3분 이내 실행 (자동 실행)",
+    56: "[환경] TEMP 에 남은 _MEI 폴더 10개 이상 (exe 압축 풀기 실패 흔적)",
+    60: "[재확인] 실패 파일이 15초 뒤 정상으로 열림",
+    61: "[재확인] 실패 파일이 1분 뒤 정상으로 열림",
+    62: "[재확인] 실패 파일이 5분 뒤 정상으로 열림",
+    63: "[재확인] 실패 파일이 30분 뒤 정상으로 열림",
+    69: "[재확인] 실패 파일이 30분 뒤에도 안 열림",
+}
+
+_HEADER_KIND_CODES = {"dpapi": 50, "unknown": 51, "all_zero": 52, "sqlite_plain": 53, "empty": 20}
+_RECHECK_OK_CODES = {15: 60, 60: 61, 300: 62, 1800: 63}
+_DIAG_SUMMARY_LOCK = threading.Lock()
+_DIAG_SUMMARY_KEEP_DAYS = 90
+_STARTUP_LOGGED = False
+
+
+def _update_daily_code_summary(summary_path: Path, codes: list[int]) -> None:
+    """'진단코드_요약.txt' 의 오늘 줄에 코드 횟수를 누적한다."""
+    if not codes:
+        return
+    with _DIAG_SUMMARY_LOCK:
+        days: dict[str, dict[int, int]] = {}
+        if summary_path.exists():
+            for line in summary_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if len(line) < 12 or line[4] != "-" or "|" not in line:
+                    continue
+                day, _, rest = line.partition("|")
+                counts: dict[int, int] = {}
+                for token in rest.split():
+                    code, _, n = token.partition("×")
+                    if code.isdigit():
+                        counts[int(code)] = int(n) if n.isdigit() else 1
+                days[day.strip()] = counts
+        today = date.today().isoformat()
+        counts = days.setdefault(today, {})
+        for code in codes:
+            counts[code] = counts.get(code, 0) + 1
+        lines = [
+            "# 바로업무 진단 코드 요약 — 날짜 | 코드×횟수 (코드 뜻은 맨 아래 표)",
+            "# 문제가 생긴 날짜 줄의 숫자만 알려주면 원인을 판별할 수 있습니다.",
+            "",
+        ]
+        for day in sorted(days)[-_DIAG_SUMMARY_KEEP_DAYS:]:
+            tokens = " ".join(
+                f"{code}×{n}" if n > 1 else f"{code}" for code, n in sorted(days[day].items())
+            )
+            lines.append(f"{day} | {tokens}")
+        lines.append("")
+        lines.append("=== 코드 표 ===")
+        lines.extend(f"{code:>3}  {desc}" for code, desc in DIAG_CODE_DESCRIPTIONS.items())
+        summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _leftover_mei_count() -> int:
+    try:
+        return sum(1 for _ in Path(os.environ.get("TEMP", "")).glob("_MEI*"))
+    except Exception:
+        return -1
+
+
 def _can_deserialize_sqlite_blob(data: bytes) -> bool:
     try:
         temp_conn = sqlite3.connect(":memory:")
@@ -193,6 +454,20 @@ class EncryptedRepository:
         self.connection.row_factory = sqlite3.Row
         self._load_failed = False
         self._initialize()
+        global _STARTUP_LOGGED
+        if not _STARTUP_LOGGED:
+            # 한 프로세스에서 저장소가 여러 번 생성될 수 있으므로 시작 로그는 1회만 남긴다.
+            _STARTUP_LOGGED = True
+            env_codes = []
+            if 0 <= _system_uptime_seconds() < 180:
+                env_codes.append(55)
+            if _leftover_mei_count() >= 10:
+                env_codes.append(56)
+            self._log_diagnostic(
+                "startup_snapshot",
+                f"{_environment_report(include_modules=False)}\n{self._files_snapshot()}",
+                tuple(env_codes),
+            )
         try:
             if self.db_path.exists():
                 self._load()
@@ -205,7 +480,12 @@ class EncryptedRepository:
             self._recover_from_corrupt_database()
         EncryptedRepository._global_instance = self
 
-    def _log_diagnostic(self, stage: str, detail: str) -> None:
+    def _log_diagnostic(self, stage: str, detail: str, extra_codes: tuple[int, ...] = ()) -> None:
+        codes = [c for c in (DIAG_STAGE_CODES.get(stage), *extra_codes) if c]
+        try:
+            _update_daily_code_summary(self.db_path.parent / "진단코드_요약.txt", codes)
+        except Exception:
+            pass
         try:
             log_path = self.db_path.parent / "taskcalendar_storage_diagnostic.log"
             if log_path.exists() and log_path.stat().st_size > 2 * 1024 * 1024:
@@ -223,14 +503,59 @@ class EncryptedRepository:
             if bak_path.exists():
                 bak_info = f"exists,size={bak_path.stat().st_size}"
             with log_path.open("a", encoding="utf-8") as fh:
+                code_text = ",".join(str(c) for c in codes) or "-"
                 fh.write(
-                    f"[{now}] stage={stage}\n"
+                    f"[{now}] [코드 {code_text}] stage={stage}\n"
                     f"db={self.db_path} ({db_info})\n"
                     f"bak={bak_path} ({bak_info})\n"
                     f"{detail.strip()}\n\n"
                 )
         except Exception:
             pass
+
+    def _files_snapshot(self) -> str:
+        bak_path = self.db_path.with_suffix(self.db_path.suffix + ".bak")
+        return f"{_file_fingerprint(self.db_path)}\n{_file_fingerprint(bak_path)}"
+
+    def diag_snapshot(self, stage: str, verify: bool = False) -> None:
+        """현재 DB 파일 상태를 진단 로그에 남긴다. verify=True 면 디스크에서 다시 읽어 복호화까지 시험."""
+        detail = self._files_snapshot()
+        if verify:
+            report = _try_decrypt_report(self.db_path)
+            detail += f"\nverify_read_back={report}"
+            if stage == "quit_save_done" and not report.startswith("OK"):
+                stage = "quit_save_verify_failed"
+        self._log_diagnostic(stage, detail)
+
+    def _schedule_delayed_recheck(self, paths: list[Path]) -> None:
+        """로드 실패 직후 같은 파일을 시간차를 두고 다시 열어 본다.
+        나중에 열리면 '부팅 직후 일시적으로 못 읽은 것'(보안 프로그램 준비 전 등),
+        계속 안 열리면 파일 자체 손상/키 문제로 구분할 수 있다."""
+        targets = [p for p in paths if p is not None]
+        state = {"opened": False}
+
+        def _recheck(delay: int) -> None:
+            if state["opened"]:
+                return
+            lines = [f"delay={delay}s uptime_since_boot={_system_uptime_seconds():.0f}s"]
+            any_ok = False
+            for p in targets:
+                report = _try_decrypt_report(p)
+                any_ok = any_ok or report.startswith("OK")
+                lines.append(_file_fingerprint(p))
+                lines.append(f"    decrypt_now={report}")
+            codes: tuple[int, ...] = ()
+            if any_ok:
+                state["opened"] = True
+                codes = (_RECHECK_OK_CODES[delay],)
+            elif delay == 1800:
+                codes = (69,)
+            self._log_diagnostic("load_failure_delayed_recheck", "\n".join(lines), codes)
+
+        for delay in (15, 60, 300, 1800):
+            timer = threading.Timer(delay, _recheck, args=(delay,))
+            timer.daemon = True
+            timer.start()
 
     def _recover_from_corrupt_database(self) -> None:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -499,7 +824,13 @@ class EncryptedRepository:
                 plain = unprotect_bytes(raw)
             except OSError as exc:
                 last_error = exc
-                self._log_diagnostic("load_unprotect_failed", f"candidate={candidate}\nerror={exc}")
+                self._log_diagnostic(
+                    "load_unprotect_failed",
+                    f"candidate={candidate}\nerror={exc}\nwinerror={getattr(exc, 'winerror', None)}\n"
+                    f"read_len={len(raw)} read_head={raw[:32].hex(' ')} kind={_classify_header(raw[:64])}\n"
+                    f"{_file_fingerprint(candidate)}",
+                    (_HEADER_KIND_CODES.get(_classify_header(raw[:64]), 0),),
+                )
                 # Compatibility/recovery: older or broken files may contain plain SQLite bytes.
                 if _can_deserialize_sqlite_blob(raw):
                     self.connection.close()
@@ -524,6 +855,24 @@ class EncryptedRepository:
         # If primary and .bak candidates failed and db_path had non-empty content on disk:
         has_existing_data = self.db_path.exists() and self.db_path.stat().st_size > 0
         if has_existing_data:
+            # 원인 추적용: 실패 시점의 환경(로드된 보안/DRM DLL 포함)과 .bak 사본을 보존하고,
+            # 시간차 재시도로 '일시적 읽기 실패'인지 '파일 손상'인지 판별한다.
+            fail_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            bak_path = self.db_path.with_suffix(self.db_path.suffix + ".bak")
+            bak_copy = self.db_path.with_name(f"{self.db_path.name}.bak.unreadable.{fail_stamp}")
+            try:
+                if bak_path.exists():
+                    shutil.copy2(bak_path, bak_copy)
+                else:
+                    bak_copy = None
+            except Exception:
+                bak_copy = None
+            self._log_diagnostic(
+                "load_failure_environment",
+                f"{_environment_report(include_modules=True)}\n{self._files_snapshot()}",
+                (54,) if any(not m.startswith("enum_") for m in _foreign_loaded_modules()) else (),
+            )
+            self._schedule_delayed_recheck([self.db_path.with_name(f"{self.db_path.name}.unreadable.{fail_stamp}"), bak_copy])
             # 1. Search backups folder for newest valid auto backup (.sqlite.bak or .db.enc)
             backup_dir = self.db_path.parent / "backups"
             if backup_dir.is_dir():
@@ -546,7 +895,7 @@ class EncryptedRepository:
                             except OSError:
                                 continue
                         if b_plain and _can_deserialize_sqlite_blob(b_plain):
-                            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            stamp = fail_stamp
                             unreadable_copy = self.db_path.with_name(f"{self.db_path.name}.unreadable.{stamp}")
                             try:
                                 shutil.copy2(self.db_path, unreadable_copy)
@@ -584,7 +933,7 @@ class EncryptedRepository:
                         self._log_diagnostic("load_backup_candidate_failed", f"candidate={b_file}\nerror={b_exc}")
 
             # 2. No backup could be recovered: preserve unreadable file and PREVENT empty overwrite
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            stamp = fail_stamp
             unreadable_copy = self.db_path.with_name(f"{self.db_path.name}.unreadable.{stamp}")
             try:
                 shutil.copy2(self.db_path, unreadable_copy)
@@ -993,6 +1342,129 @@ class EncryptedRepository:
 
     save_entry = upsert_entry
 
+    def add_entry(
+        self,
+        *,
+        start_date: object = "",
+        end_date: object = "",
+        title: str = "",
+        content_text: str = "",
+        is_lunar: bool = False,
+        is_event: bool = False,
+        is_task: bool = False,
+        repeat_rule: str = "none",
+        category: str = "",
+        color: str = "",
+        reminder_minutes: int = 0,
+        cycle: str = "수시",
+        source_type: str = "schedule",
+        work_id: int | None = None,
+        work_title: str = "",
+        assignee: str = "",
+        department: str = "",
+    ) -> int:
+        """업무 폴더 불러오기(work.json)에서 쓰는 간단 등록 API.
+
+        기존 내보내기 포맷의 필드명을 CalendarEntry 로 매핑한다.
+        """
+        def _to_date(value: object) -> date | None:
+            if isinstance(value, datetime):
+                return value.date()
+            if isinstance(value, date):
+                return value
+            text = str(value or "").strip().replace(".", "-").replace("/", "-")
+            if not text:
+                return None
+            try:
+                return date.fromisoformat(text)
+            except ValueError:
+                for fmt in ("%Y-%m-%d", "%Y%m%d"):
+                    try:
+                        return datetime.strptime(text, fmt).date()
+                    except ValueError:
+                        continue
+            return None
+
+        start = _to_date(start_date)
+        end = _to_date(end_date) or start
+
+        repeat_key = str(repeat_rule or "none").strip().lower()
+        repeat_map = {
+            "none": RecurrenceType.NONE,
+            "daily": RecurrenceType.DAILY,
+            "weekly": RecurrenceType.WEEKLY,
+            "monthly": RecurrenceType.MONTHLY,
+            "monthly_nth": RecurrenceType.MONTHLY_NTH,
+            "yearly": RecurrenceType.YEARLY,
+            "lunar_yearly": RecurrenceType.LUNAR_YEARLY,
+        }
+        recurrence_type = repeat_map.get(repeat_key, RecurrenceType.NONE)
+
+        try:
+            minutes = max(0, int(reminder_minutes or 0))
+        except (TypeError, ValueError):
+            minutes = 0
+        if minutes <= 0:
+            alert_offset = "at_start"
+        elif minutes <= 5:
+            alert_offset = "5m"
+        elif minutes <= 10:
+            alert_offset = "10m"
+        elif minutes <= 30:
+            alert_offset = "30m"
+        elif minutes <= 60:
+            alert_offset = "1h"
+        else:
+            alert_offset = "1d"
+
+        description = content_text or ""
+
+        entry = CalendarEntry(
+            EntryType.TASK if is_task else EntryType.SCHEDULE,
+            title=(title or "제목 없음").strip(),
+            description=description,
+            start_date=start,
+            end_date=end,
+            all_day=True,
+            assignee=assignee.strip(),
+            department=department.strip(),
+            status="진행중" if is_task else "",
+            icon_type="⭐" if is_event else "",
+            bg_color=color or "",
+            alert_type=AlertType.POPUP if minutes > 0 else AlertType.NONE,
+            alert_offset=alert_offset,
+            recurrence_enabled=recurrence_type != RecurrenceType.NONE,
+            recurrence_type=recurrence_type,
+            linked_work_id=work_id,
+            linked_work_type="work" if work_id else "",
+        )
+        saved = self.upsert_entry(entry)
+        if work_id and saved.entry_id:
+            self.connection.execute(
+                "INSERT OR IGNORE INTO work_entry_links (work_id, entry_id, created_at) VALUES (?, ?, ?)",
+                (int(work_id), int(saved.entry_id), datetime.now().isoformat()),
+            )
+            self.connection.commit()
+        self.save()
+        return int(saved.entry_id or 0)
+
+    def link_entry_to_work(self, work_id: int, entry_id: int, entry_type: str = "task") -> None:
+        """일정/문서 entry 하나를 업무(work)에 연결한다."""
+        if not work_id or not entry_id:
+            return
+        now = datetime.now().isoformat()
+        self.connection.execute(
+            "INSERT OR IGNORE INTO work_entry_links (work_id, entry_id, created_at) VALUES (?, ?, ?)",
+            (int(work_id), int(entry_id), now),
+        )
+        row = self.connection.execute("SELECT linked_work_id FROM entries WHERE id = ?", (int(entry_id),)).fetchone()
+        if row and not row["linked_work_id"]:
+            self.connection.execute(
+                "UPDATE entries SET linked_work_id = ?, linked_work_type = 'work' WHERE id = ?",
+                (int(work_id), int(entry_id)),
+            )
+        self.save()
+
     def delete_entry(self, entry_id: int) -> None:
         row = self.connection.execute("SELECT attachments_json FROM entries WHERE id = ?", (entry_id,)).fetchone()
         attachments = json.loads(row["attachments_json"] or "[]") if row else []
@@ -1264,7 +1736,7 @@ class EncryptedRepository:
         anchor = entry.start_date or entry.day
         if anchor is None or target_day < anchor:
             return False
-        if entry.end_date and target_day > entry.end_date:
+        if entry.end_date and entry.end_date != anchor and target_day > entry.end_date:
             return False
         if not entry.recurrence_enabled or entry.recurrence_type == RecurrenceType.NONE:
             span_end = entry.end_date or entry.day or anchor

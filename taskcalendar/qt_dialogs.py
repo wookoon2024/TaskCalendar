@@ -1352,6 +1352,7 @@ class EntryDialog(QDialog):
             self.attachments_label.setStyleSheet("padding: 2px 4px; font-size: 11px; border: none; background: transparent; text-align: left;")
             self.attachments_label.clicked.connect(self._show_attachments_menu)
             bottom_row.addWidget(self.attachments_label, 1)
+            bottom_row.addSpacing(14)
 
             content_layout.addWidget(self.attachment_bar)
 
@@ -2422,6 +2423,80 @@ class EntryDialog(QDialog):
             self.attachments_label.setStyleSheet(label_style)
         self.update()
 
+    def _is_memo_grip_pos(self, global_pos: QPoint) -> bool:
+        if self.entry_type != EntryType.MEMO or getattr(self, "_is_collapsed", False):
+            return False
+        local_pos = self.mapFromGlobal(global_pos)
+        w = self.width()
+        h = self.height()
+        return (w - 20 <= local_pos.x() <= w + 4) and (h - 20 <= local_pos.y() <= h + 4)
+
+    def _auto_fit_memo_to_content(self) -> bool:
+        if self.entry_type != EntryType.MEMO or getattr(self, "_is_collapsed", False):
+            return False
+        if not hasattr(self, "description_input") or not hasattr(self, "content_wrap"):
+            return False
+
+        editor = self.description_input
+        doc = editor.document()
+        if not doc:
+            return False
+
+        import math
+
+        # 1. 스크롤바가 없는 상태에서의 UI 여백(크롬 너비/높이) 측정
+        vbar = editor.verticalScrollBar()
+        hbar = editor.horizontalScrollBar()
+        vbar_w = vbar.width() if (vbar and vbar.isVisible()) else 0
+        hbar_h = hbar.height() if (hbar and hbar.isVisible()) else 0
+
+        vp = editor.viewport()
+        curr_vp_w = vp.width() + vbar_w
+        curr_vp_h = vp.height() + hbar_h
+
+        chrome_w = max(0, self.width() - curr_vp_w)
+        chrome_h = max(0, self.height() - curr_vp_h)
+
+        # 2. 화면(작업 영역) 경계 산출
+        avail = _screen_geometry_for(self.x(), self.y(), max(1, self.width()), max(1, self.height()))
+        max_w = int(avail.width() * 0.95)
+        max_h = int(avail.height() * 0.95)
+
+        # 3. 너비(Width) 계산 - 내용물(이미지, 표, 텍스트)의 실제 필요 너비에 딱 맞춤
+        ideal_w = doc.idealWidth()
+        needed_vp_w = math.ceil(ideal_w)
+        target_w = needed_vp_w + chrome_w
+        # 헤더 조작 버튼(제목, 핀, 접기, 닫기)을 안정적으로 유지할 최소 폭(240px) 및 화면 최대 폭 제한
+        target_w = max(240, min(max_w, target_w))
+
+        # 4. 높이(Height) 계산 - 결정된 target_w에서 내용물 실제 높이에 딱 맞춤
+        target_vp_w = max(100, target_w - chrome_w)
+
+        cloned = doc.clone()
+        cloned.setTextWidth(target_vp_w)
+        doc_h = math.ceil(cloned.size().height())
+
+        # 불필요한 하단 여백 없이 내용물 바닥선에 딱 맞춤
+        target_h = doc_h + chrome_h
+        target_h = max(120, min(max_h, target_h))
+
+        # 5. 화면 경계 안으로 위치 및 크기 보정
+        new_x, new_y, target_w, target_h = clamp_rect_into_screen(
+            avail,
+            self.x(),
+            self.y(),
+            target_w,
+            target_h,
+            min_w=240,
+            min_h=120,
+        )
+
+        self.setGeometry(new_x, new_y, target_w, target_h)
+        self._expanded_width = target_w
+        self._expanded_height = target_h
+        self._debounced_save_memo_geometry(250)
+        return True
+
     def _get_memo_resize_direction(self, global_pos: QPoint) -> str | None:
         local_pos = self.mapFromGlobal(global_pos)
         w = self.width()
@@ -2439,10 +2514,11 @@ class EntryDialog(QDialog):
                 return "l"
             return None
 
-        # Corners
-        if local_pos.x() >= w - border and local_pos.y() >= h - border:
+        # Corners - 우측 하단 그립 영역(16px)을 포함하여 넉넉하게 코너 판정
+        corner_border = 16
+        if local_pos.x() >= w - corner_border and local_pos.y() >= h - corner_border:
             return "br"
-        if local_pos.x() <= border and local_pos.y() >= h - border:
+        if local_pos.x() <= corner_border and local_pos.y() >= h - corner_border:
             return "bl"
 
         # Edges
@@ -2533,6 +2609,9 @@ class EntryDialog(QDialog):
                         watched.unsetCursor()
             elif event.type() == QEvent.Type.MouseButtonDblClick and event.button() == Qt.MouseButton.LeftButton:
                 r_dir = self._get_memo_resize_direction(event.globalPosition().toPoint())
+                if r_dir == "br" or self._is_memo_grip_pos(event.globalPosition().toPoint()):
+                    if self._auto_fit_memo_to_content():
+                        return True
                 if self._handle_collapsed_edge_dblclick(r_dir):
                     return True
             elif event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
@@ -3747,6 +3826,10 @@ class EntryDialog(QDialog):
     def mouseDoubleClickEvent(self, event) -> None:
         if self.entry_type == EntryType.MEMO and event.button() == Qt.MouseButton.LeftButton:
             r_dir = self._get_memo_resize_direction(event.globalPosition().toPoint())
+            if r_dir == "br" or self._is_memo_grip_pos(event.globalPosition().toPoint()):
+                if self._auto_fit_memo_to_content():
+                    event.accept()
+                    return
             if self._handle_collapsed_edge_dblclick(r_dir):
                 event.accept()
                 return
@@ -5213,6 +5296,48 @@ class FloatingGroupDialog(QDialog):
             self._anchored_to_right = (self.x() + exp_w >= screen_right - 4) or (self.x() + self.width() >= screen_right - 16)
         self._debounced_save(250)
 
+    def _is_grip_pos(self, global_pos: QPoint) -> bool:
+        if getattr(self, "_is_collapsed", False):
+            return False
+        local_pos = self.mapFromGlobal(global_pos)
+        w = self.width()
+        h = self.height()
+        return (w - 20 <= local_pos.x() <= w + 4) and (h - 20 <= local_pos.y() <= h + 4)
+
+    def _auto_fit_to_content(self) -> bool:
+        if getattr(self, "_is_collapsed", False) or not hasattr(self, "scroll") or not hasattr(self, "cards_container"):
+            return False
+
+        cards_h = self.cards_container.sizeHint().height()
+        if hasattr(self, "cards_grid") and self.cards_grid.layout():
+            cards_h = max(cards_h, self.cards_grid.sizeHint().height())
+
+        vp = self.scroll.viewport()
+        vp_h = vp.height() if vp else max(100, self.height() - 40)
+        chrome_h = max(0, self.height() - vp_h)
+
+        target_h = cards_h + chrome_h + 2
+        target_h = max(180, target_h)
+        target_w = max(240, self.width())
+
+        avail = _screen_geometry_for(self.x(), self.y(), target_w, target_h)
+        target_h = min(int(avail.height() * 0.95), target_h)
+
+        target_x, target_y, target_w, target_h = clamp_rect_into_screen(
+            avail,
+            self.x(),
+            self.y(),
+            target_w,
+            target_h,
+            min_w=240,
+            min_h=180,
+        )
+        self.setGeometry(target_x, target_y, target_w, target_h)
+        self._expanded_width = target_w
+        self._expanded_height = target_h
+        self._debounced_save(250)
+        return True
+
     def _get_resize_direction(self, global_pos: QPoint) -> str | None:
         local_pos = self.mapFromGlobal(global_pos)
         w = self.width()
@@ -5229,10 +5354,11 @@ class FloatingGroupDialog(QDialog):
                 return "l"
             return None
 
-        # Corners
-        if local_pos.x() >= w - border and local_pos.y() >= h - border:
+        # Corners - 우측 하단 그립 영역(16px)을 포함하여 넉넉하게 코너 판정
+        corner_border = 16
+        if local_pos.x() >= w - corner_border and local_pos.y() >= h - corner_border:
             return "br"
-        if local_pos.x() <= border and local_pos.y() >= h - border:
+        if local_pos.x() <= corner_border and local_pos.y() >= h - corner_border:
             return "bl"
 
         # Edges
@@ -5321,6 +5447,9 @@ class FloatingGroupDialog(QDialog):
         elif event.type() == QEvent.Type.MouseButtonDblClick:
             if event.button() == Qt.MouseButton.LeftButton:
                 r_dir = self._get_resize_direction(event.globalPosition().toPoint())
+                if r_dir == "br" or self._is_grip_pos(event.globalPosition().toPoint()):
+                    if self._auto_fit_to_content():
+                        return True
                 if self._handle_collapsed_edge_dblclick(r_dir):
                     return True
         elif event.type() == QEvent.Type.MouseButtonPress:
@@ -5498,6 +5627,10 @@ class FloatingGroupDialog(QDialog):
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             r_dir = self._get_resize_direction(event.globalPosition().toPoint())
+            if r_dir == "br" or self._is_grip_pos(event.globalPosition().toPoint()):
+                if self._auto_fit_to_content():
+                    event.accept()
+                    return
             if self._handle_collapsed_edge_dblclick(r_dir):
                 event.accept()
                 return
@@ -5736,12 +5869,22 @@ class EntryViewDialog(QDialog):
             title = QLineEdit((entry.title or "메모").strip())
             title.setReadOnly(True)
             info_row.addWidget(title, 1)
+            info_layout.addLayout(info_row)
         else:
+            title_row = QHBoxLayout()
+            title_row.setContentsMargins(0, 0, 0, 0)
+            title_row.setSpacing(8)
+            title_row.addWidget(self._muted("제목"))
+            title_value = QLineEdit((entry.title or "").strip() or "(제목 없음)")
+            title_value.setReadOnly(True)
+            title_row.addWidget(title_value, 1)
+            info_layout.addLayout(title_row)
+
             info_row.addWidget(self._muted("일시"))
             when_value = QLineEdit(self._entry_when_text(entry))
             when_value.setReadOnly(True)
             info_row.addWidget(when_value, 1)
-        info_layout.addLayout(info_row)
+            info_layout.addLayout(info_row)
         root.addWidget(info_card)
 
         content_card, content_layout = self._create_card()
@@ -5751,6 +5894,11 @@ class EntryViewDialog(QDialog):
         self.content_view = QTextEdit()
         self.content_view.setReadOnly(True)
         desc_val = entry.description or ""
+        if not desc_val.strip().startswith("<"):
+            # 본문 첫 줄이 제목과 같으면(일정은 본문 첫 줄이 제목 역할) 중복 표시하지 않는다
+            lines = desc_val.splitlines()
+            if entry.title and lines and lines[0].strip() == entry.title.strip():
+                desc_val = "\n".join(lines[1:]).lstrip("\n")
         if desc_val.strip().startswith("<"):
             self.content_view.setHtml(desc_val)
         else:
@@ -5794,8 +5942,10 @@ class EntryViewDialog(QDialog):
 
     @staticmethod
     def _entry_when_text(entry: CalendarEntry) -> str:
-        start_day = entry.start_date or entry.day
-        end_day = entry.end_date or entry.day
+        # 반복 일정의 특정 발생일을 열었을 때는 기준일이 아니라 클릭한 날짜를 보여준다
+        occurrence_day = entry.day if (entry.recurrence_enabled and entry.source_entry_id and entry.day) else None
+        start_day = occurrence_day or entry.start_date or entry.day
+        end_day = occurrence_day or entry.end_date or entry.day
         if start_day is None:
             return "-"
         base = start_day.isoformat()
@@ -7118,6 +7268,12 @@ class SettingsDialog(QDialog):
         btn_open_chrome_dir.clicked.connect(self._open_chrome_extension_folder)
         chrome_btn_row.addWidget(btn_open_chrome_dir)
 
+        btn_browser_memo = QPushButton("📝 브라우저 메모 관리")
+        btn_browser_memo.setFixedHeight(32)
+        btn_browser_memo.setToolTip("웹 서핑 중 저장된 브라우저 페이지 메모를 확인/편집하고 백업/복원(내보내기/가져오기)합니다.")
+        btn_browser_memo.clicked.connect(self._open_browser_memo_manager)
+        chrome_btn_row.addWidget(btn_browser_memo)
+
         chrome_btn_row.addStretch(1)
         chrome_layout.addLayout(chrome_btn_row)
 
@@ -8010,6 +8166,15 @@ class SettingsDialog(QDialog):
                 os.startfile(str(ext_dir.parent))
         except Exception as e:
             QMessageBox.warning(self, "오류", f"폴더를 여는 중 오류가 발생했습니다.\n{e}")
+
+    def _open_browser_memo_manager(self) -> None:
+        try:
+            from taskcalendar.qt_browser_memo_dialog import BrowserMemoManagerDialog
+            dlg = BrowserMemoManagerDialog(parent=self, palette=self.palette)
+            dlg.exec()
+        except Exception as e:
+            logger.exception("브라우저 메모 관리자 실행 오류: %s", e)
+            QMessageBox.critical(self, "오류", f"브라우저 메모 관리자를 여는 중 오류가 발생했습니다.\n{e}")
 
 
 class AlarmEditDialog(QDialog):

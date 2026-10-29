@@ -159,7 +159,7 @@ def merge_browser_memos(new_memos: list[dict], overwrite_existing: bool = False)
 
 
 def export_browser_memos_to_file(target_path: Path | str, memos: list[dict] | None = None) -> bool:
-    """브라우저 메모 목록을 지정한 파일(.json)로 내보낸다."""
+    """브라우저 메모 목록을 지정한 파일(.json)로 내보낸다 (크롬 확장프로그램 [가져오기]와 100% 호환)."""
     import datetime
     import json
     tgt = Path(target_path)
@@ -167,10 +167,40 @@ def export_browser_memos_to_file(target_path: Path | str, memos: list[dict] | No
     if memos is None:
         memos = load_browser_memos()
     try:
+        pages: dict[str, dict] = {}
+        now_ms = int(datetime.datetime.now().timestamp() * 1000)
+        for m in memos:
+            url = str(m.get("url") or "https://unknown")
+            if url not in pages:
+                pages[url] = {
+                    "url": url,
+                    "ignoreParams": [],
+                    "ignoreHash": False,
+                    "schema": 1,
+                    "createdAt": m.get("createdAt") or now_ms,
+                    "memos": [],
+                }
+            m_copy = dict(m)
+            # 크롬 확장프로그램 호환 필드 보정
+            if "text" not in m_copy and "content" in m_copy:
+                m_copy["text"] = m_copy["content"]
+            if "content" not in m_copy and "text" in m_copy:
+                m_copy["content"] = m_copy["text"]
+            if "w" not in m_copy and "width" in m_copy:
+                m_copy["w"] = m_copy["width"]
+            if "h" not in m_copy and "height" in m_copy:
+                m_copy["h"] = m_copy["height"]
+            if "id" not in m_copy:
+                m_copy["id"] = f"pm_{now_ms}_{len(pages[url]['memos'])}"
+            pages[url]["memos"].append(m_copy)
+
         payload = {
+            "app": "taskcalendar-page-memo",
             "version": 1,
             "exported_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "exportedAt": datetime.datetime.now().isoformat(),
             "count": len(memos),
+            "pages": pages,
             "memos": memos,
         }
         tgt.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -319,9 +349,6 @@ def migrate_items_to_files(items: list[dict], writer, progress_cb=None) -> int:
     return done
 
 
-_ATTACH_SUFFIX = "_첨부파일"
-
-
 def file_sha256(path: Path | str) -> str:
     """파일 내용 해시(rename 자동 인식용)"""
     import hashlib
@@ -336,7 +363,7 @@ def file_sha256(path: Path | str) -> str:
 file_sha1 = file_sha256
 
 
-SYSTEM_WORK_DIRS = {"attachments", "attach", "browser", "templates"}
+SYSTEM_WORK_DIRS = {"attachments", "browser", "templates"}
 
 
 def scan_work_files(known_categories: set | None = None) -> list[dict]:

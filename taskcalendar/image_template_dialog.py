@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QMessageBox,
     QFileDialog,
+    QSizePolicy,
 )
 
 from taskcalendar.image_templates import (
@@ -38,7 +39,7 @@ from taskcalendar.image_templates import (
     create_end_mark,
     create_process_flow_chart,
 )
-from taskcalendar.paths import runtime_root
+from taskcalendar.paths import work_templates_root
 from taskcalendar.qt_styles import get_input_text
 
 class ImageTemplateDialog(QDialog):
@@ -50,9 +51,9 @@ class ImageTemplateDialog(QDialog):
         self.palette = palette or {}
         self.setWindowTitle("문서 꾸미기 이미지 템플릿 라이브러리")
         self.resize(960, 680)
-        self.setMinimumSize(840, 540)
+        self.setMinimumSize(920, 540)
 
-        self.storage_dir = runtime_root() / "이미지 템플릿"
+        self.storage_dir = work_templates_root() / "이미지 템플릿"
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
         self.categories: list[str] = []
@@ -320,6 +321,9 @@ class ImageTemplateDialog(QDialog):
         for i, item_data in enumerate(items_to_render):
             idx = start_idx + i
             card = QFrame()
+            card.setFixedWidth(160)
+            card.setFixedHeight(184)
+            card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             card.setAutoFillBackground(True)
             card.setStyleSheet(f"""
                 QFrame {{
@@ -339,11 +343,11 @@ class ImageTemplateDialog(QDialog):
             # 이미지 미리보기
             lbl_preview = QLabel()
             lbl_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl_preview.setFixedHeight(95)
+            lbl_preview.setFixedSize(138, 86)
             lbl_preview.setStyleSheet("background-color: transparent; border: none; padding: 2px;")
             pix = QPixmap(item_data["path"])
             if not pix.isNull():
-                lbl_preview.setPixmap(pix.scaled(130, 85, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+                lbl_preview.setPixmap(pix.scaled(134, 80, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
             c_layout.addWidget(lbl_preview)
 
             # 제목
@@ -351,6 +355,8 @@ class ImageTemplateDialog(QDialog):
             lbl_title.setStyleSheet(f"border: none; background: transparent; font-size: 11px; font-weight: 500; color: {text};")
             lbl_title.setWordWrap(True)
             lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_title.setFixedHeight(30)
+            lbl_title.setToolTip(item_data["title"])
             c_layout.addWidget(lbl_title)
 
             # 동작 버튼 행 (삽입 / 복사 / 삭제)

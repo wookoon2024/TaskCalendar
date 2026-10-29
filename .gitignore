@@ -71,3 +71,25 @@ work/
 assets/
 test.db*
 
+
+# Temporary scratch txt and test files
+fit_results*.txt
+row5_out.txt
+opt_out.txt
+verify_out.txt
+wer_report.txt
+widths_checked.txt
+test_*.txt
+step17_text.txt
+temp_test_pic/
+hwp_extracted_images/
+showcase_assets/
+demo_render_core.py
+generate_4prog_showcase.py
+generate_demo_video.py
+
+# Exception for competition submissions
+!공모전_제출자료_261020/**
+
+# Executables: GitHub keeps source only (exe is distributed via GitLab / build)
+*.exe

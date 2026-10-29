@@ -14,8 +14,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 def get_visual_templates() -> list[dict]:
     """일러스트, 장식, 이미지·카툰 등 '이미지 템플릿' 폴더의 서브디렉토리를 스캔하여 이미지 라이브러리 목록 반환"""
-    from taskcalendar.paths import runtime_root
-    storage_dir = runtime_root() / "이미지 템플릿"
+    from taskcalendar.paths import work_templates_root
+    storage_dir = work_templates_root() / "이미지 템플릿"
     if not storage_dir.exists():
         storage_dir.mkdir(parents=True, exist_ok=True)
 

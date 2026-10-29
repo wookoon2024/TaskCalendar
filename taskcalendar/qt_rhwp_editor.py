@@ -286,6 +286,7 @@ class RhwpEditorWidget(QWidget):
 
     contentChanged = Signal()
     fullscreenToggleRequested = Signal()
+    saveRequested = Signal()
     bookmarkAdded = Signal(str)
     personalInfoCheckRequested = Signal()
 
@@ -369,6 +370,8 @@ class RhwpEditorWidget(QWidget):
     def _on_web_title_changed(self, title: str) -> None:
         if title.startswith("rhwp_fullscreen:toggle:"):
             self.fullscreenToggleRequested.emit()
+        elif title.startswith("rhwp_save:trigger:"):
+            self.saveRequested.emit()
         elif title.startswith("rhwp_modified:"):
             self.contentChanged.emit()
         elif title.startswith("rhwp_bookmark:add:"):
@@ -1283,6 +1286,45 @@ class RhwpEditorWidget(QWidget):
                         e.preventDefault();
                         e.stopPropagation();
                         document.title = 'rhwp_fullscreen:toggle:' + Date.now();
+                        return;
+                    }
+                    // 전체 선택 단축키 (Ctrl+A / Ctrl+ㅁ) 전역 캡처 및 WASM 문서 에디터 연결
+                    var isCtrl = e.ctrlKey || e.metaKey;
+                    if (isCtrl && !e.shiftKey && !e.altKey && (
+                        e.key === 'a' || e.key === 'A' || e.key === 'ㅁ' || e.code === 'KeyA' || e.keyCode === 65
+                    )) {
+                        var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                        var ih = deps && deps.getInputHandler ? deps.getInputHandler() : null;
+                        if (ih) {
+                            if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) {
+                                if (ih.textarea && e.target !== ih.textarea) {
+                                    return; // 에디터 내 별도 툴바 검색창/입력창이면 해당 요소 기본 전체선택 유지
+                                }
+                            }
+                            e.preventDefault();
+                            e.stopPropagation();
+                            try {
+                                if (typeof ih.performSelectAll === 'function') {
+                                    ih.performSelectAll();
+                                } else if (typeof ih.handleSelectAll === 'function') {
+                                    ih.handleSelectAll();
+                                } else if (ih.dispatcher) {
+                                    ih.dispatcher.dispatch('edit:select-all');
+                                }
+                            } catch(err) {
+                                console.warn('Select all failed:', err);
+                            }
+                            return;
+                        }
+                    }
+                    // 저장 단축키 (Ctrl+S / Alt+S / Ctrl+ㄴ) 전역 캡처 및 바로업무 저장 연동
+                    // (rhwp-studio 자체의 파일 다운로드 '다른 이름으로 저장' 대화상자 차단)
+                    if ((isCtrl || e.altKey) && !e.shiftKey && (
+                        e.key === 's' || e.key === 'S' || e.key === 'ㄴ' || e.code === 'KeyS' || e.keyCode === 83
+                    )) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        document.title = 'rhwp_save:trigger:' + Date.now();
                         return;
                     }
                     if (!['Control', 'Alt', 'Shift', 'Meta', 'CapsLock', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
@@ -2890,3 +2932,29 @@ class RhwpEditorWidget(QWidget):
             self.web_view.page().runJavaScript(js)
         elif self._fallback_editor:
             self._fallback_editor.setFocus(reason)
+
+    def select_all(self) -> None:
+        """한글(HWPX) 문서 전체 텍스트 선택"""
+        if self._fallback_editor is not None:
+            self._fallback_editor.selectAll()
+            return
+        if self.web_view:
+            js = """
+            (function() {
+                try {
+                    var deps = window.rhwpStudio && window.rhwpStudio.plugins && window.rhwpStudio.plugins.deps;
+                    var ih = deps && deps.getInputHandler ? deps.getInputHandler() : null;
+                    if (ih) {
+                        if (typeof ih.performSelectAll === 'function') {
+                            ih.performSelectAll();
+                        } else if (typeof ih.handleSelectAll === 'function') {
+                            ih.handleSelectAll();
+                        } else if (ih.dispatcher) {
+                            ih.dispatcher.dispatch('edit:select-all');
+                        }
+                    }
+                } catch(e) {}
+            })();
+            """
+            self.web_view.page().runJavaScript(js)
+

@@ -249,6 +249,20 @@ def extract_laws_from_text(text: str, verify_online: bool = False) -> list[LawRe
             found_map[key] = ref
 
     results = list(found_map.values())
+    # 같은 조문을 가리키는 더 긴 공식 법령명(예: '공유재산 및 물품 관리법')이 있으면
+    # 부분 매칭된 짧은 이름(예: '물품 관리법')은 중복으로 제거한다.
+    if len(results) > 1:
+        results = [
+            r for r in results
+            if not any(
+                other is not r
+                and other.article_no == r.article_no
+                and other.sub_article_no == r.sub_article_no
+                and other.law_name != r.law_name
+                and other.law_name.endswith(r.law_name)
+                for other in results
+            )
+        ]
     if not results or not verify_online:
         return results
 

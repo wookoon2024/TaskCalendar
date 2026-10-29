@@ -190,6 +190,7 @@ def _fetch(target: str, term: str, timeout: int) -> list[LawSearchResult]:
             },
             headers=_HEADERS,
             timeout=timeout,
+            verify=True,
         )
     except Exception:
         return []
@@ -318,6 +319,7 @@ def get_law_detail(mst: str, target: str = "law", timeout: int = 15) -> dict | N
             },
             headers=_HEADERS,
             timeout=timeout,
+            verify=True,
         )
         if resp.status_code != 200:
             return None

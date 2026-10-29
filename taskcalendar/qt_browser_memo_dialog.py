@@ -35,7 +35,8 @@ from PySide6.QtWidgets import (
 )
 
 from taskcalendar import work_files
-from taskcalendar.ui_theme import font_family_css, make_ui_font_like, scale_px
+from taskcalendar.fonts import font_family_css, make_ui_font_like, scale_px
+from taskcalendar.qt_styles import _shade, resolve_palette
 
 logger = logging.getLogger(__name__)
 
@@ -135,11 +136,11 @@ class BrowserMemoManagerDialog(QDialog):
 
     def __init__(self, parent=None, palette: dict | None = None):
         super().__init__(parent)
-        self.palette = palette or {}
+        self.palette = resolve_palette(palette or parent)
         self.memos: list[dict] = []
         self._filtered_memos: list[dict] = []
 
-        self.setWindowTitle("🌐 브라우저 페이지 메모 관리 & 공유 (work/browser)")
+        self.setWindowTitle("브라우저 페이지 메모 관리")
         self.resize(scale_px(860), scale_px(580))
         self.setMinimumSize(scale_px(680), scale_px(460))
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
@@ -148,14 +149,15 @@ class BrowserMemoManagerDialog(QDialog):
         self.reload_memos()
 
     def _init_ui(self) -> None:
-        bg = self.palette.get("bg", "#F8FAFC")
-        panel = self.palette.get("panel", "#FFFFFF")
-        panel_alt = self.palette.get("panel_alt", "#F1F5F9")
-        line = self.palette.get("line", "#CBD5E1")
-        text = self.palette.get("text", "#0F172A")
-        muted = self.palette.get("text_muted", "#64748B")
-        accent = self.palette.get("accent", "#0284C7")
-        accent_soft = self.palette.get("accent_soft", "#E0F2FE")
+        bg = self.palette.get("bg", "#f4f7fb")
+        panel = self.palette.get("panel", "#ffffff")
+        panel_alt = self.palette.get("panel_alt", "#f8fafc")
+        line = self.palette.get("line", "#dbe3ec")
+        text = self.palette.get("text", "#1f2328")
+        muted = self.palette.get("muted", "#667085")
+        accent = self.palette.get("accent", "#1f7a67")
+        accent_soft = self.palette.get("accent_soft", "#e7f4f0")
+        accent_hover = _shade(accent, -0.12)
         ff_css = font_family_css()
 
         self.setStyleSheet(f"""
@@ -163,6 +165,7 @@ class BrowserMemoManagerDialog(QDialog):
                 background-color: {bg};
                 color: {text};
                 font-family: {ff_css};
+                font-size: {scale_px(13)}px;
             }}
             QLabel {{
                 color: {text};
@@ -171,11 +174,14 @@ class BrowserMemoManagerDialog(QDialog):
             QLineEdit {{
                 background-color: {panel};
                 border: 1px solid {line};
-                border-radius: 4px;
+                border-radius: 6px;
                 color: {text};
-                padding: 4px 8px;
+                padding: 4px 10px;
                 font-family: {ff_css};
-                font-size: {scale_px(12)}px;
+                font-size: {scale_px(13)}px;
+            }}
+            QLineEdit:hover, QLineEdit:focus {{
+                border-color: {accent};
             }}
             QTableWidget {{
                 background-color: {panel};
@@ -201,15 +207,31 @@ class BrowserMemoManagerDialog(QDialog):
             QPushButton {{
                 background-color: {panel};
                 border: 1px solid {line};
-                border-radius: 4px;
+                border-radius: 6px;
                 color: {text};
                 font-family: {ff_css};
-                font-size: {scale_px(12)}px;
-                padding: 4px 12px;
-                min-height: {scale_px(28)}px;
+                font-size: {scale_px(13)}px;
+                padding: 5px 14px;
+                min-height: {scale_px(30)}px;
             }}
             QPushButton:hover {{
                 background-color: {panel_alt};
+                border-color: {accent};
+            }}
+            QPushButton:pressed {{
+                background-color: {accent_soft};
+            }}
+            QPushButton:focus {{
+                outline: none;
+            }}
+            QPushButton#primary {{
+                background-color: {accent};
+                color: #FFFFFF;
+                border: 1px solid {accent};
+                font-weight: 700;
+            }}
+            QPushButton#primary:hover {{
+                background-color: {accent_hover};
             }}
         """)
 
@@ -217,34 +239,34 @@ class BrowserMemoManagerDialog(QDialog):
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(12)
 
-        # 상단 안내 바
-        header_frame = QFrame()
-        header_frame.setStyleSheet(f"background-color: {panel}; border: 1px solid {line}; border-radius: 6px; padding: 10px;")
-        h_layout = QHBoxLayout(header_frame)
-        h_layout.setContentsMargins(8, 8, 8, 8)
+        # 상단 안내 영역 (테두리 없는 수평 레이아웃)
+        h_layout = QHBoxLayout()
+        h_layout.setContentsMargins(0, 0, 0, 0)
         h_layout.setSpacing(12)
 
         lbl_desc = QLabel(
-            "<b>🌐 브라우저 페이지 메모 관리소</b><br>"
+            "<b>브라우저 페이지 메모 관리</b><br>"
             "<span style='color: #64748B; font-size: 11px;'>"
             "웹 서핑 중 저장한 페이지 메모를 보관·관리하고, 전용 공유 파일(.json)로 내보내어 동료와 공유하거나 다른 PC로 이전할 수 있습니다."
             "</span>"
         )
         h_layout.addWidget(lbl_desc, 1)
 
-        btn_open_folder = QPushButton("📂 저장 폴더(work/browser) 열기")
-        btn_open_folder.setStyleSheet("font-size: 11px; padding: 4px 10px;")
+        btn_open_folder = QPushButton("저장 폴더 열기")
+        btn_open_folder.setFixedHeight(scale_px(32))
+        btn_open_folder.setToolTip("work/browser 폴더를 탐색기에서 엽니다.")
         btn_open_folder.clicked.connect(self._on_open_browser_dir)
         h_layout.addWidget(btn_open_folder)
 
-        main_layout.addWidget(header_frame)
+        main_layout.addLayout(h_layout)
 
         # 검색 및 요약 바
         bar_layout = QHBoxLayout()
         bar_layout.setSpacing(10)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍 URL, 제목 또는 메모 내용 검색...")
+        self.search_input.setFixedHeight(scale_px(32))
+        self.search_input.setPlaceholderText("URL, 제목 또는 메모 내용 검색...")
         self.search_input.textChanged.connect(self._apply_filter)
         bar_layout.addWidget(self.search_input, 1)
 
@@ -253,6 +275,7 @@ class BrowserMemoManagerDialog(QDialog):
         bar_layout.addWidget(self.count_label)
 
         btn_refresh = QPushButton("새로고침")
+        btn_refresh.setFixedHeight(scale_px(32))
         btn_refresh.setFixedWidth(scale_px(75))
         btn_refresh.clicked.connect(self.reload_memos)
         bar_layout.addWidget(btn_refresh)
@@ -277,37 +300,33 @@ class BrowserMemoManagerDialog(QDialog):
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         main_layout.addWidget(self.table, 1)
 
-        # 하단 액션 버튼들
+        # 하단 액션 버튼들 (적용/취소 버튼 스타일과 일치)
         action_layout = QHBoxLayout()
         action_layout.setSpacing(8)
 
-        # 좌측 액션들: 내보내기/가져오기
-        btn_import = QPushButton("📥 메모 가져오기 (공유 파일 .json)")
-        btn_import.setStyleSheet(f"font-weight: bold; color: {accent};")
+        btn_import = QPushButton("메모 가져오기")
+        btn_import.setFixedHeight(scale_px(32))
+        btn_import.setToolTip("공유 파일(.json)에서 메모를 가져옵니다.")
         btn_import.clicked.connect(self._on_import_memos)
         action_layout.addWidget(btn_import)
 
-        btn_export = QPushButton("📤 메모 내보내기 (공유 파일 .json)")
-        btn_export.setStyleSheet("font-weight: bold;")
+        btn_export = QPushButton("메모 내보내기")
+        btn_export.setFixedHeight(scale_px(32))
+        btn_export.setToolTip("메모를 공유 파일(.json)로 내보냅니다.")
         btn_export.clicked.connect(self._on_export_memos)
         action_layout.addWidget(btn_export)
 
-        action_layout.addSpacing(12)
-
-        btn_delete = QPushButton("🗑️ 선택 삭제")
-        btn_delete.setStyleSheet("color: #DC2626;")
+        btn_delete = QPushButton("선택 삭제")
+        btn_delete.setFixedHeight(scale_px(32))
+        btn_delete.setToolTip("선택한 메모를 삭제합니다.")
         btn_delete.clicked.connect(self._on_delete_selected)
         action_layout.addWidget(btn_delete)
 
         action_layout.addStretch(1)
 
-        btn_guide = QPushButton("💡 크롬 확장프로그램 연동 안내")
-        btn_guide.setStyleSheet("color: #475569; font-size: 11px;")
-        btn_guide.clicked.connect(self._show_extension_guide)
-        action_layout.addWidget(btn_guide)
-
         btn_close = QPushButton("닫기")
-        btn_close.setFixedWidth(scale_px(80))
+        btn_close.setFixedHeight(scale_px(32))
+        btn_close.setMinimumWidth(scale_px(80))
         btn_close.clicked.connect(self.accept)
         action_layout.addWidget(btn_close)
 
@@ -419,7 +438,9 @@ class BrowserMemoManagerDialog(QDialog):
                 self,
                 "내보내기 완료",
                 f"총 {len(export_targets)}건의 브라우저 메모가 성공적으로 내보내졌습니다.\n\n저장 위치:\n{target_path}\n\n"
-                "다른 컴퓨터나 동료에게 이 파일을 전달하여 바로업무 [메모 가져오기]로 쉽게 복원할 수 있습니다.",
+                "• 크롬 브라우저로 다시 옮기는 방법:\n"
+                "  Chrome 우측 상단 확장프로그램 아이콘 클릭 → [메모 관리자] → [가져오기]에서 이 .json 파일을 선택하세요.\n"
+                "  (해당 웹페이지 방문 시 원래 위치에 메모가 그대로 복원됩니다)",
             )
         else:
             QMessageBox.critical(self, "내보내기 실패", "파일을 저장하는 중 오류가 발생했습니다.")

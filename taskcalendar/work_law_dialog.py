@@ -5,7 +5,11 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import os
 import re
+import shutil
+import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
@@ -37,6 +41,42 @@ if TYPE_CHECKING:
     from taskcalendar.qt_main_window import MainWindow
 
 logger = logging.getLogger(__name__)
+
+_KORDOC_MARKDOWN_CACHE: dict[str, str] = {}
+
+
+def _kordoc_markdown(path: str) -> str:
+    """HWPX/XLSX 등 업무 파일을 kordoc으로 마크다운으로 변환한다."""
+    if not path:
+        return ""
+    key = ""
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return ""
+        key = str(p.resolve())
+        if key in _KORDOC_MARKDOWN_CACHE:
+            return _KORDOC_MARKDOWN_CACHE[key]
+        exe = shutil.which("kordoc")
+        if not exe:
+            return ""
+        proc = subprocess.run(
+            [exe, str(p), "--no-images", "--silent"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=25,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            _KORDOC_MARKDOWN_CACHE[key] = proc.stdout.strip()
+            return _KORDOC_MARKDOWN_CACHE[key]
+    except Exception as e:
+        logger.debug("kordoc markdown conversion failed: %s", e)
+    if key:
+        _KORDOC_MARKDOWN_CACHE[key] = ""
+    return ""
 
 
 class LawChipButton(QFrame):
@@ -367,10 +407,12 @@ class LawComparisonDialog(QDialog):
         all_refs: list[LawReference] | None = None,
         on_apply_update: Callable[[Any, str], None] | None = None,
         parent=None,
+        doc_path: str = "",
     ):
         super().__init__(parent)
         self.ref = ref
         self.doc_context = doc_context
+        self.doc_path = doc_path
         self.all_refs = all_refs or [ref]
         self.on_apply_update = on_apply_update
         self._ai_worker: AIChatWorker | None = None
@@ -480,10 +522,10 @@ class LawComparisonDialog(QDialog):
         right_layout.setContentsMargins(4, 0, 0, 0)
         right_layout.setSpacing(6)
 
-        lbl_law_title = QLabel("국가법령정보센터 최신 조문 원문", right_box)
-        lbl_law_title.setFont(make_ui_font_like(9.5, weight=QFont.Weight.Bold.value))
-        lbl_law_title.setStyleSheet("color: #1E293B;")
-        right_layout.addWidget(lbl_law_title)
+        self.lbl_law_title = QLabel("국가법령정보센터 최신 조문 원문", right_box)
+        self.lbl_law_title.setFont(make_ui_font_like(9.5, weight=QFont.Weight.Bold.value))
+        self.lbl_law_title.setStyleSheet("color: #1E293B;")
+        right_layout.addWidget(self.lbl_law_title)
 
         self.txt_law_content = QTextEdit(right_box)
         self.txt_law_content.setFont(make_ui_font_like(9.5))
@@ -715,9 +757,13 @@ class LawComparisonDialog(QDialog):
             ]
             self.lbl_meta_info.setText("  ·  ".join(meta))
 
-        # 1. 좌측 내 문서 내용 표시
+        # 1. 좌측 내 문서 내용 표시 — kordoc 마크다운이 있으면 서식 그대로 렌더링
         doc_display = self.doc_context.strip() if self.doc_context else f"문서 내 언급: 「{ref.raw_matched}」"
-        self.txt_doc_content.setPlainText(doc_display)
+        markdown = _kordoc_markdown(self.doc_path)
+        if markdown:
+            self.txt_doc_content.setMarkdown(markdown)
+        else:
+            self.txt_doc_content.setPlainText(doc_display)
 
         # 2. 우측 법령 조문 내용 로드 (ref에 조문 원문이 비어있으면 즉시 조회하여 보강)
         law_display = ""
@@ -747,10 +793,73 @@ class LawComparisonDialog(QDialog):
             except Exception as ex:
                 logger.debug(f"Failed to fetch law article on demand: {ex}")
 
+        full_law = self._load_full_law(ref)
+        if full_law:
+            if law_display:
+                law_display = f"{law_display}\n\n{'─' * 48}\n[법령 전체 조문]\n\n{full_law}"
+            else:
+                law_display = full_law
+            self.lbl_law_title.setText("법령 원문 (전체 조문)")
+            if not ref.is_revised:
+                self.lbl_meta_info.setText(
+                    f"소관: {ref.office or '미지정'}  ·  "
+                    f"현행 시행일: <b>{ref.latest_enforce_date or ref.enforce_date or '정보없음'}</b>  ·  "
+                    f"구분: {ref.law_kind or '법률'}"
+                )
+
         if not law_display:
             law_display = f"법령명: {ref.official_name or ref.law_name}\n(상세 조문 원문이 본문에 인용되지 않았거나 조문 번호가 지정되지 않았습니다.)"
 
         self.txt_law_content.setPlainText(law_display)
+
+    def _load_full_law(self, ref: LawReference) -> str:
+        """해당 법령의 전체 조문을 조회해 표시용 텍스트로 만든다."""
+        try:
+            from taskcalendar.law_reference import get_law_detail, search_laws
+
+            mst = ref.mst
+            if not mst:
+                results = search_laws(
+                    ref.official_name or ref.law_name,
+                    limit=5,
+                    timeout=8,
+                    include_history=False,
+                )
+                if not results:
+                    results = search_laws(ref.law_name, limit=5, timeout=8, include_history=True)
+                if results:
+                    mst = results[0].mst
+                    ref.mst = mst
+                    if not ref.official_name:
+                        ref.official_name = results[0].name
+            if not mst:
+                return ""
+            detail = get_law_detail(mst)
+            if not detail or not detail.get("articles"):
+                return ""
+            name = detail.get("name") or ref.official_name or ref.law_name
+            enforce = detail.get("enforce_date") or ref.latest_enforce_date or ref.enforce_date or "정보없음"
+            ref.official_name = name
+            ref.latest_enforce_date = detail.get("enforce_date") or ref.latest_enforce_date
+            ref.office = detail.get("office") or ref.office
+            ref.law_kind = ref.law_kind or "법률"
+            lines = [f"{name} (시행 {enforce})", ""]
+            for (article_no, sub_no), art in sorted(
+                detail["articles"].items(), key=lambda x: (x[0][0], x[0][1])
+            ):
+                label = f"제{article_no}조" + (f"의{sub_no}" if sub_no else "")
+                title = str(art.get("title") or "").strip()
+                if title:
+                    label += f"({title})"
+                lines.append(label)
+                text = str(art.get("full_text") or art.get("content") or "").strip()
+                if text:
+                    lines.append(text)
+                lines.append("")
+            return "\n".join(lines).strip()
+        except Exception as ex:
+            logger.debug("Failed to load full law text: %s", ex)
+            return ""
 
     def _start_ai_comparison(self):
         """AI API를 호출하여 문맥 단위 개별 수정안 카드 도출"""
@@ -781,8 +890,9 @@ class LawComparisonDialog(QDialog):
             f"1. [오직 대상 법령만 검토]: 당신은 오직 현재 선택된 대상 법령인 「{self.ref.display_title}」에 대해서만 검토해야 합니다!\n"
             f"2. [타 법령 절대 배제]: 문서 내에 다른 법령(예: 개인정보 보호법, 근로기준법, 지방자치법 등)에 관한 내용이 있더라도, 그것은 현재 검토 대상 법령인 「{self.ref.display_title}」과 무관하므로 일체 무시하고 절대로 지적하거나 수정안에 포함하지 마십시오!\n"
             f"3. [관련 내용 없을 시]: 만약 문서 내에 「{self.ref.display_title}」과 관련된 구체적인 업무 서술(차량 등록, 정비, 검사 등)이 없거나 단순 명칭만 적혀 있다면, 'has_issue': false, 'suggestions': [] 로 응답하고, '문서 내에 「{self.ref.display_title}」과 관련된 구체적인 업무 서술이나 상충되는 내용이 없습니다.'라고만 보고하십시오.\n"
-            f"4. [문맥 단위 수정]: 오직 「{self.ref.display_title}」의 최신 조문과 직접 상충되거나 법리적으로 잘못 서술된 특정 문장만을 target_text로 추출하십시오.\n"
-            "5. [원문 일치 필수]: target_text는 반드시 사용자가 작성한 본문 텍스트 내에 실제로 존재하는 문장/어구여야 합니다 (치환 대상이 됨).\n\n"
+            f"4. [문맥 단위 수정]: 오직 「{self.ref.display_title}」의 최신 조문과 직접 상충되거나 법리적으로 잘못 서술된 특정 문장들을 target_text로 추출하십시오.\n"
+            "5. [원문 일치 필수]: target_text는 반드시 사용자가 작성한 본문 텍스트 내에 실제로 존재하는 문장/어구여야 합니다 (치환 대상이 됨).\n"
+            "6. [복수 상충 문장]: 대상 법령과 상충되는 문장이 여러 개이면 반드시 각각을 별도의 suggestion으로 모두 포함하십시오. 특히 조문 번호·제목 오인, 처분 권한·절차 위반이 2개 이상 있으면 2개 이상을 반환해야 합니다. 첫 번째 오류만 찾고 멈추지 마십시오.\n\n"
             "반드시 아래 JSON 형식으로만 응답하십시오(마크다운 코드블록 없이 순수 JSON):\n"
             "{\n"
             '  "has_issue": true/false,\n'
@@ -801,6 +911,7 @@ class LawComparisonDialog(QDialog):
             f"=== [검토 대상 법령]: {self.ref.display_title} ===\n"
             f"국가법령정보센터 최신 조문 원문:\n{law_text}\n\n"
             f"=== 내 업무 문서 전체 내용 ===\n{doc_text}\n\n"
+            "※ 문서를 문장 단위로 끝까지 검토하여 대상 법령과 상충되는 문장을 빠짐없이 찾고, 2개 이상이면 모두 suggestions에 넣어 주세요.\n"
             f"※ 주의: 문서 내에 다른 법령(예: 개인정보보호법 등) 내용이 있더라도 일체 무시하십시오. 오직 「{self.ref.display_title}」과 직접 관련된 내용만 찾아 상충되는 문장을 검토해 주세요."
         )
 

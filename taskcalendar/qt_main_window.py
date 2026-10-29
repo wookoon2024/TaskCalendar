@@ -1294,6 +1294,10 @@ class MainWindow(QMainWindow):
         app_inst = QApplication.instance()
         if app_inst:
             app_inst.aboutToQuit.connect(self._on_app_about_to_quit)
+            # 윈도우 종료/로그오프 신호 수신 여부 기록 (이 줄 뒤에 quit_save_done 이 없으면 종료 중 강제 종료된 것)
+            app_inst.commitDataRequest.connect(
+                lambda _sm: self.repository.diag_snapshot("windows_session_ending", verify=False)
+            )
         QTimer.singleShot(50, self._prewarm_work_manager)
         if self.repository.get_setting("desktop_widget_enabled", "0") == "1":
             QTimer.singleShot(150, lambda: self._toggle_desktop_widget(True))
@@ -4751,6 +4755,17 @@ class MainWindow(QMainWindow):
         self.sidebar_mode = "day"
         self.refresh()
 
+    def _entry_body_text(self, entry: CalendarEntry) -> str:
+        """일정 본문에서 제목과 중복되는 첫 줄을 제거한 표시용 본문."""
+        text = entry.description or ""
+        if entry.entry_type == EntryType.MEMO or text.strip().startswith("<"):
+            return text
+        lines = text.splitlines()
+        title = (entry.title or "").strip()
+        if title and lines and lines[0].strip() == title:
+            return "\n".join(lines[1:]).lstrip("\n")
+        return text
+
     def _sidebar_card(self, entry: CalendarEntry) -> QWidget:
         is_completed = self._is_entry_completed_on_day(entry, self.selected_day)
         hide_memo_body = (entry.entry_type == EntryType.MEMO and getattr(self, "memo_title_only", True))
@@ -4795,6 +4810,18 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 9, 10, 9)
         layout.setSpacing(6)
 
+        # 일정/업무 카드 상단에 제목을 별도 줄로 표시 (본문 표시 모드에서도 클릭한 항목이 명확히 보이도록)
+        if entry.entry_type != EntryType.MEMO and not hide_cal_body:
+            title_label = ClickableLabel(entry.title or "")
+            title_label.setWordWrap(True)
+            title_label.setToolTip(entry.title or "")
+            title_label.setStyleSheet(
+                f"color: {self.palette['text']}; font-size: 13px; font-weight: 600; "
+                "background: transparent; border: none;"
+            )
+            title_label.clicked.connect(lambda e=entry: self._open_entry_view(e))
+            layout.addWidget(title_label)
+
         lead = f"⭐ [{entry.start_time}]" if entry.start_time else ("[종일]" if entry.all_day else "")
         details: list[str] = []
         if entry.start_time:
@@ -4815,6 +4842,14 @@ class MainWindow(QMainWindow):
         meta_layout = QHBoxLayout(meta_row)
         meta_layout.setContentsMargins(0, 0, 0, 0)
         meta_layout.setSpacing(4)
+        # 달력 칩과 같은 배경색을 카드에서도 확인할 수 있도록 색상 표시
+        if entry.entry_type != EntryType.MEMO and str(entry.bg_color).startswith("#"):
+            color_dot = QLabel()
+            color_dot.setFixedSize(10, 10)
+            color_dot.setStyleSheet(
+                f"background: {entry.bg_color}; border: 1px solid {self.palette.get('line', '#cbd5e1')}; border-radius: 5px;"
+            )
+            meta_layout.addWidget(color_dot, 0, Qt.AlignmentFlag.AlignVCenter)
         if entry.entry_type == EntryType.MEMO:
             left_col = QWidget()
             left_col.setStyleSheet("background: transparent; border: none;")
@@ -4823,6 +4858,40 @@ class MainWindow(QMainWindow):
             left_col_layout.setSpacing(6)
             left_col_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
+            # 바탕화면 플로팅(열림) 상태 확인
+            is_floating = False
+            dlg = None
+            if entry.entry_id is not None:
+                dlg = self._active_memo_dialogs.get(int(entry.entry_id))
+                if dlg is not None and dlg.isVisible():
+                    is_floating = True
+
+            # 플로팅 상태 인디케이터 버튼 (클릭 시 플로팅 토글)
+            status_btn = QToolButton()
+            status_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            status_dot = "●" if is_floating else "○"
+            dot_color = "#16a34a" if is_floating else "#94a3b8"
+            tip_text = "바탕화면에 플로팅 중 (클릭하면 닫힙니다)" if is_floating else "바탕화면에서 닫힘 (클릭하면 플로팅됩니다)"
+            status_btn.setText(status_dot)
+            status_btn.setToolTip(tip_text)
+            status_btn.setStyleSheet(f"""
+                QToolButton {{
+                    color: {dot_color};
+                    font-size: 11px;
+                    font-weight: bold;
+                    background: transparent;
+                    border: none;
+                    padding: 0px;
+                    margin: 0px;
+                }}
+                QToolButton:hover {{
+                    color: {'#15803d' if is_floating else '#64748b'};
+                }}
+            """)
+            status_btn.setFixedSize(16, 16)
+            status_btn.clicked.connect(lambda _chk=False, e=entry: self._toggle_memo_floating(e))
+            left_col_layout.addWidget(status_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
             left_text = (entry.title or "메모").strip()
             left_label = ElidedLabel(left_text)
             left_label.setStyleSheet(f"color: {self.palette['text']}; font-size: 13px; background: transparent; border: none;")
@@ -4830,6 +4899,20 @@ class MainWindow(QMainWindow):
             left_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             left_label.setMinimumWidth(0)
             left_col_layout.addWidget(left_label, 1)
+
+            # 플로팅 중일 때 명확한 배지 표시
+            if is_floating:
+                is_pinned = getattr(dlg, "_is_floating", False) or (entry.icon_type == "floating")
+                badge_text = "📌 플로팅" if is_pinned else "플로팅"
+                floating_badge = QLabel(badge_text)
+                floating_badge.setStyleSheet(
+                    "background: #dcfce7; color: #15803d; border: 1px solid #86efac; "
+                    "border-radius: 4px; padding: 1px 5px; font-size: 10px; font-weight: bold;"
+                )
+                floating_badge.setToolTip("바탕화면에 플로팅되어 표시 중입니다 (클릭 시 닫기)")
+                floating_badge.setCursor(Qt.CursorShape.PointingHandCursor)
+                floating_badge.mousePressEvent = lambda ev, e=entry: self._toggle_memo_floating(e) if ev.button() == Qt.LeftButton else None
+                left_col_layout.addWidget(floating_badge, 0, Qt.AlignmentFlag.AlignVCenter)
 
             reg_date_str = ""
             if entry.created_at:
@@ -4936,15 +5019,18 @@ class MainWindow(QMainWindow):
         layout.addWidget(meta_row)
 
         if entry.description and not hide_body:
+            body_text = self._entry_body_text(entry)
+            if not body_text.strip():
+                body_text = entry.description
             desc = ClickableTextEdit()
             desc.setReadOnly(True)
-            if entry.description.strip().startswith("<"):
-                desc.setHtml(entry.description)
+            if body_text.strip().startswith("<"):
+                desc.setHtml(body_text)
                 target_h = 190
             else:
-                desc.setPlainText(entry.description)
+                desc.setPlainText(body_text)
                 line_h = max(14, desc.fontMetrics().lineSpacing())
-                line_count = max(1, entry.description.count("\n") + 1)
+                line_count = max(1, body_text.count("\n") + 1)
                 target_h = min(190, line_h * line_count + 16)
             desc.setLineWrapMode(QTextEdit.WidgetWidth)
             desc.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -5232,6 +5318,17 @@ class MainWindow(QMainWindow):
         dlg = self._active_memo_dialogs.get(int(entry.entry_id))
         if dlg is not None:
             dlg.close()
+
+    def _toggle_memo_floating(self, entry: CalendarEntry) -> None:
+        if not entry or entry.entry_id is None:
+            return
+        key = int(entry.entry_id)
+        dlg = self._active_memo_dialogs.get(key)
+        if dlg is not None and dlg.isVisible():
+            dlg.close()
+        else:
+            self._edit_entry(EntryType.MEMO, entry)
+        self._debounced_render_sidebar(50)
 
     def _open_all_memos(self) -> None:
         memos = self._ordered_memos(self.repository.list_memos())
@@ -6885,6 +6982,7 @@ class MainWindow(QMainWindow):
                             existing_dlg.raise_()
                             if not getattr(self, "_batch_updating_memos", False):
                                 existing_dlg.activateWindow()
+                                self._debounced_render_sidebar(50)
                             self._last_active_memo_dlg = existing_dlg
                             if force_top:
                                 from taskcalendar.desktop_services import force_window_to_foreground
@@ -6909,6 +7007,7 @@ class MainWindow(QMainWindow):
                 if not getattr(self, "_batch_updating_memos", False):
                     self._sync_open_memo_ids(persist=True)
                     self._refresh_all_group_dialogs(status_only=True)
+                    self._debounced_render_sidebar(50)
                 return
             logger.info(f"[_edit_entry] Creating modal EntryDialog for schedule/task: {edit_entry.entry_id if edit_entry else 'new'}")
             dialog = EntryDialog(self, entry_type, self.selected_day, edit_entry)
@@ -6935,10 +7034,7 @@ class MainWindow(QMainWindow):
         try:
             logger.info(f"[_open_entry_view CALLED] entry_id={entry.entry_id}, type={entry.entry_type}, title={entry.title}")
             view_entry = entry
-            if entry.source_entry_id and entry.source_entry_id != entry.entry_id:
-                source = self.repository.get_entry(entry.source_entry_id)
-                if source is not None:
-                    view_entry = source
+            # 반복 일정의 발생일은 클릭한 날짜 그대로 보여주고, 수정 시에는 _edit_entry가 원본(시리즈)으로 연결한다.
             if view_entry.entry_type == EntryType.MEMO:
                 self._edit_entry(EntryType.MEMO, view_entry)
                 return
@@ -7564,8 +7660,13 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
             self._flush_repository_save()
+            # 종료 시 마지막 저장이 디스크에 정상 기록됐는지 다시 읽어 확인(유실 원인 추적용)
+            self.repository.diag_snapshot("quit_save_done", verify=True)
         except Exception:
-            pass
+            try:
+                self.repository.diag_snapshot("quit_save_exception", verify=False)
+            except Exception:
+                pass
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if getattr(self, "_already_handled_quit", False) or getattr(self, "_is_app_quitting", False):
