@@ -9882,15 +9882,22 @@ class WelcomeFeatureIntroDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 14)
         layout.setSpacing(10)
 
+        # 앱 화면과 같은 평면 머리글 (제목 + 연한 설명 + 아래 구분선)
+        p = self.palette
         header = QFrame()
-        header.setObjectName("headerBox")
+        header.setObjectName("introHeader")
+        header.setStyleSheet(
+            f"QFrame#introHeader {{ background: transparent; border: none;"
+            f" border-bottom: 1px solid {p.get('line', '#CBD5E1')}; }}"
+        )
         h_layout = QVBoxLayout(header)
-        h_layout.setContentsMargins(12, 10, 12, 10)
+        h_layout.setContentsMargins(2, 0, 2, 10)
         h_layout.setSpacing(4)
         h_title = QLabel("바로업무 기능 안내 & 팁")
-        h_title.setObjectName("headerTitle")
+        h_title.setFont(make_ui_font_like(12, bold=True))
+        h_title.setStyleSheet(f"color: {p.get('text', '#1E293B')}; background: transparent; border: none;")
         h_sub = QLabel("5가지 기능을 차례대로 살펴보세요. 좌측 목록이나 [이전] [다음]으로 이동할 수 있습니다.")
-        h_sub.setObjectName("headerSubtitle")
+        h_sub.setStyleSheet(f"color: {p.get('muted', '#64748B')}; font-size: 12px; background: transparent; border: none;")
         h_layout.addWidget(h_title)
         h_layout.addWidget(h_sub)
         layout.addWidget(header)
@@ -9915,14 +9922,14 @@ class WelcomeFeatureIntroDialog(QDialog):
             f"  border: 1px solid {self.palette.get('line', '#CBD5E1')};"
             f"  border-radius: 6px; padding: 4px;"
             f"}}"
-            f"QListWidget::item {{ border-radius: 4px; margin: 1px 0; }}"
+            f"QListWidget::item {{ border-radius: 4px; margin: 1px 0; padding-left: 6px; }}"
             f"QListWidget::item:selected {{"
-            f"  background-color: {self.palette.get('accent', '#2563EB')}22;"
+            f"  background-color: {self.palette.get('accent_soft', self.palette.get('accent', '#2563EB') + '22')};"
             f"}}"
         )
         self.list_menu.currentRowChanged.connect(self._on_page_selected)
         for name, _brief, _detail in self.PAGES:
-            self.list_menu.addItem(name)
+            self.list_menu.addItem(self._plain_name(name))
         body.addWidget(self.list_menu)
 
         detail_panel = QWidget(self)
@@ -9931,7 +9938,8 @@ class WelcomeFeatureIntroDialog(QDialog):
         detail_layout.setSpacing(10)
 
         self.lbl_page_title = QLabel(self)
-        self.lbl_page_title.setObjectName("itemTitle")
+        self.lbl_page_title.setFont(make_ui_font_like(11, bold=True))
+        self.lbl_page_title.setStyleSheet(f"color: {p.get('text', '#1E293B')}; background: transparent; border: none;")
         detail_layout.addWidget(self.lbl_page_title)
 
         self.lbl_page_brief = QLabel(self)
@@ -9960,7 +9968,7 @@ class WelcomeFeatureIntroDialog(QDialog):
             f"  background-color: {self.palette.get('panel', '#FFFFFF')};"
             f"  color: {self.palette.get('text', '#1E293B')};"
             f"  border: 1px solid {self.palette.get('line', '#CBD5E1')};"
-            f"  border-radius: 8px;"
+            f"  border-radius: 6px;"
             f"  padding: 14px 16px;"
             f"  line-height: 170%;"
             f"}}"
@@ -9985,18 +9993,23 @@ class WelcomeFeatureIntroDialog(QDialog):
         footer.addWidget(self.lbl_page_indicator)
         footer.addStretch(1)
 
+        from taskcalendar.ui_common import style_button
+
         self.btn_prev = QPushButton("이전", self)
-        self.btn_prev.setObjectName("secondaryBtn")
+        style_button(self.btn_prev, p, "secondary", "M")
+        self.btn_prev.setMinimumWidth(72)
         self.btn_prev.clicked.connect(self._on_prev_page)
         footer.addWidget(self.btn_prev)
 
         self.btn_next = QPushButton("다음", self)
-        self.btn_next.setObjectName("secondaryBtn")
+        style_button(self.btn_next, p, "secondary", "M")
+        self.btn_next.setMinimumWidth(72)
         self.btn_next.clicked.connect(self._on_next_page)
         footer.addWidget(self.btn_next)
 
         confirm_btn = QPushButton("시작", self)
-        confirm_btn.setObjectName("primaryBtn")
+        style_button(confirm_btn, p, "primary", "M")
+        confirm_btn.setMinimumWidth(72)
         confirm_btn.clicked.connect(self.accept)
         footer.addWidget(confirm_btn)
 
@@ -10010,7 +10023,7 @@ class WelcomeFeatureIntroDialog(QDialog):
         self._page_index = max(0, min(index, total - 1))
         name, brief, detail = self.PAGES[self._page_index]
 
-        self.lbl_page_title.setText(name)
+        self.lbl_page_title.setText(self._plain_name(name))
         self.lbl_page_brief.setText(brief)
         # RichText 모드에서는 '\n' 이 줄바꿈으로 인식되지 않으므로 <br> 로 변환
         self.lbl_page_detail.setText(detail.replace("\n", "<br>"))
@@ -10022,6 +10035,12 @@ class WelcomeFeatureIntroDialog(QDialog):
         self.btn_prev.setEnabled(self._page_index > 0)
         self.btn_next.setEnabled(self._page_index < total - 1)
         self.scroll.verticalScrollBar().setValue(0)
+
+    @staticmethod
+    def _plain_name(name: str) -> str:
+        """'📅 일정 관리' → '일정 관리' (앱 다른 화면처럼 이모지 없이 표시)"""
+        head, _, rest = name.partition(" ")
+        return rest if rest and not head.isalnum() else name
 
     def _on_page_selected(self, row: int) -> None:
         if 0 <= row < len(self.PAGES) and row != self._page_index:

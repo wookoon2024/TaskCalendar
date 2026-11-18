@@ -114,6 +114,10 @@ class WindowSwitcherBar(QFrame):
             self.tab_buttons[name] = btn
 
         layout.addStretch(1)
+        self._leading_layout = QHBoxLayout()
+        self._leading_layout.setContentsMargins(0, 0, 6, 0)
+        self._leading_layout.setSpacing(6)
+        layout.addLayout(self._leading_layout)
         self._actions_layout = QHBoxLayout()
         self._actions_layout.setContentsMargins(0, 0, 0, 0)
         self._actions_layout.setSpacing(6)
@@ -157,6 +161,11 @@ class WindowSwitcherBar(QFrame):
         for button, page in self._action_pages.items():
             button.setVisible(page is None or page == name)
         self.apply_palette(self._palette)
+
+    def add_leading(self, widget: QWidget) -> QWidget:
+        """오른쪽 버튼 묶음의 맨 앞(창별 버튼보다 왼쪽)에 붙인다 (스타일은 그대로 둠)."""
+        self._leading_layout.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
+        return widget
 
     def add_trailing(self, widget: QWidget) -> QWidget:
         """[설정] 뒤 맨 오른쪽에 작은 아이콘 버튼 등을 붙인다 (스타일은 그대로 둠)."""

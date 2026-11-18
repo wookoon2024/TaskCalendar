@@ -1737,6 +1737,12 @@ class MainWindow(QMainWindow):
         right = QHBoxLayout()
         right.setSpacing(6)
 
+        # 투명도와 고정(핀)은 맨 위 띠 오른쪽 묶음의 맨 앞에 둔다.
+        self._opacity_controls = QWidget()
+        op_layout = QHBoxLayout(self._opacity_controls)
+        op_layout.setContentsMargins(0, 0, 0, 0)
+        op_layout.setSpacing(6)
+
         self._window_controls = QWidget()
         wc_layout = QHBoxLayout(self._window_controls)
         wc_layout.setContentsMargins(0, 0, 28, 0)
@@ -1744,7 +1750,7 @@ class MainWindow(QMainWindow):
 
         self._opacity_label = QLabel("투명도")
         self._opacity_label.setObjectName("topbarMuted")
-        wc_layout.addWidget(self._opacity_label)
+        op_layout.addWidget(self._opacity_label)
 
         self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._opacity_slider.setObjectName("topbarSlider")
@@ -1753,19 +1759,19 @@ class MainWindow(QMainWindow):
         self._opacity_slider.setValue(int(self._window_opacity_pct))
         self._opacity_slider.setToolTip("창 투명도 조절")
         self._opacity_slider.valueChanged.connect(self._on_window_opacity_changed)
-        wc_layout.addWidget(self._opacity_slider)
+        op_layout.addWidget(self._opacity_slider)
 
         self._opacity_val_label = QLabel(f"{int(self._window_opacity_pct)}%")
         self._opacity_val_label.setObjectName("topbarMuted")
         self._opacity_val_label.setFixedWidth(32)
-        wc_layout.addWidget(self._opacity_val_label)
+        op_layout.addWidget(self._opacity_val_label)
 
         self._pin_btn = self._top_button("", 28)
         self._pin_btn.setCheckable(True)
         self._pin_btn.setChecked(bool(self._always_on_top))
         self._pin_btn.setIconSize(QSize(14, 14))
         self._pin_btn.clicked.connect(self._on_pin_toggled)
-        wc_layout.addWidget(self._pin_btn)
+        op_layout.addWidget(self._pin_btn)  # 고정(핀)은 투명도 바로 오른쪽
 
 
         self.topbar_actions_container = QWidget()
@@ -1834,6 +1840,7 @@ class MainWindow(QMainWindow):
         )
         self.memo_group_band_button.clicked.connect(self._add_memo_group_from_board)
         self.window_switcher.add_action(self.memo_group_band_button, "secondary", "memo")
+        self.window_switcher.add_leading(self._opacity_controls)
         self.window_switcher.add_trailing(self._window_controls)
         self.topbar = self.window_switcher
 
@@ -1905,8 +1912,17 @@ class MainWindow(QMainWindow):
         calendar_layout.setContentsMargins(12, 12, 12, 12)
         calendar_layout.setSpacing(8)
 
+        # 연·월 이동은 가운데, 검색·[일정 추가]는 오른쪽. 좌우 칸 폭을 같게 해 가운데를 맞춘다.
+        header_grid = QGridLayout()
+        header_grid.setContentsMargins(0, 0, 0, 0)
+        header_grid.setHorizontalSpacing(8)
+        header_left = QHBoxLayout()
+        header_left.setSpacing(8)
+        nav = QHBoxLayout()
+        nav.setSpacing(8)
         header = QHBoxLayout()
         header.setSpacing(8)
+        header.addStretch(1)
         title_box = QVBoxLayout()
         title_box.setContentsMargins(0, 0, 0, 0)
         title_box.setSpacing(2)
@@ -1914,14 +1930,14 @@ class MainWindow(QMainWindow):
         self.calendar_title.setObjectName("title")
         self.calendar_title.hide()  # 연·월은 아래 제목 버튼으로 표시 (누르면 연·월 선택)
         title_box.addWidget(self.calendar_title)
-        header.addLayout(title_box)
-        header.addWidget(self.prev_button)
-        header.addWidget(self.year_button)
-        header.addWidget(self.month_button)
-        header.addWidget(self.next_button)
-        header.addSpacing(4)
-        header.addWidget(self.today_button)
-        header.addStretch(1)
+        header_left.addLayout(title_box)
+        header_left.addStretch(1)
+        nav.addWidget(self.prev_button)
+        nav.addWidget(self.year_button)
+        nav.addWidget(self.month_button)
+        nav.addWidget(self.next_button)
+        nav.addSpacing(4)
+        nav.addWidget(self.today_button)
         search_wrap = QHBoxLayout()
         search_wrap.setContentsMargins(0, 0, 0, 0)
         search_wrap.setSpacing(6)
@@ -1963,7 +1979,12 @@ class MainWindow(QMainWindow):
         for _w in (self.prev_button, self.next_button, self.today_button, self.search_input, self.search_button,
                    self.header_add_button, self.decorate_done_button, self.decorate_cancel_button):
             _w.setFixedHeight(30)
-        calendar_layout.addLayout(header)
+        header_grid.addLayout(header_left, 0, 0)
+        header_grid.addLayout(nav, 0, 1)
+        header_grid.addLayout(header, 0, 2)
+        header_grid.setColumnStretch(0, 1)
+        header_grid.setColumnStretch(2, 1)
+        calendar_layout.addLayout(header_grid)
 
         # 꾸미기 패널: 달력 위에 떠 있는 카드. 머리(끌기·제목·취소·완료) / 스티커 격자 / 선택한 스티커 조절
         self.sticker_toolbar = DraggableFrame()
@@ -2421,6 +2442,8 @@ class MainWindow(QMainWindow):
         self._window_controls_visible = bool(visible)
         if hasattr(self, "_window_controls"):
             self._window_controls.setVisible(self._window_controls_visible)
+            if hasattr(self, "_opacity_controls"):
+                self._opacity_controls.setVisible(self._window_controls_visible)
         if save:
             try:
                 self.repository.set_setting("topbar_window_controls", "1" if self._window_controls_visible else "0")
@@ -2441,6 +2464,8 @@ class MainWindow(QMainWindow):
         self._update_pin_btn()
         if hasattr(self, "_window_controls"):
             self._window_controls.setVisible(bool(getattr(self, "_window_controls_visible", True)))
+        if hasattr(self, "_opacity_controls"):
+            self._opacity_controls.setVisible(bool(getattr(self, "_window_controls_visible", True)))
 
     def _setup_tray_icon(self) -> None:
         if not QSystemTrayIcon.isSystemTrayAvailable():
@@ -7519,6 +7544,15 @@ class MainWindow(QMainWindow):
             self._edit_entry(EntryType.SCHEDULE, new_entry)
 
     def _open_settings(self, initial_tab: str = "general") -> None:
+        # 환경설정은 캘린더 창에만 모달이라 업무/문서 화면의 [설정]은 계속 눌린다.
+        # 이미 열려 있으면 새로 띄우지 않고 기존 창을 앞으로 가져온다.
+        open_dialog = getattr(self, "_settings_dialog", None)
+        if open_dialog is not None:
+            open_dialog.raise_()
+            open_dialog.activateWindow()
+            return
+        if not isinstance(initial_tab, str):
+            initial_tab = "general"  # clicked(bool) 시그널로 호출된 경우
         from taskcalendar.qt_task_manager import get_task_statuses, get_calendar_task_statuses
         available_statuses = get_task_statuses(self.repository)
         current_cal_task_statuses = get_calendar_task_statuses(self.repository)
@@ -7568,7 +7602,12 @@ class MainWindow(QMainWindow):
             desktop_widget_locked=self.repository.get_setting("desktop_widget_locked", "0") == "1",
             desktop_widget_opacity=int(self.repository.get_setting("desktop_widget_opacity", "85")),
         )
-        if dialog.exec() and dialog.result is not None:
+        self._settings_dialog = dialog
+        try:
+            accepted = dialog.exec()
+        finally:
+            self._settings_dialog = None
+        if accepted and dialog.result is not None:
             action = str(dialog.result.get("action", "apply"))
             if action == "export_data":
                 self._export_data_flow()

@@ -278,7 +278,6 @@ class CompactCategoryItemDelegate(QStyledItemDelegate):
         pal = getattr(wm, "palette", {}) if wm else {}
         is_dark = bool(pal.get("bg", "").lower() in ("#0a0c10", "#171b22") or pal.get("text", "").lower() == "#f3f6fb")
 
-        weight = "bold" if is_parent else "normal"
         if is_sel:
             color = pal.get("accent", "#38BDF8") if is_dark else pal.get("accent", "#0284C7")
         elif is_hover:
@@ -291,10 +290,13 @@ class CompactCategoryItemDelegate(QStyledItemDelegate):
             # 확장자 열: 우측 정렬 + 작고 연한 글씨
             ext_color = pal.get("muted", "#94A3B8")
             self._lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
-            self._lbl.setStyleSheet(f"font-weight: normal; font-size: 10px; color: {ext_color}; border: none; background: transparent;")
+            self._lbl.setFont(make_ui_font_like(8.5))
+            self._lbl.setStyleSheet(f"color: {ext_color}; border: none; background: transparent;")
         else:
+            # 문서 목록 표(행 글꼴 10pt)와 같은 크기로 맞춘다
             self._lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-            self._lbl.setStyleSheet(f"font-weight: {weight}; font-size: 12px; color: {color}; border: none; background: transparent;")
+            self._lbl.setFont(make_ui_font_like(10, bold=is_parent))
+            self._lbl.setStyleSheet(f"color: {color}; border: none; background: transparent;")
 
         r = opt.rect.adjusted(2, 0, -2, 0)
         self._lbl.resize(r.width(), r.height())
@@ -5393,6 +5395,10 @@ class WorkSheetTabBar(QTabBar):
     - 닫기(X) 버튼과 텍스트가 겹치지 않도록 충분한 우측 여백 확보
     """
 
+    # 탭이 추가/제거될 때마다 호출 (탭 줄 표시/숨김 동기화용).
+    # blockSignals() 중에도 동작해야 하므로 시그널 대신 콜백을 쓴다.
+    on_tab_count_changed = None
+
     def tabSizeHint(self, index: int) -> QSize:
         text = self.tabText(index)
         fm = self.fontMetrics()
@@ -5404,6 +5410,13 @@ class WorkSheetTabBar(QTabBar):
     def tabInserted(self, index: int) -> None:
         super().tabInserted(index)
         self.alignCloseButtons()
+        if self.on_tab_count_changed:
+            self.on_tab_count_changed()
+
+    def tabRemoved(self, index: int) -> None:
+        super().tabRemoved(index)
+        if self.on_tab_count_changed:
+            self.on_tab_count_changed()
 
     def tabLayoutChange(self) -> None:
         super().tabLayoutChange()
@@ -5849,15 +5862,16 @@ class WorkManagerDialog(QDialog):
         self.bottom_bar = QFrame()
         self.bottom_bar.setObjectName("tabBarContainer")
         self.bottom_bar.setFixedHeight(44)
-        self.bottom_bar.setStyleSheet("""
-            QFrame#tabBarContainer {
+        self.bottom_bar.setStyleSheet(f"""
+            QFrame#tabBarContainer {{
                 background-color: transparent;
                 border: none;
+                border-bottom: 1px solid {line};
                 padding: 0px 4px;
-            }
+            }}
         """)
         bottom_layout = QHBoxLayout(self.bottom_bar)
-        bottom_layout.setContentsMargins(8, 4, 8, 4)
+        bottom_layout.setContentsMargins(8, 4, 8, 0)
         bottom_layout.setSpacing(6)
 
         self.sheet_tab_bar = WorkSheetTabBar()
@@ -5883,7 +5897,7 @@ class WorkManagerDialog(QDialog):
                 padding: 0px 4px 0px 10px;
                 margin-top: 4px;
                 margin-right: 3px;
-                font-size: 12px;
+                font-size: 13px;
                 min-width: 90px;
                 max-width: 360px;
                 height: 27px;
@@ -5930,6 +5944,7 @@ class WorkManagerDialog(QDialog):
         self.sheet_tab_bar.currentChanged.connect(self._on_sheet_tab_changed)
         self.sheet_tab_bar.tabCloseRequested.connect(self._on_sheet_tab_close)
         self.sheet_tab_bar.tabBarDoubleClicked.connect(self._on_sheet_tab_double_clicked)
+        self.sheet_tab_bar.on_tab_count_changed = self._sync_bottom_bar_visibility
         self.sheet_tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.sheet_tab_bar.customContextMenuRequested.connect(self._on_tab_context_menu)
         bottom_layout.addWidget(self.sheet_tab_bar, 0, alignment=Qt.AlignmentFlag.AlignBottom)
@@ -14917,12 +14932,13 @@ class WorkManagerDialog(QDialog):
         self._apply_tooltip_palette()
 
         if hasattr(self, "bottom_bar") and self.bottom_bar:
-            self.bottom_bar.setStyleSheet("""
-                QFrame {
+            self.bottom_bar.setStyleSheet(f"""
+                QFrame#tabBarContainer {{
                     background-color: transparent;
                     border: none;
+                    border-bottom: 1px solid {line};
                     padding: 0px 4px;
-                }
+                }}
             """)
 
         if hasattr(self, "sheet_tab_bar") and self.sheet_tab_bar:
@@ -14943,7 +14959,7 @@ class WorkManagerDialog(QDialog):
                     padding: 0px 4px 0px 10px;
                     margin-top: 4px;
                     margin-right: 3px;
-                    font-size: 12px;
+                    font-size: 13px;
                     min-width: 90px;
                     max-width: 360px;
                     height: 27px;
