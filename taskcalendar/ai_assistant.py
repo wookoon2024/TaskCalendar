@@ -334,7 +334,7 @@ class AIChatWorker(QThread):
                     err_body = e.response.content.decode("utf-8", errors="replace")[:300]
                 except Exception:
                     err_body = e.response.text[:300]
-            self.error.emit(f"AI 서버 응답 오류 (HTTP {e.response.status_code if e.response else 'N/A'}):\n{err_body}")
+            self.error.emit(f"AI 서버 응답 오류 (HTTP {e.response.status_code if e.response is not None else 'N/A'}):\n{err_body}")
         except requests.exceptions.SSLError as e:
             self.error.emit(f"SSL 보안 인증서 검증 실패:\n{e}\n\n(기관 전용 사설 인증서 또는 행정망 환경인 경우 AI 설정에서 '표준 SSL 보안 인증서 검증 활성화' 체크를 해제해 주세요.)")
         except requests.exceptions.Timeout:

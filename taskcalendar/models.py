@@ -60,6 +60,11 @@ class CalendarEntry:
     source_entry_id: int | None = None
     linked_work_id: int | None = None
     linked_work_type: str = ""
+    # 접수 문서의 회신기한 (문서=TASK 항목에만 사용)
+    reply_due: date | None = None
+    reply_time: str = ""
+    # 회신 일정(SCHEDULE)이 가리키는 접수 문서의 id
+    linked_doc_id: int | None = None
 
 
 @dataclass(slots=True)

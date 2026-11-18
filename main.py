@@ -5,10 +5,11 @@ from taskcalendar.app import run
 def _ensure_assets() -> None:
     if not getattr(sys, "frozen", False):
         try:
-            from restore import restore_app_icon, restore_rhwp_wasm, restore_chrome_extension_zip
+            from restore import restore_app_icon, restore_rhwp_wasm, restore_chrome_extension_zip, restore_sticker_v2
             restore_app_icon()
             restore_rhwp_wasm()
             restore_chrome_extension_zip()
+            restore_sticker_v2()
         except Exception:
             pass
 

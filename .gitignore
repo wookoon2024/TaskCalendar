@@ -91,5 +91,8 @@ generate_demo_video.py
 # Exception for competition submissions
 !공모전_제출자료_261020/**
 
+# 시연 녹화용 크롬 프로필 (로그인 정보 포함)
+demo_video/chrome_profile/
+
 # Executables: GitHub keeps source only (exe is distributed via GitLab / build)
 *.exe

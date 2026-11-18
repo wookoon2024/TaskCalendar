@@ -84,6 +84,7 @@ def _parse_query_params_to_entry_data(action: str, query_string: str) -> dict:
         "desc": unquote(params.get("desc", [""])[0]),
         "url": unquote(params.get("url", [""])[0]),
         "date": params.get("date", [""])[0],
+        "deadline": params.get("deadline", [""])[0],
         "all_day": params.get("all_day", ["1"])[0],
     }
 
@@ -262,7 +263,7 @@ def run() -> None:
     if not icon.isNull():
         app.setWindowIcon(icon)
 
-    from taskcalendar.migration import migrate_to_data_root
+    from taskcalendar.migration import cleanup_database_paths, migrate_to_data_root
     from taskcalendar.paths import db_path, runtime_root
 
     # 기존 데이터 구조가 있다면 새 data/ 계층 구조로 안전하게 1회 자동 마이그레이션
@@ -274,6 +275,7 @@ def run() -> None:
     target_db = db_path()
     target_db.parent.mkdir(parents=True, exist_ok=True)
     repository = EncryptedRepository(target_db)
+    cleanup_database_paths(repository)
 
     if not repository.get_setting("toggle_shortcut"):
         repository.set_setting("toggle_shortcut", default_shortcut())
@@ -305,6 +307,14 @@ def run() -> None:
     register_protocol_handler()
     if repository.get_setting("work_enable_context_menu", "0") == "1":
         register_explorer_context_menus()
+
+    # 예전 실행 파일(바로업무.exe)이 같은 폴더에 남아 있으면 실행되지 않게 이름을 바꾸고, 바로가기를 이 exe 로 바꾼다
+    try:
+        from taskcalendar.legacy_exe import retire_legacy_exe_in_background
+
+        retire_legacy_exe_in_background()
+    except Exception:
+        logger.exception("legacy exe cleanup could not start")
 
     # Process URL data if this is the first instance launched with a protocol URL
     if url_data:

@@ -135,7 +135,7 @@
       titleEl.style.fontWeight = '700';
       titleEl.style.fontSize = '12px';
       titleEl.style.marginBottom = '3px';
-      titleEl.style.color = '#1E293B';
+      titleEl.style.color = '#312921';
       left.appendChild(titleEl);
     }
 

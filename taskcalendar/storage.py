@@ -395,6 +395,19 @@ def _update_daily_code_summary(summary_path: Path, codes: list[int]) -> None:
         summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _write_durable(path: Path, data: bytes) -> None:
+    """파일을 쓰고 디스크까지 기록(fsync)한다.
+    write_bytes() 만으로는 윈도우 캐시에 머물러, 비정상 종료 시 크기만 남고 내용이 0인 파일이 될 수 있다."""
+    with open(path, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+EXIT_BACKUP_PREFIX = "exit_"
+_EXIT_BACKUP_KEEP = 10
+
+
 def _leftover_mei_count() -> int:
     try:
         return sum(1 for _ in Path(os.environ.get("TEMP", "")).glob("_MEI*"))
@@ -614,6 +627,9 @@ class EncryptedRepository:
                 memo_group TEXT NOT NULL DEFAULT '',
                 linked_work_id INTEGER DEFAULT NULL,
                 linked_work_type TEXT NOT NULL DEFAULT '',
+                reply_due TEXT DEFAULT NULL,
+                reply_time TEXT NOT NULL DEFAULT '',
+                linked_doc_id INTEGER DEFAULT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -746,6 +762,9 @@ class EncryptedRepository:
             "memo_group": "ALTER TABLE entries ADD COLUMN memo_group TEXT NOT NULL DEFAULT ''",
             "linked_work_id": "ALTER TABLE entries ADD COLUMN linked_work_id INTEGER DEFAULT NULL",
             "linked_work_type": "ALTER TABLE entries ADD COLUMN linked_work_type TEXT NOT NULL DEFAULT ''",
+            "reply_due": "ALTER TABLE entries ADD COLUMN reply_due TEXT DEFAULT NULL",
+            "reply_time": "ALTER TABLE entries ADD COLUMN reply_time TEXT NOT NULL DEFAULT ''",
+            "linked_doc_id": "ALTER TABLE entries ADD COLUMN linked_doc_id INTEGER DEFAULT NULL",
         }
         for name, sql in additions.items():
             if name not in existing:
@@ -877,7 +896,9 @@ class EncryptedRepository:
             backup_dir = self.db_path.parent / "backups"
             if backup_dir.is_dir():
                 backup_files = sorted(
-                    list(backup_dir.glob("*.sqlite.bak")) + list(backup_dir.glob("taskcalendar_backup_*.db.enc")),
+                    list(backup_dir.glob("*.sqlite.bak"))
+                    + list(backup_dir.glob("taskcalendar_backup_*.db.enc"))
+                    + list(backup_dir.glob(f"{EXIT_BACKUP_PREFIX}*.db.enc")),
                     key=lambda p: p.stat().st_mtime,
                     reverse=True,
                 )
@@ -910,7 +931,8 @@ class EncryptedRepository:
                             companion_json = b_file.with_name(
                                 b_file.name.replace(".db.enc", ".settings.json").replace(".sqlite.bak", ".settings.json")
                             )
-                            if not companion_json.exists():
+                            # 종료 시 백업은 DB 안에 최신 설정이 들어 있으므로 예전 settings_latest.json 으로 덮지 않는다.
+                            if not companion_json.exists() and not b_file.name.startswith(EXIT_BACKUP_PREFIX):
                                 companion_json = backup_dir / "settings_latest.json"
                             if companion_json.exists():
                                 try:
@@ -963,7 +985,7 @@ class EncryptedRepository:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             emergency_path = self.db_path.with_name(f"{self.db_path.name}.emergency_{stamp}.db.enc")
             try:
-                emergency_path.write_bytes(encrypted)
+                _write_durable(emergency_path, encrypted)
             except Exception:
                 pass
             self._log_diagnostic(
@@ -980,13 +1002,14 @@ class EncryptedRepository:
         last_bak_time = getattr(self, "_last_bak_time", 0.0)
         if self.db_path.exists() and (now_ts - last_bak_time >= 60.0):
             try:
-                shutil.copy2(self.db_path, bak_path)
+                _write_durable(bak_path, self.db_path.read_bytes())
                 self._last_bak_time = now_ts
             except Exception:
                 pass
 
-        # 2. 임시 파일 쓰기는 루프 밖에서 1회만 수행
-        tmp_path.write_bytes(encrypted)
+        # 2. 임시 파일 쓰기는 루프 밖에서 1회만 수행.
+        # 디스크까지 기록(fsync)한 뒤 교체해야, 교체 직후 전원이 꺼져도 0으로 채워진 파일이 남지 않는다.
+        _write_durable(tmp_path, encrypted)
 
         # 3. 원자적 파일 교체(atomic replace) 시도 (백신/인덱서 일시 락 시 빠른 재시도)
         last_exc: Exception | None = None
@@ -1019,6 +1042,25 @@ class EncryptedRepository:
                 len(encrypted),
                 self.db_path,
             )
+
+    def write_exit_backup(self, reason: str) -> None:
+        """프로그램 종료·윈도우 종료 시 현재 DB 를 backups/exit_YYYYmmdd_HHMMSS.db.enc 로 남긴다 (최근 10개 유지).
+        다음 실행 때 DB 와 .bak 이 모두 손상돼 있으면 이 파일로 복구된다."""
+        if getattr(self, "_load_failed", False):
+            return
+        try:
+            self.connection.commit()
+            encrypted = protect_bytes(self.connection.serialize())
+            backup_dir = self.db_path.parent / "backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            target = backup_dir / f"{EXIT_BACKUP_PREFIX}{datetime.now().strftime('%Y%m%d_%H%M%S')}.db.enc"
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            _write_durable(tmp, encrypted)
+            tmp.replace(target)
+            for old in sorted(backup_dir.glob(f"{EXIT_BACKUP_PREFIX}*.db.enc"))[:-_EXIT_BACKUP_KEEP]:
+                old.unlink(missing_ok=True)
+        except Exception as exc:
+            self._log_diagnostic("exit_backup_failed", f"reason={reason}\n{type(exc).__name__}: {exc}")
 
     # ── 배치 저장 ────────────────────────────────────────────────────────
     # save() 는 매번 DB 전체를 직렬화·재암호화하고 .bak 을 복사해 파일에 쓴다.
@@ -1294,6 +1336,9 @@ class EncryptedRepository:
             getattr(entry, "memo_group", "") or "",
             getattr(entry, "linked_work_id", None),
             getattr(entry, "linked_work_type", "") or "",
+            entry.reply_due.isoformat() if getattr(entry, "reply_due", None) else None,
+            getattr(entry, "reply_time", "") or "",
+            getattr(entry, "linked_doc_id", None),
         )
         if entry.entry_id is None:
             cursor = self.connection.execute(
@@ -1302,9 +1347,9 @@ class EncryptedRepository:
                     entry_type, title, description, day, start_date, end_date,
                     start_time, end_time, all_day, assignee, department, status, attachments_json,
                     recurrence_enabled, recurrence_type, recurrence_interval,
-                    recurrence_weekdays_json, recurrence_month_day, recurrence_month_week, recurrence_month_end, completed_dates_json, icon_type, bg_color, alert_type, alert_offset, memo_group, linked_work_id, linked_work_type, created_at, updated_at
+                    recurrence_weekdays_json, recurrence_month_day, recurrence_month_week, recurrence_month_end, completed_dates_json, icon_type, bg_color, alert_type, alert_offset, memo_group, linked_work_id, linked_work_type, reply_due, reply_time, linked_doc_id, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 values + (now, now),
             )
@@ -1319,7 +1364,7 @@ class EncryptedRepository:
                     SET entry_type=?, title=?, description=?, day=?, start_date=?, end_date=?,
                         start_time=?, end_time=?, all_day=?, assignee=?, department=?, status=?, attachments_json=?,
                         recurrence_enabled=?, recurrence_type=?, recurrence_interval=?,
-                        recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, linked_work_id=?, linked_work_type=?, created_at=?, updated_at=?
+                        recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, linked_work_id=?, linked_work_type=?, reply_due=?, reply_time=?, linked_doc_id=?, created_at=?, updated_at=?
                     WHERE id = ?
                     """,
                     values + (entry.created_at.isoformat(timespec="seconds"), now, entry.entry_id),
@@ -1331,14 +1376,106 @@ class EncryptedRepository:
                     SET entry_type=?, title=?, description=?, day=?, start_date=?, end_date=?,
                         start_time=?, end_time=?, all_day=?, assignee=?, department=?, status=?, attachments_json=?,
                         recurrence_enabled=?, recurrence_type=?, recurrence_interval=?,
-                        recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, linked_work_id=?, linked_work_type=?, updated_at=?
+                        recurrence_weekdays_json=?, recurrence_month_day=?, recurrence_month_week=?, recurrence_month_end=?, completed_dates_json=?, icon_type=?, bg_color=?, alert_type=?, alert_offset=?, memo_group=?, linked_work_id=?, linked_work_type=?, reply_due=?, reply_time=?, linked_doc_id=?, updated_at=?
                     WHERE id = ?
                     """,
                     values + (now, entry.entry_id),
                 )
         self._cleanup_unused_attachments(previous_attachments, entry.entry_id, entry.attachments)
+        self._sync_reply_schedule_for_doc(entry)
+        self._sync_doc_from_reply_schedule(entry)
         self.connection.commit()
         return entry
+
+    # ── 문서 회신기한 ↔ 캘린더 회신 일정 연동 ──────────────────────────────
+    # 문서(TASK)의 reply_due 가 기준이고, 회신 일정(SCHEDULE)은 linked_doc_id 로 문서를 가리킨다.
+
+    def get_reply_schedule(self, doc_id: int | None) -> CalendarEntry | None:
+        if not doc_id:
+            return None
+        row = self.connection.execute(
+            "SELECT * FROM entries WHERE linked_doc_id = ? AND entry_type = ? ORDER BY id LIMIT 1",
+            (int(doc_id), EntryType.SCHEDULE.value),
+        ).fetchone()
+        return self._row_to_entry(row) if row else None
+
+    def reply_schedule_title(self, doc_title: str) -> str:
+        fmt = self.get_setting("doc_reply_title_format", "") or "[문서] {제목} 회신"
+        return fmt.replace("{제목}", doc_title).replace("{title}", doc_title)
+
+    def set_reply_schedule(self, doc: CalendarEntry, enabled: bool) -> CalendarEntry | None:
+        """문서의 회신 일정을 만들거나(enabled) 지운다. 이미 있으면 새로 만들지 않고 내용만 맞춘다."""
+        if not doc.entry_id:
+            return None
+        existing = self.get_reply_schedule(doc.entry_id)
+        if not enabled or not doc.reply_due:
+            if existing and existing.entry_id:
+                self.connection.execute("DELETE FROM entries WHERE linked_doc_id = ?", (int(doc.entry_id),))
+                self.connection.commit()
+            return None
+        if existing is None:
+            sched = CalendarEntry(
+                entry_type=EntryType.SCHEDULE,
+                title=self.reply_schedule_title(doc.title),
+                description=f"접수 문서 '{doc.title}' 의 회신기한입니다.",
+                day=doc.reply_due,
+                start_date=doc.reply_due,
+                start_time=doc.reply_time or "",
+                all_day=not doc.reply_time,
+                status="완료" if doc.status == "완료" else "",
+                linked_doc_id=int(doc.entry_id),
+            )
+            return self.upsert_entry(sched)
+        self._sync_reply_schedule_for_doc(doc)
+        return self.get_reply_schedule(doc.entry_id)
+
+    def _sync_reply_schedule_for_doc(self, doc: CalendarEntry) -> None:
+        """문서가 바뀌면 이미 있는 회신 일정의 날짜·제목·완료 상태를 따라가게 한다 (일정을 새로 만들지는 않는다)."""
+        if not doc.entry_id or doc.entry_type != EntryType.TASK:
+            return
+        existing = self.get_reply_schedule(doc.entry_id)
+        if existing is None:
+            return
+        if not doc.reply_due:
+            self.connection.execute("DELETE FROM entries WHERE linked_doc_id = ?", (int(doc.entry_id),))
+            return
+        due = doc.reply_due.isoformat()
+        self.connection.execute(
+            """
+            UPDATE entries
+            SET title = ?, day = ?, start_date = ?, start_time = ?, all_day = ?, status = ?, updated_at = ?
+            WHERE linked_doc_id = ? AND entry_type = ?
+            """,
+            (
+                self.reply_schedule_title(doc.title),
+                due,
+                due,
+                doc.reply_time or "",
+                int(not doc.reply_time),
+                "완료" if doc.status == "완료" else "",
+                datetime.now().isoformat(timespec="seconds"),
+                int(doc.entry_id),
+                EntryType.SCHEDULE.value,
+            ),
+        )
+
+    def _sync_doc_from_reply_schedule(self, sched: CalendarEntry) -> None:
+        """캘린더에서 회신 일정을 다른 날로 옮기면 문서의 회신기한도 따라가게 한다 (설정으로 끌 수 있음)."""
+        if not sched.linked_doc_id or sched.entry_type != EntryType.SCHEDULE or not sched.day:
+            return
+        if self.get_setting("doc_reply_move_sync", "1") == "0":
+            return
+        self.connection.execute(
+            "UPDATE entries SET reply_due = ?, reply_time = ? WHERE id = ? AND entry_type = ?",
+            (sched.day.isoformat(), "" if sched.all_day else (sched.start_time or ""), int(sched.linked_doc_id), EntryType.TASK.value),
+        )
+
+    def list_docs_with_reply_due(self) -> list[CalendarEntry]:
+        rows = self.connection.execute(
+            "SELECT * FROM entries WHERE entry_type = ? AND reply_due IS NOT NULL AND reply_due != '' ORDER BY reply_due",
+            (EntryType.TASK.value,),
+        ).fetchall()
+        return [self._row_to_entry(row) for row in rows]
 
     save_entry = upsert_entry
 
@@ -1469,6 +1606,10 @@ class EncryptedRepository:
         row = self.connection.execute("SELECT attachments_json FROM entries WHERE id = ?", (entry_id,)).fetchone()
         attachments = json.loads(row["attachments_json"] or "[]") if row else []
         self.connection.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+        # 문서를 지우면 그 문서를 가리키던 회신 일정도 함께 지운다 (가리킬 대상이 없어지므로).
+        self.connection.execute(
+            "DELETE FROM entries WHERE linked_doc_id = ? AND entry_type = ?", (entry_id, EntryType.SCHEDULE.value)
+        )
         self._cleanup_unused_attachments(attachments, entry_id)
         self.connection.commit()
 
@@ -1663,6 +1804,34 @@ class EncryptedRepository:
                 w_ids = [int(row["linked_work_id"])]
         return w_ids
 
+    def linked_work_titles_for_entries(self, entry_ids: list[int]) -> dict[int, list[str]]:
+        """여러 문서(항목)에 연결된 업무 제목을 한 번에 돌려준다 (목록 표시용)."""
+        ids = sorted({int(i) for i in entry_ids if i})
+        if not ids:
+            return {}
+        result: dict[int, list[str]] = {}
+        for start in range(0, len(ids), 500):
+            chunk = ids[start:start + 500]
+            marks = ",".join("?" for _ in chunk)
+            rows = self.connection.execute(
+                f"""
+                SELECT e.id AS entry_id, w.id AS work_id, w.title AS title
+                FROM entries e
+                JOIN work_items w
+                  ON w.id IN (SELECT l.work_id FROM work_entry_links l WHERE l.entry_id = e.id)
+                  OR (w.id = e.linked_work_id AND e.linked_work_type = 'work')
+                WHERE e.id IN ({marks})
+                ORDER BY e.id, w.id
+                """,
+                chunk,
+            ).fetchall()
+            for row in rows:
+                titles = result.setdefault(int(row["entry_id"]), [])
+                title = row["title"] or ""
+                if title not in titles:
+                    titles.append(title)
+        return result
+
     def list_linked_entries_for_work(self, work_id: int | None = None, entry_type: str = "task") -> list[CalendarEntry]:
         """특정 업무(work_id)에 연결된 문서(task) 또는 일정(schedule) 목록 반환"""
         if not work_id or int(work_id) <= 0:
@@ -1822,6 +1991,9 @@ class EncryptedRepository:
             memo_group=row["memo_group"] if "memo_group" in row.keys() and row["memo_group"] else "",
             linked_work_id=row["linked_work_id"] if "linked_work_id" in row.keys() else None,
             linked_work_type=row["linked_work_type"] if "linked_work_type" in row.keys() and row["linked_work_type"] else "",
+            reply_due=date.fromisoformat(row["reply_due"]) if "reply_due" in row.keys() and row["reply_due"] else None,
+            reply_time=row["reply_time"] if "reply_time" in row.keys() and row["reply_time"] else "",
+            linked_doc_id=row["linked_doc_id"] if "linked_doc_id" in row.keys() else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )

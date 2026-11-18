@@ -23,6 +23,10 @@ document.addEventListener('DOMContentLoaded', () => {
     itemDepartment: document.getElementById('item-department'),
     itemAuthor: document.getElementById('item-author'),
     itemDate: document.getElementById('item-date'),
+    itemDeadline: document.getElementById('item-deadline'),
+    itemDeadlineQuick: document.getElementById('item-deadline-quick'),
+    chkDeadline: document.getElementById('chk-deadline'),
+    valDeadline: document.getElementById('val-deadline'),
     itemCategoryStatus: document.getElementById('item-category-status'),
     itemDesc: document.getElementById('item-desc'),
     chkTitle: document.getElementById('chk-title'),
@@ -52,6 +56,81 @@ document.addEventListener('DOMContentLoaded', () => {
 
   els.valDate.value = dateStr;
 
+  // 회신기한 빠른 버튼 (당일, 7일 뒤, 1달 뒤 …): 날짜(접수일) 기준으로 그 날짜를 회신기한으로 정함
+  // 마지막으로 고른 버튼을 기억해 두었다가 다음에 창을 열 때 그대로 골라 둔다 (회신기한을 끄면 '없음'으로 기억)
+  let reapplyReplyQuick = () => {};
+  (function setupDeadlineQuickButtons() {
+    if (!els.itemDeadlineQuick || !els.valDeadline) return;
+    const STORE_KEY = 'tcReplyQuickChoice';
+    const buttons = Array.from(els.itemDeadlineQuick.querySelectorAll('button'));
+    const keyOf = (btn) => (btn.dataset.months ? `m${btn.dataset.months}` : `d${btn.dataset.days || 0}`);
+    let chosenKey = null;
+    const markChosen = () => {
+      buttons.forEach((b) => b.classList.toggle('chosen', keyOf(b) === chosenKey));
+    };
+    const remember = (key) => {
+      chosenKey = key;
+      markChosen();
+      try { chrome.storage.local.set({ [STORE_KEY]: key || 'none' }); } catch (e) {}
+    };
+    const toIso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const parseIso = (s) => {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || '');
+      return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
+    };
+    const applyKey = (btn) => {
+        const base = parseIso(els.valDate && els.valDate.value) || new Date();
+        const next = new Date(base.getTime());
+        if (btn.dataset.months) {
+          const day = next.getDate();
+          next.setDate(1);
+          next.setMonth(next.getMonth() + Number(btn.dataset.months));
+          const last = new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate();
+          next.setDate(Math.min(day, last));
+        } else {
+          next.setDate(next.getDate() + Number(btn.dataset.days || 0));
+        }
+        els.valDeadline.value = toIso(next);
+        els.chkDeadline.checked = true;
+    };
+    buttons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        applyKey(btn);
+        remember(keyOf(btn));
+      });
+    });
+    // 날짜(접수일)가 바뀌면 고른 버튼 기준으로 회신기한도 다시 계산
+    reapplyReplyQuick = () => {
+      const btn = buttons.find((b) => keyOf(b) === chosenKey);
+      if (btn) applyKey(btn);
+    };
+    if (els.valDate) {
+      els.valDate.addEventListener('change', () => reapplyReplyQuick());
+      els.valDate.addEventListener('input', () => reapplyReplyQuick());
+    }
+    // 날짜를 직접 고르면 '직접 지정'으로 보고 버튼 기억은 지운다
+    els.valDeadline.addEventListener('change', () => {
+      els.chkDeadline.checked = !!els.valDeadline.value;
+      remember(null);
+    });
+    // 회신기한 체크를 끄면 다음에도 꺼진 채로
+    if (els.chkDeadline) {
+      els.chkDeadline.addEventListener('change', () => {
+        if (!els.chkDeadline.checked) remember(null);
+      });
+    }
+    try {
+      chrome.storage.local.get(STORE_KEY, (res) => {
+        const saved = res && res[STORE_KEY];
+        if (saved && saved !== 'none' && buttons.some((b) => keyOf(b) === saved)) {
+          chosenKey = saved;
+          markChosen();
+          reapplyReplyQuick();
+        }
+      });
+    } catch (e) {}
+  })();
+
   let currentDomain = '';
   let originTabId = null;
   let currentData = {};
@@ -73,6 +152,10 @@ document.addEventListener('DOMContentLoaded', () => {
     els.btnSchedule.classList.toggle('active', val === 'schedule');
     els.btnTask.classList.toggle('active', val === 'task');
     els.btnMemo.classList.toggle('active', val === 'memo');
+
+    const showDeadline = val === 'task';
+    if (els.itemDeadline) els.itemDeadline.style.display = showDeadline ? 'flex' : 'none';
+    if (els.itemDeadlineQuick) els.itemDeadlineQuick.style.display = showDeadline ? 'flex' : 'none';
 
     if (val === 'schedule') {
       if (els.itemDepartment) els.itemDepartment.style.display = 'none';
@@ -575,6 +658,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (data.detectedDate !== undefined) {
         els.valDate.value = data.detectedDate;
         els.chkDate.checked = data.checkedStates.date !== false;
+        reapplyReplyQuick();
       }
       if (data.desc !== undefined) {
         els.valDesc.value = data.desc;
@@ -676,6 +760,7 @@ document.addEventListener('DOMContentLoaded', () => {
           ? userSavedCheckedStates.date
           : true;
       }
+      reapplyReplyQuick();
 
       // 출처 URL: 보안 및 전자결재 URL 보호를 위해 기본 숨김 및 미입력 처리
       els.valUrl.value = '';
@@ -1524,6 +1609,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (els.chkStatus.checked && clean50(els.valStatus.value)) {
           url += `&status=${encodeURIComponent(clean50(els.valStatus.value))}`;
+        }
+        if (els.chkDeadline && els.chkDeadline.checked && /^\d{4}-\d{2}-\d{2}$/.test(els.valDeadline.value)) {
+          url += `&deadline=${els.valDeadline.value}`;
         }
       }
 

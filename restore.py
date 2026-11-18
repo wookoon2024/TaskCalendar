@@ -77,11 +77,54 @@ def restore_chrome_extension_zip() -> bool:
     return False
 
 
+def restore_sticker_v2(root: Path | None = None) -> bool:
+    """스티커 v2 준비 (업무망처럼 PNG 를 옮길 수 없는 곳용).
+
+    1) 옛 기본 스티커(assets/stickers/*.png)를 assets/stickers/legacy/ 로 옮긴다.
+       앱은 legacy 도 읽으므로 이미 달력에 붙인 옛 스티커는 그대로 보이고, 목록에서만 빠진다.
+    2) v2 그림이 없으면 tools/sticker_v2_gen.py 로 직접 그려 만든다 (그림 자체는 .py 코드에 들어 있음).
+    """
+    import os
+    import subprocess
+    import sys
+
+    base = root or ROOT
+    stickers = base / "taskcalendar" / "assets" / "stickers"
+    if not stickers.is_dir():
+        return False
+    changed = False
+    legacy = stickers / "legacy"
+    for png in sorted(stickers.glob("*.png")):
+        legacy.mkdir(parents=True, exist_ok=True)
+        target = legacy / png.name
+        if target.exists():
+            png.unlink()
+        else:
+            png.replace(target)
+        changed = True
+
+    v2_dir = stickers / "v2"
+    if (v2_dir / "manifest.json").exists():
+        return changed
+    generator = base / "tools" / "sticker_v2_gen.py"
+    if not generator.exists():
+        print("[WARN] tools/sticker_v2_gen.py 가 없어 스티커 v2 를 만들 수 없습니다.")
+        return changed
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    result = subprocess.run([sys.executable, str(generator), str(v2_dir)], env=env, capture_output=True, text=True)
+    if result.returncode != 0 or not (v2_dir / "manifest.json").exists():
+        print(f"[WARN] 스티커 v2 생성 실패: {result.stderr.strip()[-500:]}")
+        return changed
+    print(f"[OK] 스티커 v2 생성: {len(list(v2_dir.glob('*.png')))}개")
+    return True
+
+
 def main() -> None:
     print("Checking and restoring network-filtered assets...")
     restore_app_icon()
     restore_rhwp_wasm()
     restore_chrome_extension_zip()
+    restore_sticker_v2()
     print("Asset restoration complete.")
 
 

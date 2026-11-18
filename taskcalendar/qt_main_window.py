@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, time as datetime_time
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt, QTimer, QObject, QMimeData, Signal, QEvent
-from PySide6.QtGui import QAction, QColor, QDrag, QGuiApplication, QIcon, QKeySequence, QPainter, QPageLayout, QPalette, QPixmap, QShortcut, QTransform
+from PySide6.QtGui import QAction, QColor, QDrag, QFont, QFontMetrics, QGuiApplication, QIcon, QKeySequence, QPainter, QPageLayout, QPalette, QPixmap, QShortcut, QTransform
 from PySide6.QtPrintSupport import QPrintPreviewDialog, QPrintPreviewWidget, QPrinter
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QSplitter,
     QScrollArea,
+    QStackedWidget,
     QStyle,
     QStyleOptionButton,
     QSystemTrayIcon,
@@ -71,6 +72,7 @@ from taskcalendar.desktop_services import (
 )
 from taskcalendar.excel_io import export_entries_to_excel, import_entries_from_excel
 from taskcalendar import APP_VERSION
+from taskcalendar.ui_common import memo_display_title, style_menu
 from taskcalendar import fonts
 from taskcalendar.fonts import font_family_css, scale_px
 from taskcalendar.backup_io import backup_to_zip, restore_from_zip
@@ -86,7 +88,9 @@ from taskcalendar.qt_dialogs import (
     CivilComplaintCalculatorDialog,
     WelcomeFeatureIntroDialog,
     ElidedLabel,
+    MEMO_THEMES,
 )
+from taskcalendar.rich_text_edit import RichTextEdit
 from taskcalendar.storage import EncryptedRepository
 from taskcalendar.themes import THEMES
 from taskcalendar.qt_styles import dialog_stylesheet, _shade
@@ -262,11 +266,28 @@ def app_stylesheet(p: dict[str, str]) -> str:
     QLabel {{
         color: {p['text']};
     }}
-    QFrame#panel, QFrame#calendarPanel, QFrame#sidebarPanel {{
+    QFrame#panel {{
         background: {p['panel']};
         color: {p['text']};
         border: 1px solid {p['line']};
         border-radius: 10px;
+    }}
+    QFrame#calendarPanel, QFrame#sidebarPanel {{
+        background: {p['panel']};
+        color: {p['text']};
+        border: none;
+        border-radius: 0px;
+    }}
+    QPushButton#titleButton {{
+        background: transparent;
+        color: {p['text']};
+        border: none;
+        padding: 0px 2px;
+        font-size: 22px;
+        font-weight: 700;
+    }}
+    QPushButton#titleButton:hover {{
+        color: {p['accent']};
     }}
     QFrame#softPanel {{
         background: {p['panel_alt']};
@@ -318,6 +339,11 @@ def app_stylesheet(p: dict[str, str]) -> str:
         background: {p['accent_soft']};
         border: 1px solid {p['accent']};
         color: {p['text']};
+    }}
+    QPushButton#topbarButton:disabled {{
+        background: {p['panel_alt']};
+        border: 1px solid {p.get('line_soft', p['line'])};
+        color: {p['muted']};
     }}
     QPushButton#primary {{
         background: {p['accent']};
@@ -381,8 +407,8 @@ def app_stylesheet(p: dict[str, str]) -> str:
         background: transparent;
     }}
     QSplitter#bodySplitter::handle:horizontal {{
-        background: transparent;
-        width: 8px;
+        background: {p.get('line_soft', p['line'])};
+        width: 1px;
     }}
     QSplitter#bodySplitter::handle:horizontal:hover {{
         background: {p.get('line_soft', 'rgba(0, 0, 0, 0.12)')};
@@ -418,7 +444,7 @@ def app_stylesheet(p: dict[str, str]) -> str:
 
 
 def day_cell_style(p: dict[str, str], in_month: bool, is_today: bool, is_selected: bool) -> str:
-    bg = p["panel"] if in_month else p["panel_alt"]
+    bg = p["panel"]
     border_color = p["line"]
     if is_selected:
         bg = p.get("accent_soft", "#FFF7CC")
@@ -887,15 +913,57 @@ class ClickableTextEdit(QTextEdit):
             pass
 
 
+_STICKER_V2_MANIFEST: dict | None = None
+
+
+def sticker_v2_manifest() -> dict:
+    """assets/stickers/v2/manifest.json — 스티커 v2 의 이름·분류·움직임 정보 (tools/sticker_v2_gen.py 가 만든다)."""
+    global _STICKER_V2_MANIFEST
+    if _STICKER_V2_MANIFEST is None:
+        try:
+            _STICKER_V2_MANIFEST = json.loads(asset_path("stickers", "v2", "manifest.json").read_text(encoding="utf-8"))
+        except Exception:
+            _STICKER_V2_MANIFEST = {"categories": [], "stickers": []}
+    return _STICKER_V2_MANIFEST
+
+
 class StickerItem(QLabel):
     def __init__(self, parent, sticker_id: str, on_press, on_drag) -> None:
         super().__init__(parent)
         self.sticker_id = sticker_id
         self._on_press = on_press
         self._on_drag = on_drag
+        self._hovered = False
+        self.highlight_color = QColor("#1F7A67")
         self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_Hover, True)
         self.setStyleSheet("background: transparent;")
         self.setCursor(Qt.OpenHandCursor)
+
+    # 꾸미기 중(오버레이가 마우스를 받을 때)에만 호버가 들어온다: 어떤 스티커를 집을지 보이게 강조
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        if not self._hovered:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        fill = QColor(self.highlight_color)
+        fill.setAlpha(40)
+        painter.setBrush(fill)
+        pen_color = QColor(self.highlight_color)
+        painter.setPen(pen_color)
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 6, 6)
+        painter.end()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         self.setCursor(Qt.ClosedHandCursor)
@@ -1185,6 +1253,253 @@ class AlertToast(QWidget):
         super().closeEvent(event)
 
 
+class MemoTabCard(QFrame):
+    """메모 탭의 카드 한 장. 클릭하면 메모를 열고, 오른쪽 클릭하면 메모 메뉴를 띄운다."""
+
+    def __init__(self, on_click, on_context_menu, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._on_click = on_click
+        self._on_context_menu = on_context_menu
+        self.setObjectName("memoTabCard")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self._on_click()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        self._on_context_menu(event.globalPos())
+        event.accept()
+
+
+class MemoBoardCard(QFrame):
+    """메모 보드의 카드 = 바탕화면 메모와 같은 모양(색·서식·이미지·To-Do)의 작은 메모.
+
+    - 제목·내용을 그 자리에서 고치면 잠시 뒤 자동 저장 (바탕화면에 떠 있는 메모 창에도 바로 반영)
+    - 제목 줄에서 글자가 아닌 곳을 더블클릭 → 바탕화면 메모로 띄우기
+    - 제목 줄 오른쪽: [항상 위에 고정] [– 접기] [× 바탕화면 메모 닫기] (바탕화면 메모와 같은 버튼)
+    - 오른쪽 클릭 → 바탕화면 메모와 같은 메모 메뉴 (RichTextEdit 가 _show_memo_context_menu 를 찾아 부름)
+    """
+
+    SAVE_DELAY_MS = 700
+    HEADER_H = 32
+
+    def __init__(self, owner, entry: CalendarEntry, width: int, height: int, font_pt: int) -> None:
+        super().__init__()
+        self._owner = owner
+        self.entry = entry
+        self._loading = False
+        self._floating = False
+        self._collapsed = False
+        self._font_pt = font_pt
+        self._full_size = QSize(width, height)
+        self.setObjectName("memoBoardCard")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setFixedSize(width, height)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self.header = QFrame()
+        self.header.setObjectName("memoBoardHeader")
+        self.header.setFixedHeight(self.HEADER_H)
+        self.header.setToolTip("빈 곳을 더블클릭하면 바탕화면 메모로 띄웁니다")
+        h = QHBoxLayout(self.header)
+        h.setContentsMargins(8, 0, 4, 0)
+        h.setSpacing(2)
+        self.dot = QLabel("○")
+        self.dot.setObjectName("memoBoardDot")
+        h.addWidget(self.dot, 0, Qt.AlignVCenter)
+        h.addSpacing(4)
+        self.title_edit = QLineEdit()
+        self.title_edit.setObjectName("memoBoardTitle")
+        self.title_edit.setFrame(False)
+        self.title_edit.textChanged.connect(self._schedule_save)
+        self.title_edit.textChanged.connect(self._fit_title_width)
+        h.addWidget(self.title_edit, 0, Qt.AlignVCenter)
+        h.addStretch(1)  # 제목 글자 오른쪽 빈 곳 = 더블클릭으로 띄우는 자리
+        self.tag = QLabel("")
+        self.tag.setObjectName("memoBoardTag")
+        h.addWidget(self.tag, 0, Qt.AlignVCenter)
+        h.addSpacing(2)
+
+        def _icon_btn(icon_name: str, tip: str) -> QPushButton:
+            b = QPushButton()
+            b.setObjectName("memoBoardIconBtn")
+            b.setIcon(QIcon(str(asset_path(icon_name))))
+            b.setIconSize(QSize(12, 12))
+            b.setFixedSize(22, 22)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip(tip)
+            h.addWidget(b, 0, Qt.AlignVCenter)
+            return b
+
+        self.pin_btn = _icon_btn("pin_inactive.svg", "항상 위에 고정")
+        self.pin_btn.clicked.connect(lambda: self._owner._toggle_board_memo_pin(self))
+        self.collapse_btn = _icon_btn("memo_minimize.svg", "메모 접기 / 펼치기")
+        self.collapse_btn.clicked.connect(lambda: self._owner._toggle_board_memo_collapse(self))
+        self.close_btn = _icon_btn("memo_close.svg", "메모 영구 삭제")
+        self.close_btn.clicked.connect(lambda: self._owner._delete_board_memo(self))
+        root.addWidget(self.header)
+
+        self.body = RichTextEdit()
+        self.body.setObjectName("memoBoardBody")
+        self.body.setFrameShape(QFrame.NoFrame)
+        self.body.setPlaceholderText("메모 내용을 입력하세요...")
+        self.body.setTabChangesFocus(True)
+        self.body.document().setDocumentMargin(2)
+        self.body.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        body_font = self.body.font()
+        body_font.setPointSize(font_pt)
+        self.body.setFont(body_font)
+        self.body.textChanged.connect(self._schedule_save)
+        self.body_wrap = QWidget()
+        self.body_wrap.setObjectName("memoBoardBodyWrap")
+        bw = QVBoxLayout(self.body_wrap)
+        bw.setContentsMargins(8, 4, 4, 6)
+        bw.addWidget(self.body)
+        root.addWidget(self.body_wrap, 1)
+
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self.flush)
+
+        for w in (self.header, self.tag, self.dot):
+            w.installEventFilter(self)
+        self.title_edit.installEventFilter(self)
+        self.load(entry)
+
+    # 상태 -----------------------------------------------------------------
+    def is_editing(self) -> bool:
+        return self._save_timer.isActive() or self.body.hasFocus() or self.title_edit.hasFocus()
+
+    def load(self, entry: CalendarEntry) -> None:
+        """DB 의 메모 내용으로 카드를 채운다 (편집 중이면 부르지 않는다)."""
+        self.entry = entry
+        self._loading = True
+        try:
+            title = (entry.title or "").strip()
+            plain = MainWindow._memo_plain_text(entry)
+            shown, from_body = memo_display_title(title, plain)
+            self.title_edit.setText("" if from_body or title in ("제목 없음", "(제목 없음)") else title)
+            self.title_edit.setPlaceholderText(shown if from_body else "제목")
+            desc = entry.description or ""
+            if desc.strip().startswith("<") or "<html" in desc.lower() or "<p" in desc.lower():
+                self.body.setHtml(desc)
+            else:
+                self.body.setPlainText(desc)
+            self.body.is_todo_mode = ("☐" in desc) or ("☑" in desc)
+            stamp = entry.updated_at or entry.created_at
+            self.setToolTip(f"수정: {stamp.strftime('%Y.%m.%d %H:%M')}" if stamp else "")
+        finally:
+            self._loading = False
+        self._fit_title_width()
+        self.apply_theme()
+
+    def _fit_title_width(self, *_args) -> None:
+        text = self.title_edit.text() or self.title_edit.placeholderText()
+        fm = QFontMetrics(self.title_edit.font())
+        max_w = max(60, self.width() - 130)
+        self.title_edit.setFixedWidth(min(max_w, max(40, fm.horizontalAdvance(text) + 18)))
+
+    def theme_key(self) -> str:
+        key = getattr(self.entry, "bg_color", "") or ""
+        return key if key in MEMO_THEMES else "yellow"
+
+    def is_pinned(self) -> bool:
+        return (getattr(self.entry, "icon_type", "") or "") == "floating"
+
+    def apply_theme(self) -> None:
+        th = MEMO_THEMES[self.theme_key()]
+        radius_bottom = "8px"
+        self.setStyleSheet(f"""
+            QFrame#memoBoardCard {{ background-color: {th['bg']}; border: 1px solid {th['border']}; border-radius: 8px; }}
+            QFrame#memoBoardHeader {{ background-color: {th['header']}; border: none;
+                border-top-left-radius: 8px; border-top-right-radius: 8px;
+                border-bottom-left-radius: {radius_bottom if self._collapsed else '0px'};
+                border-bottom-right-radius: {radius_bottom if self._collapsed else '0px'}; }}
+            QWidget#memoBoardBodyWrap {{ background: transparent; }}
+            QLineEdit#memoBoardTitle {{ background: transparent; border: none; color: {th['text']};
+                font-size: 13px; font-weight: bold; padding: 0 2px; }}
+            QLabel#memoBoardTag {{ color: {th['text']}; background: rgba(255,255,255,0.55);
+                border-radius: 8px; padding: 1px 8px; font-size: 11px; }}
+            QLabel#memoBoardDot {{ color: {'#16a34a' if self._floating else th['text']}; font-size: 11px; font-weight: bold; }}
+            QPushButton#memoBoardIconBtn {{ background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 0; }}
+            QPushButton#memoBoardIconBtn:hover {{ background: rgba(255,255,255,0.75); border-color: rgba(0,0,0,0.15); }}
+            QTextEdit#memoBoardBody {{ background: transparent; border: none; color: {th['text']};
+                font-size: {self._font_pt}pt; }}
+        """)
+        self._update_header_state()
+
+    def _update_header_state(self) -> None:
+        self.dot.setText("●" if self._floating else "○")
+        self.dot.setToolTip("바탕화면에 떠 있음" if self._floating else "바탕화면에 떠 있지 않음 (빈 곳 더블클릭으로 띄우기)")
+        pinned = self.is_pinned()
+        self.pin_btn.setIcon(QIcon(str(asset_path("pin_active.svg" if pinned else "pin_inactive.svg"))))
+        self.pin_btn.setToolTip("항상 위에 고정 해제" if pinned else "항상 위에 고정 (바탕화면에 띄울 때 다른 창 위에)")
+        self.collapse_btn.setIcon(QIcon(str(asset_path("memo_maximize.svg" if self._collapsed else "memo_minimize.svg"))))
+
+    def set_floating(self, floating: bool, group_name: str = "") -> None:
+        self._floating = floating
+        self.tag.setText(group_name)
+        self.tag.setVisible(bool(group_name))
+        self.apply_theme()
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        self._collapsed = collapsed
+        self.body_wrap.setVisible(not collapsed)
+        if collapsed:
+            self.setFixedSize(self._full_size.width(), self.HEADER_H + 2)
+        else:
+            self.setFixedSize(self._full_size)
+        self.apply_theme()
+
+    # 저장 -----------------------------------------------------------------
+    def _schedule_save(self, *_args) -> None:
+        if self._loading:
+            return
+        self._save_timer.start(self.SAVE_DELAY_MS)
+
+    def flush(self) -> None:
+        """미뤄 둔 저장을 바로 한다."""
+        self._save_timer.stop()
+        if self._loading or getattr(self, "_deleted", False) or self.entry is None or self.entry.entry_id is None:
+            return
+        title = self.title_edit.text().strip()
+        plain = self.body.toPlainText().strip()
+        description = self.body.toHtml() if plain else ""
+        old_title = (self.entry.title or "").strip()
+        new_title = title or ("제목 없음" if (plain or old_title) else "")
+        if new_title == old_title and description == (self.entry.description or ""):
+            return
+        from dataclasses import replace as _dc_replace
+
+        updated = _dc_replace(self.entry, title=new_title, description=description)
+        self._owner._save_board_memo(self, updated)
+
+    # 이벤트 ---------------------------------------------------------------
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if event.type() == QEvent.Type.MouseButtonDblClick and obj is not self.title_edit:
+            self._owner._open_board_memo_floating(self)
+            return True
+        if event.type() == QEvent.Type.ContextMenu:
+            self._show_memo_context_menu(event.globalPos())
+            return True
+        return super().eventFilter(obj, event)
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        self._show_memo_context_menu(event.globalPos())
+        event.accept()
+
+    def _show_memo_context_menu(self, global_pos) -> None:
+        self._owner._show_board_memo_menu(self, global_pos)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, repository: EncryptedRepository) -> None:
         super().__init__()
@@ -1272,7 +1587,7 @@ class MainWindow(QMainWindow):
         self._did_memo_restore = False
         self._current_applied_theme: str | None = None
 
-        self.setWindowTitle(f"바로업무 {APP_VERSION}")
+        self.setWindowTitle(f"바로업무 {APP_VERSION} - 캘린더")
         self.setWindowIcon(app_icon())
         self.resize(1024, 640)
         self.setMinimumSize(980, 620)
@@ -1280,6 +1595,10 @@ class MainWindow(QMainWindow):
         self._apply_initial_window_state()
 
         self._build()
+        # 앱의 모든 펼침 메뉴를 같은 디자인으로 (테마를 바꾸면 다음에 뜰 때 새 색으로)
+        from taskcalendar.ui_common import install_menu_styler
+
+        install_menu_styler(QApplication.instance(), lambda: self.palette)
         self._apply_window_prefs()
         QApplication.instance().installEventFilter(self)
         self._setup_calendar_navigation_shortcuts()
@@ -1294,10 +1613,8 @@ class MainWindow(QMainWindow):
         app_inst = QApplication.instance()
         if app_inst:
             app_inst.aboutToQuit.connect(self._on_app_about_to_quit)
-            # 윈도우 종료/로그오프 신호 수신 여부 기록 (이 줄 뒤에 quit_save_done 이 없으면 종료 중 강제 종료된 것)
-            app_inst.commitDataRequest.connect(
-                lambda _sm: self.repository.diag_snapshot("windows_session_ending", verify=False)
-            )
+            # 윈도우 종료/로그오프 신호를 받으면 강제 종료되기 전에 바로 저장한다.
+            app_inst.commitDataRequest.connect(self._on_windows_session_ending)
         QTimer.singleShot(50, self._prewarm_work_manager)
         if self.repository.get_setting("desktop_widget_enabled", "0") == "1":
             QTimer.singleShot(150, lambda: self._toggle_desktop_widget(True))
@@ -1311,6 +1628,14 @@ class MainWindow(QMainWindow):
             pass
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if (
+            event.type() == QEvent.Type.Resize
+            and getattr(self, "memo_scroll", None) is not None
+            and watched is self.memo_scroll.viewport()
+        ):
+            cols = self._memo_page_columns()
+            if cols != getattr(self, "_memo_page_cols", 0) and self._current_page == "memo":
+                QTimer.singleShot(0, self._render_memo_page)
         if hasattr(self, "sidebar_panel") and watched == self.sidebar_panel and event.type() == QEvent.Type.Resize:
             self._sync_topbar_sidebar_alignment()
         if (
@@ -1355,9 +1680,24 @@ class MainWindow(QMainWindow):
 
         outer = QVBoxLayout(root)
         self.outer_layout = outer
-        outer.setContentsMargins(12, 12, 12, 12)
-        outer.setSpacing(10)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
+        from taskcalendar.ui_common import WindowSwitcherBar
+
+        # 1줄째: 세 창 공통 전환 줄 [캘린더 | 문서 | 업무] ······ [기능] [설정]
+        self.window_switcher = WindowSwitcherBar(
+            self.palette, "calendar", self.switch_to_window, self.show_service_menu_at, self._open_settings
+        )
+        outer.addWidget(self.window_switcher)
+        self._current_page = "calendar"
+        self.memo_tab_button = self.window_switcher.tab_buttons["memo"]
+        self.doc_button = self.window_switcher.tab_buttons["doc"]
+        self.task_button = self.doc_button  # 호환성 유지
+        self.work_button = self.window_switcher.tab_buttons["work"]
+        self.service_button = self.window_switcher.service_button
+
+        # 2줄째: 캘린더 전용 조작 줄
         topbar = QFrame()
         self.topbar = topbar
         topbar.setObjectName("panel")
@@ -1372,25 +1712,24 @@ class MainWindow(QMainWindow):
         self.prev_button.setIconSize(QSize(14, 14))
         self.prev_button.setToolTip("이전 달")
         self.prev_button.clicked.connect(lambda: self._change_month(-1))
-        left.addWidget(self.prev_button)
 
-        self.year_button = self._top_button("")
+        self.year_button = QPushButton("")
+        self.year_button.setObjectName("titleButton")
+        self.year_button.setToolTip("연도 선택")
         self.year_button.clicked.connect(self._show_year_menu)
-        left.addWidget(self.year_button)
 
-        self.month_button = self._top_button("")
+        self.month_button = QPushButton("")
+        self.month_button.setObjectName("titleButton")
+        self.month_button.setToolTip("월 선택")
         self.month_button.clicked.connect(self._show_month_menu)
-        left.addWidget(self.month_button)
 
-        today_button = self._top_button("오늘")
-        today_button.clicked.connect(self._go_today)
-        left.addWidget(today_button)
+        self.today_button = self._top_button("오늘")
+        self.today_button.clicked.connect(self._go_today)
         self.next_button = self._top_button("", 34)
         self.next_button.setIcon(QIcon(str(asset_path("chevron_right.svg"))))
         self.next_button.setIconSize(QSize(14, 14))
         self.next_button.setToolTip("다음 달")
         self.next_button.clicked.connect(lambda: self._change_month(1))
-        left.addWidget(self.next_button)
         topbar_layout.addStretch(1)
         topbar_layout.addLayout(left)
         topbar_layout.addStretch(1)
@@ -1428,7 +1767,6 @@ class MainWindow(QMainWindow):
         self._pin_btn.clicked.connect(self._on_pin_toggled)
         wc_layout.addWidget(self._pin_btn)
 
-        right.addWidget(self._window_controls)
 
         self.topbar_actions_container = QWidget()
         tac_layout = QHBoxLayout(self.topbar_actions_container)
@@ -1437,18 +1775,10 @@ class MainWindow(QMainWindow):
 
         self.memo_button = self._top_button("메모")
         self.memo_button.clicked.connect(lambda: self._set_sidebar_mode("memo"))
-        tac_layout.addWidget(self.memo_button)
 
-        self.doc_button = self._top_button("문서")
-        self.doc_button.setToolTip("문서 관리 (문서 목록, 완료 체크, 엑셀 내보내기)")
-        self.doc_button.clicked.connect(self._open_task_manager)
-        tac_layout.addWidget(self.doc_button)
-        self.task_button = self.doc_button  # 호환성 유지
-
-        self.work_button = self._top_button("업무")
-        self.work_button.setToolTip("업무 관리 및 인수인계 편람 (분류별 업무 편성, 에디터, 첨부파일, 엑셀형 시트)")
-        self.work_button.clicked.connect(self._open_work_manager)
-        tac_layout.addWidget(self.work_button)
+        _legacy_work_button = self._top_button("업무")
+        _legacy_work_button.setToolTip("업무 관리 및 인수인계 편람 (분류별 업무 편성, 에디터, 첨부파일, 엑셀형 시트)")
+        _legacy_work_button.deleteLater()
 
         # 남은 공간을 먼저 밀어 넣고, [기능][설정] 을 오른쪽 끝에 붙인다.
         tac_layout.addStretch(1)
@@ -1459,27 +1789,16 @@ class MainWindow(QMainWindow):
         # self.complaint_button.clicked.connect(self._open_complaint_calculator)
         # tac_layout.addWidget(self.complaint_button)
 
-        self.service_button = self._top_button("기능")
-        self.service_button.setToolTip("기능 (알람 설정, 날짜 계산기 등)")
         self.service_menu = QMenu(self)
-        self.service_menu.setStyleSheet("""
-            QMenu {
-                background-color: #FFFFFF;
-                border: 1px solid #CBD5E0;
-                border-radius: 6px;
-                padding: 4px;
-                font-size: 12px;
-            }
-            QMenu::item {
-                padding: 6px 18px 6px 12px;
-                border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #F3F0FF;
-                color: #6C5CE7;
-                font-weight: bold;
-            }
-        """)
+        style_menu(self.service_menu, self.palette)
+        # 달력 인쇄·꾸미기는 캘린더 탭에서만 메뉴에 보인다 (_update_service_menu_for_page)
+        self.action_print = self.service_menu.addAction("달력 인쇄")
+        self.action_print.triggered.connect(lambda: (self.switch_to_window("calendar"), self._print_calendar_view()))
+        self.action_decorate = self.service_menu.addAction("달력 꾸미기 (스티커)")
+        self.action_decorate.triggered.connect(
+            lambda: (self.switch_to_window("calendar"), self._enter_sticker_edit_mode())
+        )
+        self._service_calendar_separator = self.service_menu.addSeparator()
         action_alarm = self.service_menu.addAction("알람 설정")
         action_alarm.triggered.connect(self._open_alarm_settings)
 
@@ -1487,27 +1806,36 @@ class MainWindow(QMainWindow):
         action_date_calc.triggered.connect(self._open_date_calculator)
 
         self.service_menu.addSeparator()
-        action_desktop_widget = self.service_menu.addAction("🖥 바탕화면 달력 위젯 (DesktopCal)")
+        action_desktop_widget = self.service_menu.addAction("바탕화면 달력 위젯")
         action_desktop_widget.triggered.connect(lambda: self._toggle_desktop_widget())
-
-        self.service_button.clicked.connect(self._show_service_menu)
-        tac_layout.addWidget(self.service_button)
-
-        settings_button = self._top_button("설정")
-        settings_button.setToolTip("환경설정")
-        settings_button.clicked.connect(self._open_settings)
-        tac_layout.addWidget(settings_button)
 
         self.topbar_collapse_btn = self._top_button("", 28)
         self.topbar_collapse_btn.setIcon(QIcon(str(asset_path("chevron_up.svg"))))
         self.topbar_collapse_btn.setIconSize(QSize(14, 14))
         self.topbar_collapse_btn.setToolTip("상단바 숨기기 (단축키: Ctrl+T)")
         self.topbar_collapse_btn.clicked.connect(self._toggle_topbar)
-        tac_layout.addWidget(self.topbar_collapse_btn)
 
         right.addWidget(self.topbar_actions_container)
         topbar_layout.addLayout(right)
-        outer.addWidget(topbar)
+        # 조작 줄은 화면에 붙이지 않는다: 메모·투명도·고정·상단바 접기는 맨 위 띠로 옮기고,
+        # 연·월 이동은 달력 제목 자리에 둔다. (상단바 숨기기는 맨 위 띠를 숨긴다)
+        self._legacy_topbar = topbar
+        self.memo_button.setToolTip("메모 목록 보기")
+        self.memo_button.clicked.disconnect()
+        self.memo_button.clicked.connect(lambda: self.switch_to_window("memo"))
+        self.memo_button.hide()  # 메모는 맨 위 [메모] 탭이 대신한다
+        self.memo_add_button = QPushButton("＋ 메모 추가")
+        self.memo_add_button.setToolTip("새 메모 작성")
+        self.memo_add_button.clicked.connect(self._add_memo_from_board)
+        self.window_switcher.add_action(self.memo_add_button, "primary", "memo")
+        self.memo_group_band_button = QPushButton("＋ 그룹 추가")
+        self.memo_group_band_button.setToolTip(
+            "메모 그룹 만들기 (그룹 칩을 오른쪽 클릭하면 바탕화면에 띄우기·이름 바꾸기·삭제)"
+        )
+        self.memo_group_band_button.clicked.connect(self._add_memo_group_from_board)
+        self.window_switcher.add_action(self.memo_group_band_button, "secondary", "memo")
+        self.window_switcher.add_trailing(self._window_controls)
+        self.topbar = self.window_switcher
 
         self.topbar_expand_container = QWidget()
         topbar_exp_layout = QHBoxLayout(self.topbar_expand_container)
@@ -1557,10 +1885,18 @@ class MainWindow(QMainWindow):
         self.topbar_expand_container.hide()
         outer.addWidget(self.topbar_expand_container)
 
-        body = QHBoxLayout()
+        self.page_stack = QStackedWidget()
+        self.page_stack.setObjectName("pageStack")
+        outer.addWidget(self.page_stack, 1)
+        self.calendar_page = QWidget()
+        self.calendar_page.setObjectName("calendarPage")
+        self.page_stack.addWidget(self.calendar_page)
+        self._pages: dict[str, QWidget] = {"calendar": self.calendar_page}
+
+        body = QHBoxLayout(self.calendar_page)
         self.body_layout = body
-        body.setSpacing(10)
-        outer.addLayout(body, 1)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
 
         calendar_panel = QFrame()
         self.calendar_panel = calendar_panel
@@ -1576,28 +1912,45 @@ class MainWindow(QMainWindow):
         title_box.setSpacing(2)
         self.calendar_title = QLabel("")
         self.calendar_title.setObjectName("title")
+        self.calendar_title.hide()  # 연·월은 아래 제목 버튼으로 표시 (누르면 연·월 선택)
         title_box.addWidget(self.calendar_title)
         header.addLayout(title_box)
+        header.addWidget(self.prev_button)
+        header.addWidget(self.year_button)
+        header.addWidget(self.month_button)
+        header.addWidget(self.next_button)
+        header.addSpacing(4)
+        header.addWidget(self.today_button)
         header.addStretch(1)
         search_wrap = QHBoxLayout()
         search_wrap.setContentsMargins(0, 0, 0, 0)
         search_wrap.setSpacing(6)
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("검색어 입력")
-        self.search_input.setFixedWidth(140)
+        self.search_input.setPlaceholderText("일정 검색 (Enter)")
+        # 창이 좁으면 줄어들고(최소 120), 넓으면 240까지 늘어난다 (고정 폭이면 좁을 때 옆 버튼과 겹침)
+        self.search_input.setMinimumWidth(120)
+        self.search_input.setMaximumWidth(240)
+        self.search_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.search_input.setClearButtonEnabled(True)
         self.search_input.returnPressed.connect(self._run_search)
         search_wrap.addWidget(self.search_input)
         self.search_button = QPushButton("검색")
-        self.search_button.setObjectName("primary")
+        self.search_button.setObjectName("topbarButton")  # 강조(초록)는 [일정 추가] 하나만
         self.search_button.clicked.connect(self._run_search)
         search_wrap.addWidget(self.search_button)
         header.addLayout(search_wrap)
+        # 인쇄·꾸미기는 [기능] 메뉴로 옮겼다 (다른 코드가 참조하므로 버튼은 만들되 화면에는 두지 않는다)
         self.print_button = self._top_button("인쇄")
         self.print_button.clicked.connect(self._print_calendar_view)
-        header.addWidget(self.print_button)
+        self.print_button.hide()
         self.decorate_button = self._top_button("꾸미기")
         self.decorate_button.clicked.connect(self._enter_sticker_edit_mode)
-        header.addWidget(self.decorate_button)
+        self.decorate_button.hide()
+        self.header_add_button = QPushButton("＋ 일정 추가")
+        self.header_add_button.setObjectName("primary")
+        self.header_add_button.setToolTip("선택한 날짜에 일정 등록")
+        self.header_add_button.clicked.connect(lambda: self._open_add_for_day(self.selected_day))
+        header.addWidget(self.header_add_button)
         self.decorate_done_button = self._top_button("완료")
         self.decorate_done_button.clicked.connect(self._complete_sticker_edit_mode)
         self.decorate_done_button.hide()
@@ -1606,88 +1959,120 @@ class MainWindow(QMainWindow):
         self.decorate_cancel_button.clicked.connect(self._cancel_sticker_edit_mode)
         self.decorate_cancel_button.hide()
         header.addWidget(self.decorate_cancel_button)
+        # 상단 띠 버튼(M, 30px)과 같은 높이로 맞춘다
+        for _w in (self.prev_button, self.next_button, self.today_button, self.search_input, self.search_button,
+                   self.header_add_button, self.decorate_done_button, self.decorate_cancel_button):
+            _w.setFixedHeight(30)
         calendar_layout.addLayout(header)
 
+        # 꾸미기 패널: 달력 위에 떠 있는 카드. 머리(끌기·제목·취소·완료) / 스티커 격자 / 선택한 스티커 조절
         self.sticker_toolbar = DraggableFrame()
         self.sticker_toolbar.main_window = self
         self.sticker_toolbar.setObjectName("stickerToolbar")
-        sticker_toolbar_layout = QHBoxLayout(self.sticker_toolbar)
-        sticker_toolbar_layout.setContentsMargins(10, 8, 10, 8)
-        sticker_toolbar_layout.setSpacing(6)
-        
-        # Drag Handle
-        drag_handle = QLabel("||")
+        self.sticker_toolbar.setFixedWidth(272)
+        # 달력과 배경색이 같아 구분되지 않으므로 그림자를 둔다 (테두리는 강조색)
+        from PySide6.QtWidgets import QGraphicsDropShadowEffect
+
+        _panel_shadow = QGraphicsDropShadowEffect(self.sticker_toolbar)
+        _panel_shadow.setBlurRadius(28)
+        _panel_shadow.setOffset(0, 6)
+        _panel_shadow.setColor(QColor(0, 0, 0, 70))
+        self.sticker_toolbar.setGraphicsEffect(_panel_shadow)
+        panel_layout = QVBoxLayout(self.sticker_toolbar)
+        panel_layout.setContentsMargins(14, 10, 14, 14)
+        panel_layout.setSpacing(10)
+
+        head_row = QHBoxLayout()
+        head_row.setSpacing(6)
+        drag_handle = QLabel("≡")
         drag_handle.setObjectName("stickerDragHandle")
         drag_handle.setCursor(Qt.SizeAllCursor)
-        drag_handle.setFixedWidth(16)
-        drag_handle.setFixedHeight(20)
-        drag_handle.setAlignment(Qt.AlignCenter)
-        sticker_toolbar_layout.addWidget(drag_handle)
-        
-        sticker_label = QLabel("스티커")
-        sticker_label.setObjectName("stickerToolbarLabel")
-        sticker_toolbar_layout.addWidget(sticker_label)
-        self.sticker_palette_host = QWidget()
-        self.sticker_palette_layout = QHBoxLayout(self.sticker_palette_host)
-        self.sticker_palette_layout.setContentsMargins(0, 0, 0, 0)
-        self.sticker_palette_layout.setSpacing(4)
-        self.sticker_palette_buttons: list[QToolButton] = []
-        sticker_toolbar_layout.addWidget(self.sticker_palette_host)
-        palette_divider = QFrame()
-        palette_divider.setObjectName("stickerDivider")
-        palette_divider.setFrameShape(QFrame.VLine)
-        sticker_toolbar_layout.addWidget(palette_divider)
-        self.sticker_library_button = self._top_button("설정")
-        self.sticker_library_button.setObjectName("stickerLibraryButton")
-        self.sticker_library_button.setFixedWidth(74)
-        self.sticker_library_button.setFixedHeight(28)
+        drag_handle.setToolTip("끌어서 옮기기")
+        head_row.addWidget(drag_handle)
+        sticker_title = QLabel("꾸미기")
+        sticker_title.setObjectName("stickerPanelTitle")
+        head_row.addWidget(sticker_title)
+        head_row.addStretch(1)
+        self.sticker_cancel_button = QPushButton("취소")
+        self.sticker_cancel_button.setObjectName("stickerSecondaryButton")
+        self.sticker_cancel_button.setToolTip("꾸미기 전 상태로 되돌리고 닫기")
+        self.sticker_cancel_button.clicked.connect(self._cancel_sticker_edit_mode)
+        head_row.addWidget(self.sticker_cancel_button)
+        self.sticker_done_button = QPushButton("완료")
+        self.sticker_done_button.setObjectName("stickerPrimaryButton")
+        self.sticker_done_button.setToolTip("붙인 스티커를 저장하고 닫기")
+        self.sticker_done_button.clicked.connect(self._complete_sticker_edit_mode)
+        head_row.addWidget(self.sticker_done_button)
+        panel_layout.addLayout(head_row)
+
+        stickers_head = QHBoxLayout()
+        stickers_label = QLabel("스티커 — 누르면 달력에 붙습니다")
+        stickers_label.setObjectName("stickerSectionLabel")
+        stickers_head.addWidget(stickers_label)
+        stickers_head.addStretch(1)
+        self.sticker_library_button = QPushButton("더보기")
+        self.sticker_library_button.setObjectName("stickerLinkButton")
+        self.sticker_library_button.setToolTip("전체 스티커·즐겨찾기·내 스티커 관리")
         self.sticker_library_button.clicked.connect(self._open_sticker_library)
-        sticker_toolbar_layout.addWidget(self.sticker_library_button)
-        controls_divider = QFrame()
-        controls_divider.setObjectName("stickerDivider")
-        controls_divider.setFrameShape(QFrame.VLine)
-        sticker_toolbar_layout.addWidget(controls_divider)
+        stickers_head.addWidget(self.sticker_library_button)
+        panel_layout.addLayout(stickers_head)
+
+        self.sticker_palette_host = QWidget()
+        self.sticker_palette_layout = QGridLayout(self.sticker_palette_host)
+        self.sticker_palette_layout.setContentsMargins(0, 0, 0, 0)
+        self.sticker_palette_layout.setHorizontalSpacing(6)
+        self.sticker_palette_layout.setVerticalSpacing(6)
+        self.sticker_palette_buttons: list[QToolButton] = []
+        panel_layout.addWidget(self.sticker_palette_host)
+
+        divider = QFrame()
+        divider.setObjectName("stickerDivider")
+        divider.setFixedHeight(1)
+        panel_layout.addWidget(divider)
+
+        selected_label = QLabel("선택한 스티커 — 달력에서 스티커를 눌러 고릅니다")
+        selected_label.setObjectName("stickerSectionLabel")
+        panel_layout.addWidget(selected_label)
+
+        size_row = QHBoxLayout()
+        size_row.setSpacing(8)
         scale_label = QLabel("크기")
-        scale_label.setObjectName("stickerToolbarLabel")
-        sticker_toolbar_layout.addWidget(scale_label)
+        scale_label.setObjectName("stickerFieldLabel")
+        scale_label.setFixedWidth(30)
+        size_row.addWidget(scale_label)
         self.sticker_scale_slider = QSlider(Qt.Horizontal)
         self.sticker_scale_slider.setObjectName("stickerScaleSlider")
         self.sticker_scale_slider.setRange(60, 360)
         self.sticker_scale_slider.setValue(100)
         self.sticker_scale_slider.valueChanged.connect(self._on_sticker_scale_changed)
-        self.sticker_scale_slider.setFixedWidth(120)
-        sticker_toolbar_layout.addWidget(self.sticker_scale_slider)
-        rotate_left = QPushButton("↺")
-        rotate_left.setObjectName("stickerMiniButton")
-        rotate_left.setFixedWidth(30)
-        rotate_left.setFixedHeight(28)
+        size_row.addWidget(self.sticker_scale_slider, 1)
+        panel_layout.addLayout(size_row)
+
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
+        rotate_label = QLabel("회전")
+        rotate_label.setObjectName("stickerFieldLabel")
+        rotate_label.setFixedWidth(30)
+        action_row.addWidget(rotate_label)
+        rotate_left = QPushButton("↺ 왼쪽")
+        rotate_left.setObjectName("stickerSecondaryButton")
         rotate_left.clicked.connect(lambda: self._rotate_selected_sticker(-15))
-        sticker_toolbar_layout.addWidget(rotate_left)
-        rotate_right = QPushButton("↻")
-        rotate_right.setObjectName("stickerMiniButton")
-        rotate_right.setFixedWidth(30)
-        rotate_right.setFixedHeight(28)
+        action_row.addWidget(rotate_left)
+        rotate_right = QPushButton("↻ 오른쪽")
+        rotate_right.setObjectName("stickerSecondaryButton")
         rotate_right.clicked.connect(lambda: self._rotate_selected_sticker(15))
-        sticker_toolbar_layout.addWidget(rotate_right)
+        action_row.addWidget(rotate_right)
+        action_row.addStretch(1)
         delete_button = QPushButton("삭제")
         delete_button.setObjectName("stickerDangerButton")
-        delete_button.setFixedHeight(28)
         delete_button.clicked.connect(self._delete_selected_sticker)
-        sticker_toolbar_layout.addWidget(delete_button)
-        
-        # Stretch to push close button to the right
-        sticker_toolbar_layout.addStretch(1)
-        
-        # Close Button
+        action_row.addWidget(delete_button)
+        panel_layout.addLayout(action_row)
+
+        # 예전 닫기(×) 버튼은 [취소]·[완료] 로 대신한다 (다른 코드가 참조할 수 있어 숨긴 채 둔다)
         self.sticker_close_button = QPushButton()
-        self.sticker_close_button.setIcon(QIcon(str(asset_path("memo_close.svg"))))
-        self.sticker_close_button.setIconSize(QSize(12, 12))
-        self.sticker_close_button.setObjectName("stickerCloseButton")
-        self.sticker_close_button.setFixedWidth(24)
-        self.sticker_close_button.setFixedHeight(24)
-        self.sticker_close_button.clicked.connect(self._on_sticker_close_clicked)
-        sticker_toolbar_layout.addWidget(self.sticker_close_button)
-        
+        self.sticker_close_button.hide()
+
         self.sticker_toolbar.hide()
         self._rebuild_sticker_palette_buttons()
 
@@ -1752,31 +2137,23 @@ class MainWindow(QMainWindow):
         info_layout.addWidget(self.info_title, 1)
         self.info_export_button = QPushButton("엑셀저장")
         self.info_export_button.setObjectName("topbarButton")
-        self.info_export_button.setFixedHeight(24)
+        self.info_export_button.setFixedHeight(30)
         self.info_export_button.clicked.connect(self._export_search_results_to_excel)
         self.info_export_button.hide()
         info_layout.addWidget(self.info_export_button)
         self.info_add_button = QPushButton("일정 추가")
         self.info_add_button.setObjectName("primary")
-        self.info_add_button.setFixedHeight(24)
+        self.info_add_button.setFixedHeight(30)
         self.info_add_button.clicked.connect(self._handle_add_button)
         info_layout.addWidget(self.info_add_button)
         self.info_group_button = QPushButton("그룹")
         self.info_group_button.setObjectName("topbarButton")
-        self.info_group_button.setFixedHeight(24)
+        self.info_group_button.setFixedHeight(30)
         self.info_group_button.setToolTip("플로팅 메모 그룹 관리")
         self.info_group_button.clicked.connect(self._handle_group_button)
         self.info_group_button.hide()
         info_layout.addWidget(self.info_group_button)
 
-        self.sidebar_close_btn = QPushButton()
-        self.sidebar_close_btn.setIcon(QIcon(str(asset_path("chevron_right.svg"))))
-        self.sidebar_close_btn.setIconSize(QSize(12, 12))
-        self.sidebar_close_btn.setObjectName("topbarButton")
-        self.sidebar_close_btn.setFixedSize(24, 24)
-        self.sidebar_close_btn.setToolTip("우측 사이드바 숨기기 (단축키: Ctrl+B)")
-        self.sidebar_close_btn.clicked.connect(self._toggle_sidebar)
-        info_layout.addWidget(self.sidebar_close_btn)
 
         sidebar_layout.addWidget(info_card)
 
@@ -1799,10 +2176,28 @@ class MainWindow(QMainWindow):
 
         self.body_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.body_splitter.setObjectName("bodySplitter")
-        self.body_splitter.setHandleWidth(8)
+        self.body_splitter.setHandleWidth(1)
         self.body_splitter.setChildrenCollapsible(False)
+        from taskcalendar.ui_common import make_collapsed_strip, make_gutter
+
+        self.sidebar_container = QWidget()
+        sidebar_container_layout = QHBoxLayout(self.sidebar_container)
+        sidebar_container_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_container_layout.setSpacing(0)
+        self.sidebar_gutter = make_gutter(self.palette, "▶", "사이드바 접기 (Ctrl+B)", self._toggle_sidebar)
+        sidebar_container_layout.addWidget(self.sidebar_gutter)
+        sidebar_container_layout.addWidget(self.sidebar_panel, 1)
+        # 컨테이너도 사이드바 패널의 최소·최대 폭(+접기 기둥)을 따라야 끌어서 넓힐 때 빈 회색 틈이 생기지 않는다
+        _gutter_w = self.sidebar_gutter.width() or 11
+        self.sidebar_container.setMinimumWidth(self.sidebar_panel.minimumWidth() + _gutter_w)
+        self.sidebar_container.setMaximumWidth(self.sidebar_panel.maximumWidth() + _gutter_w)
+        self.sidebar_collapsed_strip = make_collapsed_strip(
+            self.palette, "◀", "클릭하여 사이드바 펼치기 (Ctrl+B)", self._toggle_sidebar
+        )
+        self.sidebar_collapsed_strip.hide()
+
         self.body_splitter.addWidget(calendar_panel)
-        self.body_splitter.addWidget(self.sidebar_panel)
+        self.body_splitter.addWidget(self.sidebar_container)
         self.body_splitter.setStretchFactor(0, 1)
         self.body_splitter.setStretchFactor(1, 0)
         self.body_splitter.splitterMoved.connect(self._on_sidebar_splitter_moved)
@@ -1814,13 +2209,20 @@ class MainWindow(QMainWindow):
             handle.installEventFilter(self)
 
         body.addWidget(self.body_splitter, 1)
+        body.addWidget(self.sidebar_collapsed_strip)
+        self.memo_page = self._build_memo_page()
+        self.page_stack.addWidget(self.memo_page)
+        self._pages["memo"] = self.memo_page
         self._sync_sticker_overlay()
         self._apply_clickable_cursor()
 
         from PySide6.QtGui import QKeySequence, QShortcut
-        self.shortcut_sidebar = QShortcut(QKeySequence("Ctrl+B"), self)
+        # 캘린더 탭 전용 단축키 (문서·업무 탭의 에디터 단축키와 겹치지 않게 캘린더 화면에만 건다)
+        self.shortcut_sidebar = QShortcut(QKeySequence("Ctrl+B"), self.calendar_page)
+        self.shortcut_sidebar.setContext(Qt.WidgetWithChildrenShortcut)
         self.shortcut_sidebar.activated.connect(self._toggle_sidebar)
-        self.shortcut_topbar = QShortcut(QKeySequence("Ctrl+T"), self)
+        self.shortcut_topbar = QShortcut(QKeySequence("Ctrl+T"), self.calendar_page)
+        self.shortcut_topbar.setContext(Qt.WidgetWithChildrenShortcut)
         self.shortcut_topbar.activated.connect(self._toggle_topbar)
 
         self._apply_sidebar_visibility(self._sidebar_visible, save=False)
@@ -1874,7 +2276,7 @@ class MainWindow(QMainWindow):
             ("Down", 0, 1),
         ]
         for key, dx, dy in bindings:
-            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut = QShortcut(QKeySequence(key), getattr(self, "calendar_page", self))
             shortcut.setContext(Qt.WidgetWithChildrenShortcut)
             shortcut.activated.connect(lambda dx=dx, dy=dy: self._nudge_selected_sticker(dx, dy))
             self._sticker_nudge_shortcuts.append(shortcut)
@@ -1889,12 +2291,14 @@ class MainWindow(QMainWindow):
             ("PageDown", lambda: self._change_month(1)),
         ]
         for key, callback in bindings:
-            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut = QShortcut(QKeySequence(key), getattr(self, "calendar_page", self))
             shortcut.setContext(Qt.WidgetWithChildrenShortcut)
             shortcut.activated.connect(lambda cb=callback: self._handle_calendar_navigation(cb))
             self._calendar_nav_shortcuts.append(shortcut)
 
     def _handle_calendar_navigation(self, callback) -> None:
+        if getattr(self, "_current_page", "calendar") != "calendar":
+            return
         if self._sticker_edit_mode and self._selected_sticker_id:
             return
         focus_widget = QApplication.focusWidget()
@@ -1905,6 +2309,8 @@ class MainWindow(QMainWindow):
 
     def _handle_calendar_navigation_key(self, event) -> bool:
         if not self.isActiveWindow():
+            return False
+        if getattr(self, "_current_page", "calendar") != "calendar":
             return False
         if self._sticker_edit_mode and self._selected_sticker_id:
             return False
@@ -2043,16 +2449,7 @@ class MainWindow(QMainWindow):
         tray.setIcon(app_icon())
         tray.setToolTip("캘린더")
         menu = QMenu(self)
-        menu.setStyleSheet(
-            """
-            QMenu {
-                padding: 6px 0;
-            }
-            QMenu::item {
-                padding: 8px 20px;
-            }
-            """
-        )
+        style_menu(menu, self.palette)
         open_action = menu.addAction("열기 / 숨기기")
         open_action.triggered.connect(self._toggle_window_visibility)
         menu.addSeparator()
@@ -2071,7 +2468,7 @@ class MainWindow(QMainWindow):
         work_open_action = menu.addAction("업무 관리 열기")
         work_open_action.triggered.connect(self._open_work_from_tray)
         menu.addSeparator()
-        self.act_desktop_widget = menu.addAction("🖥 바탕화면 달력 위젯")
+        self.act_desktop_widget = menu.addAction("바탕화면 달력 위젯")
         self.act_desktop_widget.setCheckable(True)
         self.act_desktop_widget.setChecked(self.repository.get_setting("desktop_widget_enabled", "0") == "1")
         self.act_desktop_widget.triggered.connect(lambda: self._toggle_desktop_widget())
@@ -2121,7 +2518,7 @@ class MainWindow(QMainWindow):
     def _open_memo_from_tray(self) -> None:
         """트레이에서 메모 화면으로 바로 이동"""
         self._show_from_tray()
-        self._set_sidebar_mode("memo")
+        self.switch_to_window("memo")
 
     def _open_document_from_tray(self) -> None:
         """트레이에서 문서 관리 창 열기"""
@@ -2148,6 +2545,7 @@ class MainWindow(QMainWindow):
         self._last_alert_check = now
 
         self._poll_alarms(check_from, now)
+        self._poll_reply_deadlines(now)
 
         keep_after = now - timedelta(days=2)
         self._shown_alert_keys = {k: v for k, v in self._shown_alert_keys.items() if v >= keep_after}
@@ -2169,6 +2567,39 @@ class MainWindow(QMainWindow):
                 if check_from < due_at <= now:
                     self._shown_alert_keys[key] = now
                     self._show_alert(entry, target_day)
+
+    def _poll_reply_deadlines(self, now: datetime) -> None:
+        """문서 회신기한 알림. PC 가 꺼져 있어 놓친 알림도 다음 확인 때 함께 뜬다."""
+        from taskcalendar import doc_reply
+
+        # 알림 타이머는 1초마다 돌지만 회신기한은 30초에 한 번만 확인한다.
+        last_check = getattr(self, "_last_reply_deadline_check", None)
+        if last_check is not None and (now - last_check).total_seconds() < 30:
+            return
+        self._last_reply_deadline_check = now
+        try:
+            pending = doc_reply.collect_pending_alerts(self.repository, now)
+        except Exception:
+            logger.exception("reply deadline alert check failed")
+            return
+        if not pending:
+            return
+        if len(pending) > 3:
+            # 여러 건이 밀려 있으면 한 번에 모아서 보여 준다.
+            names = ", ".join(doc.title for doc, _ in pending[:3])
+            self._show_text_alert(f"회신기한 알림 {len(pending)}건", f"{names} 외 {len(pending) - 3}건 · 문서 관리에서 확인하세요")
+            return
+        for doc, kind in pending:
+            title, detail = doc_reply.alert_message(doc, kind)
+            self._show_text_alert(title, detail)
+
+    def _show_text_alert(self, title: str, detail: str) -> None:
+        box = AlertToast(self.palette, title, detail)
+        box.closed.connect(self._on_alert_box_closed)
+        self._active_alert_boxes.append(box)
+        box.show()
+        self._reposition_alert_boxes()
+        box.raise_()
 
     @staticmethod
     def _alert_due_datetime(entry: CalendarEntry, target_day: date) -> datetime | None:
@@ -2558,22 +2989,26 @@ class MainWindow(QMainWindow):
             pass
         return False
 
+    def _toggle_page(self, name: str) -> None:
+        if self.current_page_name() == name and self.isVisible() and self._is_window_in_foreground(self):
+            self.hide()
+            QTimer.singleShot(0, self._maintain_memos_on_calendar_minimize)
+            return
+        self.switch_to_window(name)
+
     def _toggle_task_manager(self) -> None:
-        dlg = getattr(self, "_task_manager_dialog", None)
-        if dlg is not None and self._is_window_in_foreground(dlg):
-            dlg.hide()
-        else:
-            self._open_task_manager()
+        self._toggle_page("doc")
 
     def _toggle_work_manager(self) -> None:
-        dlg = getattr(self, "_work_manager_dialog", None)
-        if dlg is not None and self._is_window_in_foreground(dlg):
-            dlg.hide()
-        else:
-            self._open_work_manager()
+        self._toggle_page("work")
 
     def _toggle_window_visibility(self) -> None:
-        if self.isVisible() and not self.isMinimized():
+        # 다른 탭을 보고 있으면 숨기지 않고 캘린더 탭으로 돌아온다.
+        if self.current_page_name() != "calendar" and self.isVisible() and not self.isMinimized():
+            self.switch_to_window("calendar")
+            return
+        # 맨 앞에 있을 때만 숨김 (다른 창 뒤에 가려져 있으면 앞으로 올림)
+        if self._is_window_in_foreground(self):
             self.hide()
             # 캘린더가 숨겨질 때 보던 메모가 다른 앱 뒤로 숨지 않도록 포그라운드 유지
             QTimer.singleShot(0, self._maintain_memos_on_calendar_minimize)
@@ -2729,14 +3164,12 @@ class MainWindow(QMainWindow):
             y = max(0, min(self._sticker_toolbar_pos.y(), rect.height() - height))
             self.sticker_toolbar.setGeometry(x, y, desired_w, height)
             return
-        topbar_geo = self.topbar.geometry()
-        anchor = self.prev_button.mapTo(self.root_widget, QPoint(0, 0))
-        margin = 10
-        x = anchor.x()
-        y = topbar_geo.y() + max(0, (topbar_geo.height() - height) // 2)
-        avail_w = max(120, topbar_geo.right() - x - margin)
-        width = max(120, min(avail_w, desired_w))
-        self.sticker_toolbar.setGeometry(x, y, width, height)
+        grid = self.calendar_grid_widget
+        top_right = grid.mapTo(self.root_widget, QPoint(grid.width(), 0))
+        margin = 16
+        x = max(0, top_right.x() - desired_w - margin)
+        y = max(0, top_right.y() + 36)
+        self.sticker_toolbar.setGeometry(x, y, desired_w, height)
 
     def _sticker_metrics(self) -> tuple[int, int, int, int]:
         overlay_w = max(1, self.sticker_overlay.width())
@@ -2849,6 +3282,18 @@ class MainWindow(QMainWindow):
             pixmap = QPixmap(str(path))
             if not pixmap.isNull():
                 assets[f"builtin:{path.stem}"] = pixmap
+        # 옛 기본 스티커: 이미 달력에 붙인 것은 계속 보이도록 불러오되, 목록·팔레트에는 내놓지 않는다.
+        self._legacy_sticker_keys: set[str] = set()
+        for path in sorted((root / "legacy").glob("*.png")):
+            pixmap = QPixmap(str(path))
+            if not pixmap.isNull():
+                assets[f"builtin:{path.stem}"] = pixmap
+                self._legacy_sticker_keys.add(f"builtin:{path.stem}")
+        # 스티커 v2
+        for item in sticker_v2_manifest().get("stickers", []):
+            pixmap = QPixmap(str(root / "v2" / f"{item['name']}.png"))
+            if not pixmap.isNull():
+                assets[f"builtin:{item['name']}"] = pixmap
         user_root = self._user_sticker_dir()
         user_root.mkdir(parents=True, exist_ok=True)
         for path in sorted(user_root.glob("*.png")):
@@ -2860,6 +3305,9 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _sticker_display_name(asset_name: str) -> str:
         name = asset_name.split(":", 1)[1] if ":" in asset_name else asset_name
+        for item in sticker_v2_manifest().get("stickers", []):
+            if item["name"] == name:
+                return item["label"]
         if name == "blue_box":
             return "파란 박스"
         if name == "mint_box":
@@ -2884,20 +3332,18 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _base_builtin_sticker_names() -> list[str]:
         return [
-            "bunny",
-            "cat",
-            "circle_red",
-            "clover",
-            "heart_pink",
-            "coffee_time",
-            "rice_bowl",
-            "x_red",
-            "leave_day",
-            "medicine_pill",
-            "chevron_left_red",
-            "chevron_right_red",
-            "blue_box",
-            "orange_line",
+            "v2_deadline_flag",
+            "v2_important",
+            "v2_done_check",
+            "v2_meeting",
+            "v2_business_trip",
+            "v2_vacation",
+            "v2_meal",
+            "v2_tea_time",
+            "v2_cheers",
+            "v2_birthday_cake",
+            "v2_heart",
+            "v2_highlighter_yellow",
         ]
 
     def _default_sticker_keys(self) -> list[str]:
@@ -2930,7 +3376,7 @@ class MainWindow(QMainWindow):
         self.repository.save()
 
     def _sanitize_sticker_preferences(self) -> None:
-        valid = set(self._sticker_assets.keys())
+        valid = set(self._sticker_assets.keys()) - getattr(self, "_legacy_sticker_keys", set())
         seen_fav: set[str] = set()
         self._sticker_favorites = [name for name in self._sticker_favorites if name in valid and not (name in seen_fav or seen_fav.add(name))]
         seen_recent: set[str] = set()
@@ -2951,19 +3397,22 @@ class MainWindow(QMainWindow):
                 return user
         return None
 
+    def _is_hidden_sticker(self, name: str) -> bool:
+        return name in getattr(self, "_legacy_sticker_keys", set())
+
     def _quick_sticker_keys(self, limit: int = 8) -> list[str]:
         result: list[str] = []
         seen: set[str] = set()
         ordered = self._sticker_favorites + self._sticker_recent + self._default_sticker_keys()
         for name in ordered:
-            if name not in self._sticker_assets or name in seen:
+            if name not in self._sticker_assets or name in seen or self._is_hidden_sticker(name):
                 continue
             seen.add(name)
             result.append(name)
             if len(result) >= limit:
                 return result
         for name in sorted(self._sticker_assets.keys()):
-            if name in seen:
+            if name in seen or self._is_hidden_sticker(name):
                 continue
             result.append(name)
             if len(result) >= limit:
@@ -2982,7 +3431,7 @@ class MainWindow(QMainWindow):
             return
         self._clear_layout_widgets(self.sticker_palette_layout)
         self.sticker_palette_buttons = []
-        for name in self._quick_sticker_keys():
+        for name in self._quick_sticker_keys(12):  # 패널 격자 2줄(6×2)
             pix = self._sticker_assets.get(name)
             if pix is None:
                 continue
@@ -2991,15 +3440,15 @@ class MainWindow(QMainWindow):
             button.setObjectName("stickerChip")
             button.setIcon(QIcon(preview))
             button.setIconSize(preview.size())
-            button.setFixedSize(26, 26)
+            button.setFixedSize(34, 34)
             button.setToolTip(self._sticker_display_name(name))
             button.clicked.connect(lambda checked=False, n=name: self._add_sticker(n))
+            index = len(self.sticker_palette_buttons)
             self.sticker_palette_buttons.append(button)
-            self.sticker_palette_layout.addWidget(button)
-        self.sticker_palette_layout.addStretch(1)
+            self.sticker_palette_layout.addWidget(button, index // 6, index % 6)
 
     def _quick_palette_preview_pixmap(self, asset_name: str, source: QPixmap) -> QPixmap:
-        size = 18
+        size = 24
         key = asset_name.split(":", 1)[1] if ":" in asset_name else asset_name
 
         # Dedicated simplified set for small quick palette chips.
@@ -3125,8 +3574,9 @@ class MainWindow(QMainWindow):
     def _sticker_library_order(self) -> list[str]:
         seen: set[str] = set()
         ordered: list[str] = []
-        for name in self._sticker_favorites + self._sticker_recent + self._default_sticker_keys() + sorted(self._sticker_assets.keys()):
-            if name in seen or name not in self._sticker_assets:
+        v2_order = [f"builtin:{item['name']}" for item in sticker_v2_manifest().get("stickers", [])]
+        for name in self._sticker_favorites + self._sticker_recent + self._default_sticker_keys() + v2_order + sorted(self._sticker_assets.keys()):
+            if name in seen or name not in self._sticker_assets or self._is_hidden_sticker(name):
                 continue
             seen.add(name)
             ordered.append(name)
@@ -3137,55 +3587,116 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "안내", "스티커 이미지가 없습니다.")
             return
 
+        from taskcalendar.ui_common import style_button
+
+        p = self.palette
         dialog = QDialog(self)
         dialog.setWindowTitle("스티커 설정")
         dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        dialog.resize(600, 420)
+        dialog.resize(720, 560)
         dialog.setStyleSheet(
-            dialog_stylesheet(self.palette)
+            dialog_stylesheet(p)
             + f"""
+            QDialog {{ background: {p['panel']}; }}
+            QScrollArea, QScrollArea > QWidget > QWidget {{ background: {p['panel']}; border: none; }}
+            QLabel#stickerLibTitle {{ color: {p['text']}; font-size: 15px; font-weight: 700; }}
+            QLabel#stickerLibHint {{ color: {p['muted']}; font-size: 12px; }}
+            QFrame#stickerCard {{
+                background: {p['panel']};
+                border: 1px solid {p.get('line_soft', p['line'])};
+                border-radius: 10px;
+            }}
+            QFrame#stickerCard:hover {{ border: 1px solid {p['accent']}; background: {p['accent_soft']}; }}
+            QToolButton#stickerCardImage {{ background: transparent; border: none; border-radius: 8px; padding: 4px; }}
+            QLabel#stickerCardName {{ color: {p['text']}; font-size: 12px; background: transparent; border: none; }}
             QToolButton#favoriteToggle {{
-                background: {self.palette['panel_alt']};
-                color: {self.palette['muted']};
-                border: 1px solid {self.palette['line']};
-                border-radius: 7px;
-                padding: 2px 8px;
-                font-weight: 700;
+                background: transparent;
+                color: {p['muted']};
+                border: 1px solid {p.get('line_soft', p['line'])};
+                border-radius: 6px;
+                padding: 2px 6px;
+                font-size: 11px;
             }}
-            QToolButton#favoriteToggle:hover {{
-                background: {self.palette['accent_soft']};
-            }}
+            QToolButton#favoriteToggle:hover {{ border-color: {p['accent']}; color: {p['accent']}; }}
             QToolButton#favoriteToggle:checked {{
-                background: {self.palette['accent']};
-                border-color: {self.palette['accent']};
-                color: {self.palette['button_text']};
+                background: {p['accent_soft']};
+                border-color: {p['accent']};
+                color: {p['accent']};
+                font-weight: 700;
             }}
             QPushButton#stickerDeleteButton {{
-                background: {self.palette['panel_alt']};
-                color: {self.palette['danger']};
-                border: 1px solid {self.palette['line']};
+                background: transparent;
+                color: {p['danger']};
+                border: 1px solid {p.get('line_soft', p['line'])};
                 border-radius: 6px;
-                padding: 2px 8px;
-                font-weight: 700;
+                padding: 2px 6px;
+                font-size: 11px;
             }}
-            QPushButton#stickerDeleteButton:hover {{
-                border-color: {self.palette['danger']};
+            QPushButton#stickerDeleteButton:hover {{ border-color: {p['danger']}; }}
+            QPushButton#stickerCatTab {{
+                background: transparent;
+                color: {p['muted']};
+                border: 1px solid {p.get('line_soft', p['line'])};
+                border-radius: 14px;
+                padding: 3px 12px;
+                font-size: 12px;
+            }}
+            QPushButton#stickerCatTab:hover {{ color: {p['accent']}; border-color: {p['accent']}; }}
+            QPushButton#stickerCatTab:checked {{
+                background: {p['accent']};
+                color: {p.get('button_text', '#FFFFFF')};
+                border-color: {p['accent']};
+                font-weight: 700;
             }}
             """
         )
 
         root = QVBoxLayout(dialog)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(8)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(10)
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
-        top.setSpacing(6)
-        top.addWidget(QLabel("즐겨찾기/최근은 상단 퀵 팔레트에 우선 표시됩니다."))
-        top.addStretch(1)
+        top.setSpacing(8)
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
+        title_lbl = QLabel("스티커")
+        title_lbl.setObjectName("stickerLibTitle")
+        title_box.addWidget(title_lbl)
+        hint_lbl = QLabel("그림을 누르면 달력에 붙습니다 · ★ 즐겨찾기한 스티커는 꾸미기 패널 맨 앞에 나옵니다 (최대 8개)")
+        hint_lbl.setObjectName("stickerLibHint")
+        title_box.addWidget(hint_lbl)
+        top.addLayout(title_box, 1)
         import_btn = QPushButton("PNG 가져오기")
-        top.addWidget(import_btn)
+        import_btn.setToolTip("내 PNG 이미지를 스티커로 추가")
+        style_button(import_btn, p, "secondary", "M")
+        top.addWidget(import_btn, 0, Qt.AlignTop)
         root.addLayout(top)
+
+        # 분류 탭: 전체 / v2 분류들 / 내 스티커
+        category_of: dict[str, str] = {
+            f"builtin:{item['name']}": item["category"] for item in sticker_v2_manifest().get("stickers", [])
+        }
+        tabs = [("all", "전체")] + [(c["id"], c["label"]) for c in sticker_v2_manifest().get("categories", [])]
+        tabs.append(("mine", "내 스티커"))
+        current_cat = {"id": "all"}
+        tab_buttons: dict[str, QPushButton] = {}
+        # 탭이 많아 한 줄이면 잘리므로 6개씩 두 줄로 놓는다 (알약 모양 버튼)
+        tab_grid = QGridLayout()
+        tab_grid.setContentsMargins(0, 0, 0, 0)
+        tab_grid.setHorizontalSpacing(6)
+        tab_grid.setVerticalSpacing(6)
+        per_row = 6
+        for idx, (cat_id, cat_label) in enumerate(tabs):
+            tab_btn = QPushButton(cat_label)
+            tab_btn.setObjectName("stickerCatTab")
+            tab_btn.setCheckable(True)
+            tab_btn.setChecked(cat_id == "all")
+            tab_btn.setFixedHeight(28)
+            tab_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            tab_grid.addWidget(tab_btn, idx // per_row, idx % per_row)
+            tab_buttons[cat_id] = tab_btn
+        root.addLayout(tab_grid)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -3193,63 +3704,74 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         grid = QGridLayout(panel)
         grid.setContentsMargins(2, 2, 2, 2)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(8)
-        columns = 4
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
+        columns = 5
+
+        def _in_current_category(name: str) -> bool:
+            cat = current_cat["id"]
+            if cat == "all":
+                return True
+            if cat == "mine":
+                return name.startswith("user:")
+            return category_of.get(name) == cat
 
         def _rebuild_library_cards() -> None:
             while grid.count():
                 item = grid.takeAt(0)
                 widget = item.widget()
                 if widget is not None:
+                    widget.hide()  # 지워지기 전까지 남아 겹쳐 보이지 않게
                     widget.deleteLater()
 
-            for idx, name in enumerate(self._sticker_library_order()):
+            visible_names = [n for n in self._sticker_library_order() if _in_current_category(n)]
+            if not visible_names:
+                empty = QLabel("이 분류에는 스티커가 없습니다. 'PNG 가져오기' 로 내 스티커를 추가할 수 있습니다."
+                               if current_cat["id"] == "mine" else "이 분류에는 스티커가 없습니다.")
+                empty.setObjectName("stickerLibHint")
+                grid.addWidget(empty, 0, 0, 1, columns)
+            for idx, name in enumerate(visible_names):
                 pix = self._sticker_assets[name]
+                display = self._sticker_display_name(name)
                 card = QFrame()
-                card.setObjectName("softPanel")
-                card.setFixedWidth(116)
+                card.setObjectName("stickerCard")
+                card.setFixedWidth(118)
                 card_layout = QVBoxLayout(card)
-                card_layout.setContentsMargins(8, 8, 8, 8)
-                card_layout.setSpacing(4)
+                card_layout.setContentsMargins(8, 10, 8, 8)
+                card_layout.setSpacing(6)
 
                 btn = QToolButton()
+                btn.setObjectName("stickerCardImage")
                 btn.setIcon(QIcon(pix))
                 btn.setIconSize(pix.size().boundedTo(QSize(56, 56)))
-                btn.setToolTip(self._sticker_display_name(name))
+                btn.setFixedSize(68, 68)
+                btn.setToolTip(f"{display} — 눌러서 달력에 붙이기")
                 btn.clicked.connect(lambda checked=False, n=name: (self._add_sticker(n), dialog.accept()))
                 card_layout.addWidget(btn, 0, Qt.AlignHCenter)
 
-                label = QLabel(self._sticker_display_name(name))
-                label.setToolTip(self._sticker_display_name(name))
+                label = QLabel(self._compact_name(display, 11))
+                label.setObjectName("stickerCardName")
+                label.setToolTip(display)
                 label.setAlignment(Qt.AlignCenter)
-                label.setFixedWidth(92)
-                label.setWordWrap(False)
-                label.setText(self._compact_name(self._sticker_display_name(name), 11))
                 card_layout.addWidget(label)
 
                 fav = QToolButton()
                 fav.setObjectName("favoriteToggle")
                 fav.setCheckable(True)
                 fav.setChecked(name in self._sticker_favorites)
-                fav.setText("선택")
+                fav.setText("★ 즐겨찾기" if fav.isChecked() else "☆ 즐겨찾기")
+                fav.setToolTip("꾸미기 패널 맨 앞에 표시")
                 fav.setFixedHeight(24)
-                fav.setFixedWidth(44)
 
                 def _on_fav_toggled(checked: bool, n: str = name, b: QToolButton = fav) -> None:
-                    if checked:
-                        ok = self._toggle_sticker_favorite(n, True)
-                        if not ok:
-                            b.blockSignals(True)
-                            b.setChecked(False)
-                            b.blockSignals(False)
-                            b.setText("선택")
-                            QMessageBox.information(self, "안내", "선택은 최대 8개까지 가능합니다.")
-                            return
-                        b.setText("선택")
-                        return
-                    self._toggle_sticker_favorite(n, False)
-                    b.setText("선택")
+                    if checked and not self._toggle_sticker_favorite(n, True):
+                        b.blockSignals(True)
+                        b.setChecked(False)
+                        b.blockSignals(False)
+                        QMessageBox.information(dialog, "안내", "즐겨찾기는 최대 8개까지 가능합니다.")
+                    elif not checked:
+                        self._toggle_sticker_favorite(n, False)
+                    b.setText("★ 즐겨찾기" if b.isChecked() else "☆ 즐겨찾기")
 
                 fav.toggled.connect(_on_fav_toggled)
 
@@ -3263,14 +3785,13 @@ class MainWindow(QMainWindow):
                     delete_btn = QPushButton("삭제")
                     delete_btn.setObjectName("stickerDeleteButton")
                     delete_btn.setFixedHeight(24)
-                    delete_btn.setFixedWidth(44)
 
                     def _delete_user_sticker(checked: bool = False, n: str = name) -> None:
-                        display = self._sticker_display_name(n)
+                        shown = self._sticker_display_name(n)
                         reply = QMessageBox.question(
                             dialog,
                             "삭제 확인",
-                            f"'{display}' 스티커를 삭제할까요?\n달력에 배치한 항목도 함께 제거됩니다.",
+                            f"'{shown}' 스티커를 삭제할까요?\n달력에 배치한 항목도 함께 제거됩니다.",
                             QMessageBox.Yes | QMessageBox.No,
                             QMessageBox.No,
                         )
@@ -3280,17 +3801,14 @@ class MainWindow(QMainWindow):
                             QMessageBox.warning(self, "실패", "스티커 삭제에 실패했습니다.")
                             return
                         _rebuild_library_cards()
-                        QMessageBox.information(self, "완료", "스티커를 삭제했습니다.")
 
                     delete_btn.clicked.connect(_delete_user_sticker)
                     action_row.addWidget(delete_btn)
 
                 action_row.addStretch(1)
                 card_layout.addLayout(action_row)
-
-                row = idx // columns
-                col = idx % columns
-                grid.addWidget(card, row, col)
+                grid.addWidget(card, idx // columns, idx % columns)
+            grid.setRowStretch(grid.rowCount(), 1)
 
         def _import_and_refresh() -> None:
             imported = self._add_stickers_from_png_files()
@@ -3299,6 +3817,16 @@ class MainWindow(QMainWindow):
             _rebuild_library_cards()
             QMessageBox.information(self, "완료", f"{imported}개 PNG를 추가했습니다.")
 
+        def _select_category(cat_id: str) -> None:
+            current_cat["id"] = cat_id
+            for cid, b in tab_buttons.items():
+                b.setChecked(cid == cat_id)
+            _rebuild_library_cards()
+            scroll.verticalScrollBar().setValue(0)
+
+        for cat_id, b in tab_buttons.items():
+            b.clicked.connect(lambda _=False, c=cat_id: _select_category(c))
+
         import_btn.clicked.connect(_import_and_refresh)
         _rebuild_library_cards()
 
@@ -3306,6 +3834,7 @@ class MainWindow(QMainWindow):
         root.addWidget(scroll, 1)
 
         close_btn = QPushButton("닫기")
+        style_button(close_btn, p, "secondary", "M")
         close_btn.clicked.connect(dialog.reject)
         close_row = QHBoxLayout()
         close_row.addStretch(1)
@@ -3402,6 +3931,27 @@ class MainWindow(QMainWindow):
                     "pause_frame": frame_count - 1,
                     "restart_frame": 0,
                 }
+        for item in sticker_v2_manifest().get("stickers", []):
+            if not item.get("animated"):
+                continue
+            name = item["name"]
+            sheet = QPixmap(str(asset_path("stickers", "v2", "sprites", name, f"{name}_sheet.png")))
+            if sheet.isNull():
+                continue
+            frame_count = 8
+            frame_w = sheet.width() // frame_count
+            if frame_w <= 0 or sheet.height() <= 0:
+                continue
+            animations[name] = {
+                "sheet": sheet,
+                "frame_count": frame_count,
+                "frame_w": frame_w,
+                "frame_h": sheet.height(),
+                "frame_ms": 130,
+                "pause_ms": 2400,
+                "pause_frame": int(item.get("still", 0)),
+                "restart_frame": 0,
+            }
         return animations
 
     def _setup_sticker_animation_timer(self) -> None:
@@ -3865,11 +4415,14 @@ class MainWindow(QMainWindow):
         self._sticker_snapshot = json.loads(json.dumps(self._sticker_store, ensure_ascii=False))
         self._sticker_edit_mode = True
         self._selected_sticker_id = None
-        self.print_button.hide()
-        self.decorate_button.hide()
-        self.decorate_done_button.show()
-        self.decorate_cancel_button.show()
+        self.print_button.setEnabled(False)
+        self.decorate_button.setEnabled(False)
+        self.header_add_button.setEnabled(False)
+        self.action_decorate.setEnabled(False)
+        self.decorate_button.setToolTip("꾸미는 중입니다 — 꾸미기 패널에서 [완료] 또는 [취소]")
         self.sticker_toolbar.show()
+        self.sticker_toolbar.raise_()
+        self._position_sticker_toolbar()
         self.sticker_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self._schedule_sticker_rebase()
 
@@ -3880,8 +4433,11 @@ class MainWindow(QMainWindow):
         self._selected_sticker_id = None
         self.decorate_done_button.hide()
         self.decorate_cancel_button.hide()
-        self.print_button.show()
-        self.decorate_button.show()
+        self.print_button.setEnabled(True)
+        self.decorate_button.setEnabled(True)
+        self.header_add_button.setEnabled(True)
+        self.action_decorate.setEnabled(True)
+        self.decorate_button.setToolTip("")
         self.sticker_toolbar.hide()
         self.sticker_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         # Persist immediately so scale/rotation/position is not lost on quick app exit.
@@ -3898,8 +4454,11 @@ class MainWindow(QMainWindow):
         self._sticker_snapshot = None
         self.decorate_done_button.hide()
         self.decorate_cancel_button.hide()
-        self.print_button.show()
-        self.decorate_button.show()
+        self.print_button.setEnabled(True)
+        self.decorate_button.setEnabled(True)
+        self.header_add_button.setEnabled(True)
+        self.action_decorate.setEnabled(True)
+        self.decorate_button.setToolTip("")
         self.sticker_toolbar.hide()
         self.sticker_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._schedule_sticker_rebase()
@@ -4148,6 +4707,8 @@ class MainWindow(QMainWindow):
                 self._sticker_widgets[sticker_id] = widget
             widget.setPixmap(pix)
             widget.resize(pix.size())
+            widget.highlight_color = QColor(self.palette["accent"])
+            widget.setToolTip(self._sticker_display_name(asset_name) if self._sticker_edit_mode else "")
             left_anchor = bool(self._is_left_anchor_sticker(asset_name) and str(item.get("anchor", "")) == "left")
             if self._is_left_anchor_sticker(asset_name) and "anchor" not in item:
                 # Backward compatibility: legacy band stickers stored center anchor.
@@ -4187,7 +4748,7 @@ class MainWindow(QMainWindow):
                 if self._is_outline_only_box(asset_name) or self._is_bottom_line_band(asset_name):
                     widget.setStyleSheet("background: transparent; border: none;")
                 else:
-                    widget.setStyleSheet(f"background: transparent; border: 1px dashed {self.palette['accent']};")
+                    widget.setStyleSheet(f"background: transparent; border: 2px dashed {self.palette['accent']};")
             else:
                 widget.setStyleSheet("background: transparent; border: none;")
             widget.show()
@@ -4208,7 +4769,7 @@ class MainWindow(QMainWindow):
             self.theme_name = "warm"
         self.palette = THEMES[self.theme_name]
         if self.sidebar_mode == "search" and self.search_query:
-            self.search_results = self.repository.search_entries(self.search_query)
+            self.search_results = self._search_calendar_entries(self.search_query)
 
         theme_changed = (self.theme_name != getattr(self, "_current_applied_theme", None)) or force_theme
         if theme_changed:
@@ -4220,107 +4781,53 @@ class MainWindow(QMainWindow):
                 self._work_manager_dialog.apply_palette(self.palette)
             if getattr(self, "_desktop_widget", None) is not None and self._desktop_widget.isVisible():
                 self._desktop_widget.apply_theme()
-            self.sticker_toolbar.setStyleSheet(
-                """
-                QFrame#stickerToolbar {
-                    background: #f8efc5;
-                    border: 1px solid #d5c68a;
-                    border-radius: 11px;
-                }
-                QLabel#stickerDragHandle {
-                    color: #a6965b;
-                    background: transparent;
-                    font-weight: bold;
-                    font-size: 13px;
-                    padding: 0px;
-                    margin-bottom: 2px;
-                }
-                QLabel#stickerToolbarLabel {
-                    color: #6e5f2d;
-                    background: transparent;
-                    font-weight: 700;
-                    padding: 0 2px;
-                }
-                QFrame#stickerDivider {
-                    background: #dbcfa0;
-                    border: none;
-                    min-width: 1px;
-                    max-width: 1px;
-                    margin: 3px 4px;
-                }
-                QToolButton#stickerChip {
-                    background: #f7edbf;
-                    border: 1px solid #ddcc8e;
-                    border-radius: 13px;
-                    padding: 0px;
-                }
-                QToolButton#stickerChip:hover {
-                    background: #fff4cd;
-                    border-color: #ccb66d;
-                }
-                QPushButton#stickerLibraryButton {
-                    background: #f6eab8;
-                    color: #4f4422;
-                    border: 1px solid #ccb874;
+            sp = self.palette
+            self.sticker_toolbar.setStyleSheet(f"""
+                QFrame#stickerToolbar {{
+                    background: {sp['panel']};
+                    border: 2px solid {sp['accent']};
+                    border-radius: 12px;
+                }}
+                QLabel {{ background: transparent; border: none; }}
+                QLabel#stickerDragHandle {{ color: {sp['muted']}; font-size: 14px; font-weight: bold; }}
+                QLabel#stickerPanelTitle {{ color: {sp['text']}; font-size: 14px; font-weight: 700; }}
+                QLabel#stickerSectionLabel {{ color: {sp['muted']}; font-size: 11px; }}
+                QLabel#stickerFieldLabel {{ color: {sp['text']}; font-size: 12px; }}
+                QFrame#stickerDivider {{ background: {sp.get('line_soft', sp['line'])}; border: none; }}
+                QToolButton#stickerChip {{
+                    background: {sp['panel_alt']};
+                    border: 1px solid {sp.get('line_soft', sp['line'])};
                     border-radius: 8px;
-                    padding: 4px 10px;
-                    font-weight: 700;
-                }
-                QPushButton#stickerLibraryButton:hover {
-                    background: #fff1bf;
-                }
-                QSlider#stickerScaleSlider::groove:horizontal {
-                    background: #c7b877;
-                    height: 4px;
-                    border-radius: 2px;
-                }
-                QSlider#stickerScaleSlider::sub-page:horizontal {
-                    background: #86723a;
-                    border-radius: 2px;
-                }
-                QSlider#stickerScaleSlider::handle:horizontal {
-                    background: #fff8dd;
-                    border: 1px solid #9e894b;
-                    width: 14px;
-                    margin: -6px 0;
-                    border-radius: 7px;
-                }
-                QPushButton#stickerMiniButton {
-                    background: #fff7d3;
-                    color: #5b4f2b;
-                    border: 1px solid #cfbe7f;
-                    border-radius: 8px;
-                    font-weight: 700;
-                }
-                QPushButton#stickerMiniButton:hover {
-                    background: #fffbe8;
-                }
-                QPushButton#stickerDangerButton {
-                    background: #fff2e0;
-                    color: #8f402f;
-                    border: 1px solid #dfb39b;
-                    border-radius: 8px;
-                    padding: 4px 10px;
-                    font-weight: 700;
-                }
-                QPushButton#stickerDangerButton:hover {
-                    background: #ffe8db;
-                }
-                QPushButton#stickerCloseButton {
-                    background: transparent;
-                    color: #8f7f4f;
-                    border: none;
-                    font-size: 14px;
-                    font-weight: bold;
                     padding: 0px;
-                    border-radius: 4px;
-                }
-                QPushButton#stickerCloseButton:hover {
-                    color: #c93b2b;
-                    background: #ffebd2;
-                }
-                """
-            )
+                }}
+                QToolButton#stickerChip:hover {{ background: {sp['accent_soft']}; border-color: {sp['accent']}; }}
+                QPushButton#stickerPrimaryButton {{
+                    background: {sp['accent']}; color: {sp.get('button_text', '#FFFFFF')};
+                    border: 1px solid {sp['accent']}; border-radius: 6px; padding: 4px 12px; font-weight: 600;
+                }}
+                QPushButton#stickerSecondaryButton {{
+                    background: {sp['panel']}; color: {sp['text']};
+                    border: 1px solid {sp['line']}; border-radius: 6px; padding: 4px 10px;
+                }}
+                QPushButton#stickerSecondaryButton:hover {{ background: {sp['panel_alt']}; border-color: {sp['accent']}; }}
+                QPushButton#stickerLinkButton {{
+                    background: transparent; color: {sp['accent']}; border: none; padding: 0px 2px; font-weight: 600;
+                }}
+                QPushButton#stickerLinkButton:hover {{ text-decoration: underline; }}
+                QPushButton#stickerDangerButton {{
+                    background: {sp['panel']}; color: {sp.get('danger', '#C0392B')};
+                    border: 1px solid {sp.get('danger', '#C0392B')}; border-radius: 6px; padding: 4px 12px;
+                }}
+                QPushButton#stickerDangerButton:hover {{ background: {sp['panel_alt']}; }}
+                QSlider#stickerScaleSlider::groove:horizontal {{
+                    background: {sp.get('line_soft', sp['line'])}; height: 4px; border-radius: 2px;
+                }}
+                QSlider#stickerScaleSlider::sub-page:horizontal {{ background: {sp['accent']}; border-radius: 2px; }}
+                QSlider#stickerScaleSlider::handle:horizontal {{
+                    background: {sp['panel']}; border: 2px solid {sp['accent']};
+                    width: 12px; margin: -6px 0; border-radius: 8px;
+                }}
+            """)
             self.sidebar_scroll.setStyleSheet(
                 f"QScrollArea {{ background: {self.palette['panel']}; border: none; }}"
                 f"QScrollArea > QWidget > QWidget {{ background: {self.palette['panel']}; }}"
@@ -4335,6 +4842,8 @@ class MainWindow(QMainWindow):
                 self.info_group_button.setStyleSheet(f"background: {self.palette['panel_alt']}; color: {self.palette['text']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 1px 6px; font-size: 12px;")
             if hasattr(self, "info_export_button"):
                 self.info_export_button.setStyleSheet(f"background: {self.palette['panel_alt']}; color: {self.palette['text']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 1px 6px; font-size: 12px;")
+            if hasattr(self, "window_switcher"):
+                self.window_switcher.apply_palette(self.palette)
             if hasattr(self, "sidebar_close_btn"):
                 self.sidebar_close_btn.setStyleSheet(f"background: {self.palette['panel_alt']}; color: {self.palette['text']}; border: 1px solid {self.palette['line']}; border-radius: 4px; padding: 0px;")
             if hasattr(self, "search_input"):
@@ -4377,43 +4886,38 @@ class MainWindow(QMainWindow):
         count = len(tasks)
         badge = ClickableLabel(f"문서 {count}건", is_elided=False)
         badge.setCursor(Qt.PointingHandCursor)
+        badge.setFixedHeight(18)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         is_dark = self.theme_name == "dark"
-        if is_dark:
-            bg_col = "#1E293B"
-            text_col = "#93C5FD"
-            border_col = "#3B82F6"
-            hover_bg = "#2563EB"
-            hover_border = "#60A5FA"
-            hover_text = "#FFFFFF"
-        else:
-            bg_col = "#EFF6FF"
-            text_col = "#1D4ED8"
-            border_col = "#3B82F6"
-            hover_bg = "#DBEAFE"
-            hover_border = "#1E40AF"
-            hover_text = "#1E40AF"
+        # 작은 알약: 스킨의 강조색 옅은 바탕 + 강조색 글씨 (스킨마다 어울리는 색)
+        line_c = self.palette.get("line", "#D9D2C3")
+        muted_c = self.palette.get("muted", "#6B7280")
+        accent_c = self.palette.get("accent", "#1F6F62")
+        accent_soft_c = self.palette.get("accent_soft", "#E4F1EC")
+        chip_bg = accent_soft_c
+        if target_day in (getattr(self, "selected_day", None), date.today()):
+            # 선택·오늘 칸은 바탕이 이미 강조색이라 알약을 흰(패널) 바탕으로 띄운다
+            chip_bg = self.palette.get("panel", "#FFFFFF")
 
         panel_col = "#1E293B" if is_dark else "#FFFFFF"
         text_main = "#F8FAFC" if is_dark else "#0F172A"
         text_muted = self.palette.get("muted", "#667085")
-        accent_col = "#2563EB" if not is_dark else "#60A5FA"
+        accent_col = accent_c
         line_col = "#475569" if is_dark else "#CBD5E1"
 
         badge.setStyleSheet(f"""
             QLabel {{
-                background-color: {bg_col};
-                color: {text_col};
-                border: 1px solid {border_col};
-                border-radius: 4px;
-                padding: 1px 5px;
-                font-size: 8.5pt;
-                font-weight: bold;
+                background-color: {chip_bg};
+                color: {accent_c};
+                border: 1px solid {chip_bg};
+                border-radius: 8px;
+                padding: 0px 7px;
+                font-size: 11px;
+                font-weight: 600;
             }}
             QLabel:hover {{
-                background-color: {hover_bg};
-                border: 1px solid {hover_border};
-                color: {hover_text};
+                border: 1px solid {accent_c};
             }}
             QToolTip {{
                 background-color: {panel_col};
@@ -4429,7 +4933,7 @@ class MainWindow(QMainWindow):
 
         html_lines = [
             f"<div style=\"font-family: {font_family_css()}; font-size: {scale_px(12)}px; color: {text_main}; white-space: nowrap;\">",
-            f"<div style=\"font-weight: bold; font-size: {scale_px(12)}px; margin-bottom: 4px; white-space: nowrap;\"><nobr>📋 {target_day.strftime('%Y-%m-%d')} 문서 총 {count}건:</nobr></div>",
+            f"<div style=\"font-weight: bold; font-size: {scale_px(12)}px; margin-bottom: 4px; white-space: nowrap;\"><nobr>{target_day.strftime('%Y-%m-%d')} 문서 {count}건</nobr></div>",
             f"<hr style=\"border: none; border-top: 1px solid {line_col}; margin: 4px 0 6px 0;\">",
             f"<div style=\"font-size: {scale_px(11.5)}px; line-height: 150%; white-space: nowrap;\">",
         ]
@@ -4640,6 +5144,8 @@ class MainWindow(QMainWindow):
         self._sidebar_render_timer.start(delay_ms)
 
     def _render_sidebar(self) -> None:
+        if getattr(self, "_current_page", "calendar") == "memo":
+            self._render_memo_page()
         while self.sidebar_layout.count() > 1:
             item = self.sidebar_layout.takeAt(0)
             widget = item.widget()
@@ -4683,7 +5189,7 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(0, lambda w=target: self.sidebar_scroll.ensureWidgetVisible(w, 0, 8))
             return
         self.info_export_button.hide()
-        self.info_add_button.show()
+        self.info_add_button.hide()  # 일정 추가는 달력 머리의 [＋ 일정 추가] 하나로
         self.info_group_button.hide()
 
         self.info_title.setText(self.selected_day.strftime("%Y.%m.%d"))
@@ -4694,6 +5200,11 @@ class MainWindow(QMainWindow):
             return
         for entry in items:
             self.sidebar_layout.insertWidget(self.sidebar_layout.count() - 1, self._sidebar_card(entry))
+
+    def _search_calendar_entries(self, query: str) -> list[CalendarEntry]:
+        """캘린더 검색은 일정만 찾는다 (메모는 메모 탭, 문서는 문서 탭에서 각각 검색)."""
+        found = self.repository.search_entries(query, limit=1000)
+        return [e for e in found if e.entry_type == EntryType.SCHEDULE][:200]
 
     def _search_result_row(self, entry: CalendarEntry) -> QWidget:
         row = QFrame()
@@ -4744,9 +5255,8 @@ class MainWindow(QMainWindow):
 
     def _open_search_result(self, entry: CalendarEntry) -> None:
         if entry.entry_type == EntryType.MEMO:
-            self.sidebar_mode = "memo"
-            self._pending_scroll_memo_id = entry.entry_id
-            self.refresh()
+            self._memo_page_scroll_to = entry.entry_id
+            self.switch_to_window("memo")
             return
         target = entry.start_date or entry.day or date.today()
         self.current_year = target.year
@@ -4765,6 +5275,623 @@ class MainWindow(QMainWindow):
         if title and lines and lines[0].strip() == title:
             return "\n".join(lines[1:]).lstrip("\n")
         return text
+
+    # ── 메모 탭 ────────────────────────────────────────────────────
+
+    def _build_memo_page(self) -> QWidget:
+        page = QFrame()
+        page.setObjectName("memoPage")
+        page.setAttribute(Qt.WA_StyledBackground, True)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 12, 16, 0)
+        layout.setSpacing(10)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        self.memo_page_title = QLabel("메모")
+        self.memo_page_title.setObjectName("memoPageTitle")
+        _title_font = QFont(self.memo_page_title.font())
+        _title_font.setPixelSize(15)
+        _title_font.setWeight(QFont.Weight.Bold)
+        self.memo_page_title.setFixedWidth(QFontMetrics(_title_font).horizontalAdvance("메모 999 / 999개") + 4)
+        head.addWidget(self.memo_page_title)
+        self.memo_chip_bar = QWidget()
+        self.memo_chip_layout = QHBoxLayout(self.memo_chip_bar)
+        self.memo_chip_layout.setContentsMargins(8, 0, 0, 0)
+        self.memo_chip_layout.setSpacing(6)
+        head.addWidget(self.memo_chip_bar)
+        head.addStretch(1)
+        self.memo_search_input = QLineEdit()
+        self.memo_search_input.setPlaceholderText("메모 검색 (Enter)")
+        self.memo_search_input.setClearButtonEnabled(True)
+        self.memo_search_input.setMinimumWidth(140)
+        self.memo_search_input.setMaximumWidth(260)
+        self.memo_search_input.setFixedHeight(30)
+        self.memo_search_input.returnPressed.connect(self._run_memo_search)
+        # 검색어를 다 지우면 바로 전체 목록으로
+        self.memo_search_input.textChanged.connect(lambda t: self._run_memo_search() if not t.strip() else None)
+        head.addWidget(self.memo_search_input)
+        self.memo_search_button = QPushButton("검색")
+        self.memo_search_button.setObjectName("topbarButton")
+        self.memo_search_button.setFixedHeight(30)
+        self.memo_search_button.setCursor(Qt.PointingHandCursor)
+        self.memo_search_button.clicked.connect(self._run_memo_search)
+        head.addWidget(self.memo_search_button)
+        layout.addLayout(head)
+
+        self.memo_scroll = QScrollArea()
+        self.memo_scroll.setObjectName("memoScroll")
+        self.memo_scroll.setWidgetResizable(True)
+        self.memo_scroll.setFrameShape(QFrame.NoFrame)
+        self.memo_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.memo_grid_host = QWidget()
+        self.memo_grid_host.setObjectName("memoGridHost")
+        host_layout = QVBoxLayout(self.memo_grid_host)
+        host_layout.setContentsMargins(0, 0, 0, 16)
+        host_layout.setSpacing(0)
+        self.memo_grid = QGridLayout()
+        self.memo_grid.setContentsMargins(0, 0, 0, 0)
+        self.memo_grid.setHorizontalSpacing(12)
+        self.memo_grid.setVerticalSpacing(12)
+        host_layout.addLayout(self.memo_grid)
+        host_layout.addStretch(1)
+        self.memo_scroll.setWidget(self.memo_grid_host)
+        self.memo_scroll.viewport().installEventFilter(self)
+        layout.addWidget(self.memo_scroll, 1)
+
+        self._memo_page_group = ""  # "" = 전체
+        self._memo_query = ""
+        self._memo_page_scroll_to = None
+        self._memo_page_cols = 0
+        return page
+
+    def _memo_page_columns(self) -> int:
+        scroll = getattr(self, "memo_scroll", None)
+        width = scroll.viewport().width() if scroll is not None else 0
+        card_w = self._memo_card_size()[0]
+        return max(1, min(6, (width + 12) // (card_w + 12)))
+
+    MEMO_BOARD_SCALE = 0.68
+
+    def _memo_card_size(self) -> tuple[int, int]:
+        """보드 카드 크기 = 새 메모 기본 크기(설정 → 메모 기본 크기)의 약 2/3, 모든 카드 같은 크기."""
+        raw = self.repository.get_setting("memo_default_size", "380,360") or "380,360"
+        try:
+            w_str, h_str = raw.split(",")
+            base_w, base_h = max(180, int(w_str)), max(150, int(h_str))
+        except Exception:
+            base_w, base_h = 380, 360
+        return max(200, int(base_w * self.MEMO_BOARD_SCALE)), max(160, int(base_h * self.MEMO_BOARD_SCALE))
+
+    def _memo_is_collapsed(self, entry_id: int) -> bool:
+        """접힘 상태는 바탕화면 메모와 보드가 함께 쓴다 (메모 창이 저장하는 memo_collapsed_{id})."""
+        dlg = self._active_memo_dialogs.get(int(entry_id))
+        if dlg is not None and dlg.isVisible():
+            return bool(getattr(dlg, "_is_collapsed", False))
+        return self.repository.get_setting(f"memo_collapsed_{int(entry_id)}", "0") == "1"
+
+    def _memo_font_pt(self) -> int:
+        try:
+            return max(8, int(self.repository.get_setting("memo_default_font_size", "11") or 11))
+        except Exception:
+            return 11
+
+    # 보드 카드 동작 -------------------------------------------------------
+    def _save_board_memo(self, card: "MemoBoardCard", updated: CalendarEntry) -> None:
+        saved = self.repository.upsert_entry(updated)
+        self.repository.save()
+        card.entry = saved
+        if hasattr(self, "_update_group_dialog_memos"):
+            self._update_group_dialog_memos(saved)
+        self._push_memo_to_floating(saved)
+
+    def _push_memo_to_floating(self, saved: CalendarEntry) -> None:
+        """보드에서 고친 제목·내용을 바탕화면 메모 창에 그대로 옮긴다 (그 창에서 쓰고 있으면 건드리지 않음)."""
+        dlg = self._active_memo_dialogs.get(int(saved.entry_id)) if saved.entry_id is not None else None
+        if dlg is None or not dlg.isVisible() or dlg.isActiveWindow():
+            return
+        try:
+            if getattr(dlg, "entry", None) is not None:
+                dlg.entry.title = saved.title
+                dlg.entry.description = saved.description
+            title_input = getattr(dlg, "title_input", None)
+            desc_input = getattr(dlg, "description_input", None)
+            shown_title = "" if (saved.title or "") in ("제목 없음", "(제목 없음)") else (saved.title or "")
+            if title_input is not None and title_input.text() != shown_title:
+                title_input.blockSignals(True)
+                title_input.setText(shown_title)
+                title_input.blockSignals(False)
+            if desc_input is not None:
+                desc_input.blockSignals(True)
+                if (saved.description or "").strip():
+                    desc_input.setHtml(saved.description)
+                else:
+                    desc_input.clear()
+                desc_input.is_todo_mode = ("☐" in (saved.description or "")) or ("☑" in (saved.description or ""))
+                desc_input.blockSignals(False)
+        except Exception:
+            logger.exception("Failed to push board memo to floating window")
+
+    def _delete_board_memo(self, card: "MemoBoardCard") -> None:
+        """카드의 [×] / 메뉴 [메모 삭제]: 영구 삭제할지 묻고 지운다 (떠 있는 메모 창도 함께 닫힘)."""
+        card.flush()
+        entry = card.entry
+        shown_title = memo_display_title(entry.title, self._memo_plain_text(entry))[0]
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("메모 삭제")
+        box.setText(f"'{shown_title}' 메모를 영구 삭제할까요?")
+        box.setInformativeText("삭제한 메모는 되돌릴 수 없습니다.")
+        btn_delete = box.addButton("영구 삭제", QMessageBox.DestructiveRole)
+        btn_cancel = box.addButton("취소", QMessageBox.RejectRole)
+        box.setDefaultButton(btn_cancel)
+        box.exec()
+        if box.clickedButton() is not btn_delete:
+            return
+        card._deleted = True
+        self._delete_entry(entry, confirmed=True)
+
+    def _toggle_board_memo_pin(self, card: "MemoBoardCard") -> None:
+        """[항상 위에 고정]: 바탕화면 메모가 떠 있으면 바로 적용, 아니면 다음에 띄울 때 적용되게 저장."""
+        new_pinned = not card.is_pinned()
+        dlg = self._active_memo_dialogs.get(int(card.entry.entry_id)) if card.entry.entry_id is not None else None
+        if dlg is not None and dlg.isVisible() and hasattr(dlg, "_toggle_floating"):
+            card.flush()
+            dlg._toggle_floating(new_pinned)  # 창이 저장까지 한다
+            fresh = self.repository.get_entry(int(card.entry.entry_id))
+            if fresh is not None:
+                card.entry = fresh
+            card.apply_theme()
+            return
+        self._set_board_memo_field(card, icon_type="floating" if new_pinned else "")
+
+    def _toggle_board_memo_collapse(self, card: "MemoBoardCard") -> None:
+        """[–]: 제목 줄만 남게 접기 / 펼치기. 바탕화면에 떠 있는 메모 창도 함께 접힌다."""
+        eid = int(card.entry.entry_id)
+        new_state = not self._memo_is_collapsed(eid)
+        if new_state:
+            card.flush()
+        dlg = self._active_memo_dialogs.get(eid)
+        if dlg is not None and dlg.isVisible() and hasattr(dlg, "_toggle_collapse"):
+            if bool(getattr(dlg, "_is_collapsed", False)) != new_state:
+                dlg._toggle_collapse()  # 창이 접고, 상태도 저장하고, 보드에 알려 준다
+        else:
+            self.repository.set_setting(f"memo_collapsed_{eid}", "1" if new_state else "0")
+        card.set_collapsed(new_state)
+
+    def _on_floating_memo_collapse_changed(self, entry_id, collapsed: bool) -> None:
+        """바탕화면 메모 창에서 접거나 펼치면 보드 카드도 같이."""
+        try:
+            card = getattr(self, "_memo_board_cards", {}).get(int(entry_id))
+        except (TypeError, ValueError):
+            return
+        if card is not None and card._collapsed != collapsed:
+            if collapsed:
+                card.flush()
+            card.set_collapsed(collapsed)
+
+    def _open_board_memo_floating(self, card: "MemoBoardCard") -> None:
+        """제목 줄 더블클릭: 바탕화면 메모로 띄운다 (이미 떠 있으면 앞으로)."""
+        card.flush()
+        self._edit_entry(EntryType.MEMO, card.entry)
+        self._debounced_render_memo_page(80)
+
+    def _toggle_board_memo_floating(self, card: "MemoBoardCard") -> None:
+        card.flush()
+        self._toggle_memo_floating(card.entry)
+        self._debounced_render_memo_page(80)
+
+    def _set_board_memo_field(self, card: "MemoBoardCard", **fields) -> None:
+        """색상·그룹처럼 보드 메뉴에서 바꾸는 값: 저장하고, 떠 있는 메모 창에도 바로 반영."""
+        from dataclasses import replace as _dc_replace
+
+        card.flush()
+        saved = self.repository.upsert_entry(_dc_replace(card.entry, **fields))
+        self.repository.save()
+        card.entry = saved
+        dlg = self._active_memo_dialogs.get(int(saved.entry_id)) if saved.entry_id is not None else None
+        if dlg is not None and getattr(dlg, "entry", None) is not None:
+            for key, value in fields.items():
+                setattr(dlg.entry, key, value)
+            if "bg_color" in fields and hasattr(dlg, "_apply_memo_theme"):
+                dlg._apply_memo_theme(fields["bg_color"])
+        if "memo_group" in fields:
+            self._refresh_all_group_dialogs()
+        else:
+            self._update_group_dialog_memos(saved)
+        card.load(saved)
+        self._render_memo_page()
+
+    def _toggle_board_memo_todo(self, card: "MemoBoardCard") -> None:
+        card.body.toggle_todo_style()
+        card.flush()
+
+    def _show_board_memo_menu(self, card: "MemoBoardCard", global_pos: QPoint) -> None:
+        """바탕화면 메모의 오른쪽 클릭 메뉴와 같은 메뉴 (창에만 해당하는 투명도·항상 위 등은 뺌)."""
+        entry = card.entry
+        menu = QMenu(self)
+        style_menu(menu, self.palette)
+        menu.addAction("새 메모 추가").triggered.connect(self._add_memo_from_board)
+        menu.addAction("새 그룹 추가...").triggered.connect(self._add_memo_group_from_board)
+        menu.addSeparator()
+
+        gid = entry.memo_group or ""
+        grp = self.repository.get_memo_group(gid) if gid else None
+        if grp:
+            menu.addAction(f"소속 그룹 열기 ({grp.get('title', '그룹')})").triggered.connect(
+                lambda: (self._open_memo_group(gid), self._render_memo_page())
+            )
+        menu.addAction("모든 메모 열기").triggered.connect(lambda: (self._open_all_memos(), self._render_memo_page()))
+        menu.addAction("모든 메모 닫기").triggered.connect(lambda: (self._close_all_memos(), self._render_memo_page()))
+        menu.addSeparator()
+
+        group_menu = menu.addMenu("그룹 지정 / 이동")
+        none_act = group_menu.addAction("그룹 없음 (지정 해제)")
+        none_act.setCheckable(True)
+        none_act.setChecked(not gid)
+        none_act.triggered.connect(lambda: self._set_board_memo_field(card, memo_group=""))
+        groups = self.repository.list_memo_groups()
+        if groups:
+            group_menu.addSeparator()
+            for g in groups:
+                g_id = str(g.get("id", ""))
+                act = group_menu.addAction(str(g.get("title", "그룹")))
+                act.setCheckable(True)
+                act.setChecked(g_id == gid)
+                act.triggered.connect(lambda _=False, t=g_id: self._set_board_memo_field(card, memo_group=t))
+        group_menu.addSeparator()
+        group_menu.addAction("새 그룹 생성 및 이동...").triggered.connect(
+            lambda: (self._create_new_memo_group(assign_memo_id=int(entry.entry_id), open_on_desktop=False),
+                     self._render_memo_page())
+        )
+
+        color_menu = menu.addMenu("메모 색상 변경")
+        current_theme = card.theme_key()
+        for key, th in MEMO_THEMES.items():
+            act = color_menu.addAction(th["name"])
+            act.setCheckable(True)
+            act.setChecked(key == current_theme)
+            act.triggered.connect(lambda _=False, k=key: self._set_board_memo_field(card, bg_color=k))
+
+        is_todo = getattr(card.body, "is_todo_mode", False)
+        todo_act = menu.addAction("To-Do 스타일로 변경" if not is_todo else "일반 텍스트로 변경")
+        todo_act.setCheckable(True)
+        todo_act.setChecked(is_todo)
+        todo_act.triggered.connect(lambda: self._toggle_board_memo_todo(card))
+        menu.addSeparator()
+
+        menu.addAction("바탕화면에서 닫기" if card._floating else "바탕화면에 띄우기").triggered.connect(
+            lambda: self._toggle_board_memo_floating(card)
+        )
+        menu.addAction("메모로 보고서 만들기").triggered.connect(lambda: self._create_report_from_memo(card.entry))
+        menu.addSeparator()
+        menu.addAction("메모 삭제").triggered.connect(lambda: self._delete_board_memo(card))
+        menu.exec(global_pos)
+
+    @staticmethod
+    def _memo_plain_text(entry: CalendarEntry) -> str:
+        text = entry.description or ""
+        if "<" in text and ">" in text:
+            from PySide6.QtGui import QTextDocument
+
+            doc = QTextDocument()
+            doc.setHtml(text)
+            text = doc.toPlainText()
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        title = (entry.title or "").strip()
+        if lines and title and lines[0] == title:
+            lines = lines[1:]
+        return "\n".join(lines)
+
+    def _render_memo_page(self) -> None:
+        if not hasattr(self, "memo_grid"):
+            return
+        p = self.palette
+        accent = p.get("accent", "#2563EB")
+        line = p.get("line_soft", p.get("line", "#E2E8F0"))
+        muted = p.get("muted", "#64748B")
+        self.memo_page.setStyleSheet(f"""
+            QFrame#memoPage, QWidget#memoGridHost {{ background: {p['panel']}; }}
+            QScrollArea#memoScroll {{ background: {p['panel']}; border: none; }}
+            QLabel#memoPageTitle {{ color: {p['text']}; font-size: 15px; font-weight: 700; background: transparent; }}
+            QFrame#memoTabCard {{ background: {p.get('panel', '#FFFFFF')}; border: 1px solid {line}; border-radius: 10px; }}
+            QFrame#memoTabCard:hover {{ border: 1px solid {accent}; }}
+            QLabel {{ background: transparent; border: none; }}
+            QLineEdit {{ border: 1px solid {p.get('line', '#CBD5E0')}; border-radius: 6px; padding: 0 8px;
+                         background: {p.get('panel_alt', p['panel'])}; color: {p['text']}; }}
+            QLineEdit:focus {{ border: 1px solid {accent}; }}
+        """)
+
+        groups = self.repository.list_memo_groups()
+        group_titles = {str(g.get("id", "")): str(g.get("title", "그룹")) for g in groups if g.get("id")}
+        if self._memo_page_group and self._memo_page_group not in group_titles:
+            self._memo_page_group = ""
+
+        # 그룹 칩: 전체 + 플로팅 그룹들 (그룹이 있을 때만)
+        while self.memo_chip_layout.count():
+            item = self.memo_chip_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.hide()
+                w.deleteLater()
+        chips = ([("", "전체")] + list(group_titles.items())) if group_titles else []
+        for gid, title in chips:
+            gdlg = self._active_group_dialogs.get(gid) if gid else None
+            is_open = gdlg is not None and gdlg.isVisible()
+            chip = QPushButton(f"● {title}" if is_open else title)
+            chip.setCursor(Qt.PointingHandCursor)
+            if gid:
+                chip.setToolTip(
+                    ("바탕화면에 떠 있음. " if is_open else "")
+                    + "오른쪽 클릭: 바탕화면에 띄우기·이름 바꾸기·삭제"
+                )
+                chip.setContextMenuPolicy(Qt.CustomContextMenu)
+                chip.customContextMenuRequested.connect(
+                    lambda pos, g=gid, c=chip: self._show_memo_chip_menu(g, c.mapToGlobal(pos))
+                )
+            chip.setFixedHeight(26)
+            active = gid == self._memo_page_group
+            chip.setStyleSheet(f"""
+                QPushButton {{
+                    background: {accent if active else 'transparent'};
+                    color: {'#FFFFFF' if active else muted};
+                    border: 1px solid {accent if active else line};
+                    border-radius: 13px; padding: 0 12px; font-size: 12px;
+                    font-weight: {600 if active else 500};
+                }}
+                QPushButton:hover {{ border: 1px solid {accent}; color: {'#FFFFFF' if active else accent}; }}
+            """)
+            chip.clicked.connect(lambda _=False, g=gid: self._set_memo_page_group(g))
+            self.memo_chip_layout.addWidget(chip)
+
+        items = self._ordered_memos(self.repository.list_memos())
+        total = len(items)
+        query = self._memo_query.lower()
+        # 아직 저장 전(제목·내용이 비어 있는) 새 메모 창 → '작성 중' 카드로 맨 뒤에 보여 준다
+        drafts = []
+        if not query:
+            for key, dlg in list(self._active_memo_dialogs.items()):
+                if isinstance(key, str) and key.startswith("new_") and dlg is not None and dlg.isVisible():
+                    draft_group = getattr(getattr(dlg, "entry", None), "memo_group", "") or ""
+                    if not self._memo_page_group or draft_group == self._memo_page_group:
+                        drafts.append(dlg)
+        if self._memo_page_group:
+            items = [e for e in items if (e.memo_group or "") == self._memo_page_group]
+        if query:
+            items = [
+                e for e in items
+                if query in (e.title or "").lower() or query in self._memo_plain_text(e).lower()
+            ]
+        # 항상 '메모 보이는 수 / 전체 수개' 로 쓰고 폭을 고정해, 검색·그룹을 바꿔도 옆 칩이 밀리지 않게 한다
+        self.memo_page_title.setText(f"메모 {len(items)} / {total}개")
+
+        board_cards = set(getattr(self, "_memo_board_cards", {}).values())
+        while self.memo_grid.count():
+            item = self.memo_grid.takeAt(0)
+            w = item.widget()
+            if w is None:
+                continue
+            if w in board_cards:
+                continue  # 재사용 (아래에서 다시 배치)
+            w.hide()
+            w.deleteLater()
+
+        if not items and not drafts:
+            for card in board_cards:
+                card.flush()
+                card.hide()
+                card.deleteLater()
+            self._memo_board_cards = {}
+            msg = "검색 결과가 없습니다." if query else "등록된 메모가 없습니다.  위의 [＋ 메모 추가] 로 새 메모를 만들어 보세요."
+            empty = QLabel(msg)
+            empty.setAlignment(Qt.AlignCenter)
+            empty.setStyleSheet(f"color: {muted}; font-size: 13px; padding: 48px 0;")
+            self.memo_grid.addWidget(empty, 0, 0, 1, 6)
+            self._memo_page_cols = 1
+            return
+
+        cols = self._memo_page_columns()
+        self._memo_page_cols = cols
+        for c in range(7):
+            self.memo_grid.setColumnStretch(c, 0)
+        self.memo_grid.setColumnStretch(cols, 1)  # 카드 크기는 고정, 남는 폭은 오른쪽으로
+        width, height = self._memo_card_size()
+        font_pt = self._memo_font_pt()
+        cards_by_id = getattr(self, "_memo_board_cards", {})
+        alive: dict[int, MemoBoardCard] = {}
+        target_card = None
+        cards: list[QWidget] = []
+        for entry in items:
+            eid = int(entry.entry_id)
+            card = cards_by_id.get(eid)
+            if card is not None and card._full_size != QSize(width, height):
+                card.flush()
+                card.hide()
+                card.deleteLater()
+                card = None
+            if card is None:
+                card = MemoBoardCard(self, entry, width, height, font_pt)
+            elif not card.is_editing():
+                card.load(entry)
+            dlg = self._active_memo_dialogs.get(eid)
+            # 그룹은 위쪽 그룹 칩으로 보므로 카드 제목 줄에는 표시하지 않는다
+            card.set_floating(dlg is not None and dlg.isVisible())
+            card.set_collapsed(self._memo_is_collapsed(eid))
+            alive[eid] = card
+            cards.append(card)
+            if self._memo_page_scroll_to is not None and entry.entry_id == self._memo_page_scroll_to:
+                target_card = card
+        for eid, card in cards_by_id.items():
+            if eid not in alive:
+                card.flush()
+                card.hide()
+                card.deleteLater()
+        self._memo_board_cards = alive
+        draft_cards = [self._memo_draft_card(dlg) for dlg in drafts]
+        for dc in draft_cards:
+            dc.setFixedSize(width, height)
+        cards.extend(draft_cards)
+        seen = getattr(self, "_memo_seen_drafts", set())
+        fresh = [card for dlg, card in zip(drafts, draft_cards) if id(dlg) not in seen]
+        self._memo_seen_drafts = {id(dlg) for dlg in drafts}
+        if fresh and target_card is None:
+            target_card = fresh[-1]  # 방금 만든 새 메모가 보이도록 (처음 한 번만)
+        for idx, card in enumerate(cards):
+            self.memo_grid.addWidget(card, idx // cols, idx % cols, Qt.AlignTop | Qt.AlignLeft)
+            card.show()
+        if target_card is not None:
+            self._memo_page_scroll_to = None
+            QTimer.singleShot(0, lambda w=target_card: self.memo_scroll.ensureWidgetVisible(w, 0, 12))
+
+    def _debounced_render_memo_page(self, delay_ms: int = 150) -> None:
+        """메모가 저장될 때 불린다. 메모 탭을 보고 있을 때만 잠시 뒤 다시 그린다."""
+        if self.current_page_name() != "memo":
+            return
+        if not hasattr(self, "_memo_page_timer"):
+            self._memo_page_timer = QTimer(self)
+            self._memo_page_timer.setSingleShot(True)
+            self._memo_page_timer.timeout.connect(self._render_memo_page)
+        self._memo_page_timer.start(delay_ms)
+
+    def _memo_draft_card(self, dlg) -> QWidget:
+        p = self.palette
+        muted = p.get("muted", "#64748B")
+
+        def _focus(d=dlg):
+            d.show()
+            d.raise_()
+            d.activateWindow()
+
+        card = MemoTabCard(_focus, lambda _pos: None)
+        card.setToolTip("작성 중인 새 메모 (제목이나 내용을 쓰면 저장됩니다)")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+        top = QHBoxLayout()
+        top.setSpacing(6)
+        dot = QLabel("●")
+        dot.setStyleSheet("color: #16a34a; font-size: 12px; font-weight: bold;")
+        top.addWidget(dot, 0, Qt.AlignVCenter)
+        title_text = ""
+        try:
+            title_text = dlg.title_input.text().strip()
+        except Exception:
+            pass
+        title = QLabel(title_text or "새 메모")
+        title.setTextFormat(Qt.PlainText)
+        title.setStyleSheet(f"color: {p['text']}; font-size: 13px; font-weight: 700;")
+        title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        top.addWidget(title, 1)
+        tag = QLabel("작성 중")
+        tag.setStyleSheet(
+            f"color: {p.get('accent', '#2563EB')}; font-size: 11px; font-weight: 600;"
+            f" background: {p.get('accent_soft', p.get('panel_alt', '#EEF2FF'))}; border-radius: 8px; padding: 1px 8px;"
+        )
+        top.addWidget(tag, 0, Qt.AlignVCenter)
+        lay.addLayout(top)
+        body = QLabel("바탕화면의 메모 창에 내용을 쓰면 여기에 저장됩니다.")
+        body.setWordWrap(True)
+        body.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        body.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
+        body.setStyleSheet(f"color: {muted}; font-size: 12px;")
+        lay.addWidget(body, 1)
+        card.setStyleSheet(
+            f"QFrame#memoTabCard {{ border: 1px dashed {p.get('accent', '#2563EB')}; border-radius: 10px; }}"
+        )
+        return card
+
+    def _run_memo_search(self) -> None:
+        self._memo_query = self.memo_search_input.text().strip()
+        self._render_memo_page()
+
+    def _add_memo_from_board(self) -> None:
+        """[＋ 메모 추가]: 메모 탭에서 그룹을 보고 있으면 그 그룹에 새 메모를 만든다."""
+        gid = self._memo_page_group if self.current_page_name() == "memo" else ""
+        if gid:
+            self._edit_entry(EntryType.MEMO, CalendarEntry(entry_type=EntryType.MEMO, title="", memo_group=gid))
+        else:
+            self._edit_entry(EntryType.MEMO, None)
+
+    def _add_memo_group_from_board(self) -> None:
+        """[＋ 그룹 추가]: 이름을 받아 그룹을 만들고, 메모 보드를 그 그룹으로 바꾼다 (바탕화면에는 띄우지 않음)."""
+        before = {str(g.get("id", "")) for g in self.repository.list_memo_groups()}
+        self._create_new_memo_group(open_on_desktop=False)
+        added = [str(g.get("id", "")) for g in self.repository.list_memo_groups() if str(g.get("id", "")) not in before]
+        if added:
+            self._memo_page_group = added[-1]
+        self._render_memo_page()
+
+    def _show_memo_chip_menu(self, gid: str, global_pos: QPoint) -> None:
+        grp = self.repository.get_memo_group(gid)
+        if not grp:
+            return
+        dlg = self._active_group_dialogs.get(gid)
+        is_open = dlg is not None and dlg.isVisible()
+        menu = QMenu(self)
+        style_menu(menu, self.palette)
+        if is_open:
+            menu.addAction("바탕화면에서 닫기").triggered.connect(lambda: self._close_memo_group_window(gid))
+        else:
+            menu.addAction("바탕화면에 띄우기").triggered.connect(
+                lambda: (self._open_memo_group(gid), self._render_memo_page())
+            )
+        menu.addSeparator()
+        menu.addAction("이름 바꾸기…").triggered.connect(lambda: self._rename_memo_group(gid))
+        menu.addAction("그룹 삭제").triggered.connect(lambda: self._delete_memo_group_from_board(gid))
+        menu.exec(global_pos)
+
+    def _close_memo_group_window(self, gid: str) -> None:
+        dlg = self._active_group_dialogs.get(gid)
+        if dlg is not None:
+            dlg.close()
+        self._render_memo_page()
+
+    def _rename_memo_group(self, gid: str) -> None:
+        grp = self.repository.get_memo_group(gid)
+        if not grp:
+            return
+        input_dlg = QInputDialog(self)
+        input_dlg.setWindowTitle("그룹 이름 바꾸기")
+        input_dlg.setLabelText("새 그룹 이름:")
+        input_dlg.setTextValue(str(grp.get("title", "")))
+        input_dlg.setOkButtonText("확인")
+        input_dlg.setCancelButtonText("취소")
+        input_dlg.setStyleSheet(dialog_stylesheet(self.palette))
+        if not input_dlg.exec():
+            return
+        new_title = input_dlg.textValue().strip()
+        if not new_title:
+            return
+        self.repository.upsert_memo_group({"id": gid, "title": new_title})
+        dlg = self._active_group_dialogs.get(gid)
+        if dlg is not None and hasattr(dlg, "title_input"):
+            dlg.title_input.setText(new_title)  # 떠 있는 그룹 창 제목도 함께
+        self._render_memo_page()
+
+    def _delete_memo_group_from_board(self, gid: str) -> None:
+        grp = self.repository.get_memo_group(gid)
+        if not grp:
+            return
+        title = str(grp.get("title", "그룹"))
+        if QMessageBox.question(
+            self,
+            "그룹 삭제",
+            f"'{title}' 그룹을 삭제할까요?\n\n(그룹에 속한 메모는 지워지지 않고 그룹 지정만 해제됩니다.)",
+        ) != QMessageBox.Yes:
+            return
+        dlg = self._active_group_dialogs.get(gid)
+        if dlg is not None:
+            dlg.close()  # 먼저 닫아야 닫힐 때 저장되면서 그룹이 다시 생기지 않는다
+        self.repository.delete_memo_group(gid, delete_memos=False)
+        if self._memo_page_group == gid:
+            self._memo_page_group = ""
+        self._refresh_all_group_dialogs()
+        self.refresh()
+        self._render_memo_page()
+
+    def _set_memo_page_group(self, gid: str) -> None:
+        self._memo_page_group = gid
+        self._render_memo_page()
 
     def _sidebar_card(self, entry: CalendarEntry) -> QWidget:
         is_completed = self._is_entry_completed_on_day(entry, self.selected_day)
@@ -5121,26 +6248,12 @@ class MainWindow(QMainWindow):
         else:
             self._edit_entry(EntryType.SCHEDULE, None)
 
-    def _handle_group_button(self) -> None:
+    def _handle_group_button(self, anchor=None) -> None:
+        if not isinstance(anchor, QWidget):
+            anchor = self.info_group_button
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #ffffff;
-                border: 1px solid #d0d5dd;
-                padding: 4px 0px;
-                border-radius: 6px;
-            }
-            QMenu::item {
-                padding: 6px 20px 6px 16px;
-                font-size: 12px;
-                color: #222222;
-            }
-            QMenu::item:selected {
-                background-color: #f1f5f9;
-                color: #0f172a;
-            }
-        """)
-        new_act = menu.addAction("➕ 새 플로팅 그룹 생성...")
+        style_menu(menu, self.palette)
+        new_act = menu.addAction("새 플로팅 그룹 만들기…")
         new_act.triggered.connect(lambda: self._create_new_memo_group())
 
         groups = self.repository.list_memo_groups()
@@ -5152,38 +6265,22 @@ class MainWindow(QMainWindow):
                 is_open = gid in self._active_group_dialogs and self._active_group_dialogs[gid].isVisible()
                 icon = "📂" if is_open else "📁"
                 status_icon = "🟢" if is_open else "⚪"
-                act = menu.addAction(f"{icon} {gtitle}\t{status_icon}")
+                act = menu.addAction(f"{gtitle}\t열림" if is_open else gtitle)
                 act.setToolTip("바탕화면에 열려 있음 (클릭 시 활성화)" if is_open else "바탕화면에 열기")
                 act.triggered.connect(lambda _=False, g=gid: self._open_memo_group(g))
 
-        menu.exec(self.info_group_button.mapToGlobal(QPoint(0, self.info_group_button.height())))
+        menu.exec(anchor.mapToGlobal(QPoint(0, anchor.height())))
 
     def _show_memo_card_context_menu(self, entry: CalendarEntry, global_pos: QPoint) -> None:
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #ffffff;
-                border: 1px solid #d0d5dd;
-                padding: 4px 0px;
-                border-radius: 6px;
-            }
-            QMenu::item {
-                padding: 6px 20px 6px 16px;
-                font-size: 12px;
-                color: #222222;
-            }
-            QMenu::item:selected {
-                background-color: #f1f5f9;
-                color: #0f172a;
-            }
-        """)
+        style_menu(menu, self.palette)
 
-        open_act = menu.addAction("📝 메모 열기")
+        open_act = menu.addAction("메모 열기")
         open_act.triggered.connect(lambda _=False, e=entry: self._open_entry_view(e))
 
         is_open = entry.entry_id is not None and int(entry.entry_id) in self._active_memo_dialogs
         if is_open:
-            close_act = menu.addAction("❌ 메모 닫기")
+            close_act = menu.addAction("메모 닫기")
             close_act.triggered.connect(lambda _=False, e=entry: self._close_memo_entry(e))
 
         menu.addSeparator()
@@ -5193,13 +6290,13 @@ class MainWindow(QMainWindow):
         close_all_act.triggered.connect(self._close_all_memos)
 
         menu.addSeparator()
-        report_act = menu.addAction("📄 메모로 보고서 만들기")
+        report_act = menu.addAction("메모로 보고서 만들기")
         report_act.triggered.connect(lambda _=False, e=entry: self._create_report_from_memo(e))
 
         menu.addSeparator()
-        edit_act = menu.addAction("✏️ 메모 수정")
+        edit_act = menu.addAction("메모 수정")
         edit_act.triggered.connect(lambda _=False, e=entry: self._edit_entry(EntryType.MEMO, e))
-        del_act = menu.addAction("🗑️ 메모 삭제")
+        del_act = menu.addAction("메모 삭제")
         del_act.triggered.connect(lambda _=False, e=entry: self._delete_entry(e))
 
         menu.exec(global_pos)
@@ -5219,36 +6316,25 @@ class MainWindow(QMainWindow):
 
     def _show_schedule_context_menu(self, entry: CalendarEntry, global_pos: QPoint) -> None:
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #ffffff;
-                border: 1px solid #d0d5dd;
-                padding: 4px 0px;
-                border-radius: 6px;
-            }
-            QMenu::item {
-                padding: 6px 20px 6px 16px;
-                font-size: 12px;
-                color: #222222;
-            }
-            QMenu::item:selected {
-                background-color: #f1f5f9;
-                color: #0f172a;
-            }
-        """)
+        style_menu(menu, self.palette)
 
+        linked_doc_id = getattr(entry, "linked_doc_id", None)
         has_work_link = bool(getattr(entry, "linked_work_id", None)) or (
             bool(entry.title) and (entry.title.startswith("[문서]") or entry.title.startswith("[업무]"))
         )
-        if has_work_link:
+        if linked_doc_id:
+            doc_act = menu.addAction("관련 문서로 가기")
+            doc_act.triggered.connect(lambda _=False, d=linked_doc_id: self.open_linked_document(d))
+            menu.addSeparator()
+        elif has_work_link:
             is_folder = getattr(entry, "linked_work_type", "work") == "folder"
             is_doc = bool(entry.title) and entry.title.startswith("[문서]")
             if is_folder:
-                work_label = "📁 해당 업무 분류(폴더)로 바로 가기"
+                work_label = "해당 업무 분류(폴더)로 바로 가기"
             elif is_doc:
-                work_label = "📄 해당 문서로 바로 가기"
+                work_label = "해당 문서로 바로 가기"
             else:
-                work_label = "💼 해당 업무로 바로 가기"
+                work_label = "해당 업무로 바로 가기"
             work_act = menu.addAction(work_label)
             work_act.triggered.connect(lambda _=False, e=entry: self.open_linked_work(
                 e.linked_work_id,
@@ -5257,12 +6343,20 @@ class MainWindow(QMainWindow):
             ))
             menu.addSeparator()
 
-        edit_act = menu.addAction("✏️ 일정 수정")
+        edit_act = menu.addAction("일정 수정")
         edit_act.triggered.connect(lambda _=False, e=entry: self._edit_entry(e.entry_type, e))
-        del_act = menu.addAction("🗑️ 일정 삭제")
+        del_act = menu.addAction("일정 삭제")
         del_act.triggered.connect(lambda _=False, e=entry: self._delete_entry(e))
 
         menu.exec(global_pos)
+
+    def open_linked_document(self, doc_id: int | None) -> None:
+        """회신 일정에 연결된 접수 문서의 등록/수정 창을 연다."""
+        doc = self.repository.get_entry(int(doc_id)) if doc_id else None
+        if doc is None:
+            QMessageBox.information(self, "관련 문서", "연결된 문서를 찾을 수 없습니다. (삭제되었을 수 있습니다)")
+            return
+        self._edit_entry(EntryType.TASK, doc)
 
     def open_linked_work(self, work_id: int | None, work_type: str = "work", title: str = "") -> None:
         """연결된 업무 또는 분류 폴더로 WorkManager를 열고 해당 항목 선택"""
@@ -5420,7 +6514,7 @@ class MainWindow(QMainWindow):
             target_w = max(natural_w, self.info_card.width())
             self.topbar_actions_container.setFixedWidth(target_w)
             if hasattr(self, "_window_controls") and self._window_controls.layout():
-                self._window_controls.layout().setContentsMargins(0, 0, 28, 0)
+                self._window_controls.layout().setContentsMargins(0, 0, 0, 0)
         else:
             self.topbar_actions_container.setFixedWidth(natural_w)
             if hasattr(self, "_window_controls") and self._window_controls.layout():
@@ -5441,6 +6535,15 @@ class MainWindow(QMainWindow):
         return 341
 
     def _on_sidebar_splitter_moved(self, pos: int, index: int) -> None:
+        # 사이드바를 최대 폭보다 넓게 끌면 남는 칸이 회색으로 비므로, 최대 폭에서 멈추고 나머지는 달력에 준다.
+        container = getattr(self, "sidebar_container", None)
+        if container is not None and container.isVisible():
+            sizes = self.body_splitter.sizes()
+            max_w = container.maximumWidth()
+            if len(sizes) == 2 and sizes[1] > max_w:
+                self.body_splitter.blockSignals(True)
+                self.body_splitter.setSizes([sum(sizes) - max_w, max_w])
+                self.body_splitter.blockSignals(False)
         if hasattr(self, "sidebar_panel") and self.sidebar_panel.isVisible():
             w = self.sidebar_panel.width()
             if 341 <= w <= 700:
@@ -5451,10 +6554,15 @@ class MainWindow(QMainWindow):
 
     def _apply_sidebar_visibility(self, visible: bool, save: bool = True) -> None:
         self._sidebar_visible = visible
-        if hasattr(self, "sidebar_panel"):
+        if hasattr(self, "sidebar_container"):
+            self.sidebar_container.setVisible(visible)
+        elif hasattr(self, "sidebar_panel"):
             self.sidebar_panel.setVisible(visible)
+        if hasattr(self, "sidebar_collapsed_strip"):
+            self.sidebar_collapsed_strip.setVisible(not visible)
         if hasattr(self, "sidebar_expand_btn"):
-            self.sidebar_expand_btn.setVisible(not visible)
+            # 사이드바는 오른쪽 끝의 얇은 띠로 다시 펼치므로 상단 '사이드바 표시' 탭은 쓰지 않는다.
+            self.sidebar_expand_btn.setVisible(False)
         if hasattr(self, "topbar_sidebar_btn"):
             self.topbar_sidebar_btn.setIcon(QIcon(str(asset_path("chevron_right.svg" if visible else "chevron_left.svg"))))
             self.topbar_sidebar_btn.setToolTip("우측 사이드바 숨기기 (단축키: Ctrl+B)" if visible else "우측 사이드바 표시 (단축키: Ctrl+B)")
@@ -5466,7 +6574,7 @@ class MainWindow(QMainWindow):
         if visible and hasattr(self, "body_splitter"):
             total_w = sum(self.body_splitter.sizes())
             if total_w > 0:
-                saved_w = self._get_saved_sidebar_width()
+                saved_w = self._get_saved_sidebar_width() + self._sidebar_gutter_width()
                 hw = self.body_splitter.handleWidth()
                 self.body_splitter.setSizes([max(300, total_w - saved_w - hw), saved_w])
         self._sync_topbar_sidebar_alignment()
@@ -5482,26 +6590,19 @@ class MainWindow(QMainWindow):
     def _apply_panel_margins(self) -> None:
         if not hasattr(self, "outer_layout"):
             return
-        topbar_visible = getattr(self, "_topbar_visible", True)
-        sidebar_visible = getattr(self, "_sidebar_visible", True)
-        right_pad = 12
-        if topbar_visible:
-            self.outer_layout.setContentsMargins(12, 12, right_pad, 12)
-            self.outer_layout.setSpacing(6 if not sidebar_visible else 10)
-            if hasattr(self, "body_layout"):
-                self.body_layout.setContentsMargins(0, 0, 0, 0)
-        else:
-            self.outer_layout.setContentsMargins(12, 0, right_pad, 12)
-            self.outer_layout.setSpacing(2)
-            if hasattr(self, "body_layout"):
-                self.body_layout.setContentsMargins(0, 0, 0, 0)
+        # 바깥 여백 없이 창 끝까지 붙인다 (구분은 얇은 경계선으로만)
+        self.outer_layout.setContentsMargins(0, 0, 0, 0)
+        self.outer_layout.setSpacing(0)
         if hasattr(self, "body_layout"):
+            self.body_layout.setContentsMargins(0, 0, 0, 0)
             self.body_layout.setSpacing(0)
 
     def _apply_topbar_visibility(self, visible: bool, save: bool = True) -> None:
         self._topbar_visible = visible
         if hasattr(self, "topbar"):
             self.topbar.setVisible(visible)
+        if hasattr(self, "window_switcher"):
+            self.window_switcher.setVisible(visible)
         if hasattr(self, "topbar_expand_btn"):
             self.topbar_expand_btn.setVisible(not visible)
 
@@ -5521,8 +6622,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "topbar_expand_btn"):
             self.topbar_expand_btn.setVisible(topbar_hidden)
         if hasattr(self, "sidebar_expand_btn"):
-            self.sidebar_expand_btn.setVisible(sidebar_hidden)
-        self.topbar_expand_container.setVisible(topbar_hidden or sidebar_hidden)
+            self.sidebar_expand_btn.setVisible(False)
+        self.topbar_expand_container.setVisible(topbar_hidden)
 
     def _run_search(self) -> None:
         query = self.search_input.text().strip()
@@ -5535,7 +6636,7 @@ class MainWindow(QMainWindow):
         if not self._sidebar_visible:
             self._apply_sidebar_visibility(True, save=True)
         self.search_query = query
-        self.search_results = self.repository.search_entries(query)
+        self.search_results = self._search_calendar_entries(query)
         self.sidebar_mode = "search"
         self.refresh()
 
@@ -6360,6 +7461,7 @@ class MainWindow(QMainWindow):
 
     def _show_year_menu(self) -> None:
         menu = QMenu(self)
+        style_menu(menu, self.palette)
         for year in range(self.current_year - 3, self.current_year + 3):
             action = QAction(f"{year}년", self)
             action.triggered.connect(lambda checked=False, y=year: self._set_year(y))
@@ -6368,6 +7470,7 @@ class MainWindow(QMainWindow):
 
     def _show_month_menu(self) -> None:
         menu = QMenu(self)
+        style_menu(menu, self.palette)
         for month in range(1, 13):
             action = QAction(f"{month}월", self)
             action.triggered.connect(lambda checked=False, m=month: self._set_month(m))
@@ -6570,6 +7673,9 @@ class MainWindow(QMainWindow):
             font_changed = (new_font_family != old_font_family) or (new_font_scale != old_font_scale)
 
             # 업무(Work) 설정
+            if "doc_reply_settings" in dialog.result:
+                from taskcalendar import doc_reply
+                doc_reply.save_settings(self.repository, dialog.result["doc_reply_settings"])
             if "work_enable_context_menu" in dialog.result:
                 new_ctx = bool(dialog.result["work_enable_context_menu"])
                 old_ctx = self.repository.get_setting("work_enable_context_menu", "0") == "1"
@@ -6633,82 +7739,148 @@ class MainWindow(QMainWindow):
             if getattr(self, "_work_manager_dialog", None) is not None:
                 self._work_manager_dialog.apply_palette(self.palette)
 
+    def switch_to_window(self, name: str) -> None:
+        """맨 위 탭 전환: 'calendar' / 'memo' / 'doc' / 'work' 화면을 아래에 보여 주고 창을 앞으로 가져온다."""
+        from taskcalendar.ui_common import WINDOW_TITLES
+
+        if name not in WINDOW_TITLES:
+            name = "calendar"
+        page = self._ensure_page(name)
+        if page is None:
+            name, page = "calendar", self.calendar_page
+        if name != "calendar" and getattr(self, "_sticker_edit_mode", False):
+            self._complete_sticker_edit_mode()
+        self._current_page = name
+        self.page_stack.setCurrentWidget(page)
+        self.window_switcher.set_active(name)
+        self._update_service_menu_for_page(name)
+        self.setWindowTitle(f"바로업무 {APP_VERSION} - {WINDOW_TITLES[name]}")
+        if name == "doc":
+            page.apply_palette(self.palette)
+            page.reload_tasks()
+        elif name == "work":
+            page.apply_palette(self.palette)
+        elif name == "memo":
+            self._render_memo_page()
+        self._bring_main_window_forward()
+
+    def _update_service_menu_for_page(self, name: str) -> None:
+        """[부가기능] 버튼과 메뉴는 캘린더 탭에서만 보인다 (메모·문서·업무 탭에서는 버튼을 숨김)."""
+        on_calendar = name == "calendar"
+        self.window_switcher.service_button.setVisible(on_calendar)
+        for act in (getattr(self, "action_print", None), getattr(self, "action_decorate", None),
+                    getattr(self, "_service_calendar_separator", None)):
+            if act is not None:
+                act.setVisible(on_calendar)
+
+    def _bring_main_window_forward(self) -> None:
+        if self.isMinimized() or not self.isVisible():
+            self._restore_window_state()
+            return
+        self.raise_()
+        self.activateWindow()
+        try:
+            from taskcalendar.desktop_services import force_window_to_foreground
+
+            force_window_to_foreground(int(self.winId()))
+        except Exception:
+            pass
+
+    def _ensure_page(self, name: str) -> QWidget | None:
+        """탭 페이지를 처음 필요할 때 만든다 (문서·업무는 예전 창을 그대로 넣는다)."""
+        page = self._pages.get(name)
+        if page is not None:
+            return page
+        from taskcalendar.ui_common import embed_window_page
+
+        try:
+            if name == "doc":
+                from taskcalendar.qt_task_manager import TaskManagerDialog
+
+                page = TaskManagerDialog(None, self.repository, self)
+                self._task_manager_dialog = page
+            elif name == "work":
+                from taskcalendar.qt_work_manager import WorkManagerDialog
+
+                page = WorkManagerDialog(None, self.repository, self)
+                self._work_manager_dialog = page
+            else:
+                return None
+        except Exception:
+            logger.exception("Failed to create %s page", name)
+            return None
+        embed_window_page(page, self.window_switcher, name)
+        if name == "work":
+            # 업무 화면 윗줄 오른쪽의 [전체화면(F12)] [부가 기능 ▾] [저장(S)] 를 맨 위 띠의 [설정] 왼쪽으로
+            for attr, kind in (("btn_fullscreen", "secondary"), ("btn_extra_features", "secondary"),
+                               ("btn_save_work", "primary")):
+                btn = getattr(page, attr, None)
+                if btn is not None:
+                    self.window_switcher.add_action(btn, kind, "work")
+            if getattr(page, "_right_tools_group", None) is not None:
+                page._right_tools_group.hide()
+            # 업무 화면이 테마·전체화면 전환 때 이 버튼들에 자기 스타일을 다시 입히면 높이(30px)가 풀리므로,
+            # 그 뒤에 맨 위 띠 규격을 다시 입힌다.
+            import types
+
+            band = self.window_switcher
+            for meth in ("_apply_theme_styles", "_set_editor_fullscreen"):
+                orig = getattr(page, meth, None)
+                if orig is None:
+                    continue
+
+                def _wrapped(_self, *a, _orig=orig, **k):
+                    result = _orig(*a, **k)
+                    band.apply_palette(band._palette)
+                    if hasattr(_self, "_sync_bottom_bar_visibility"):
+                        _self._sync_bottom_bar_visibility()  # 열린 문서가 없으면 빈 탭 줄 숨김
+                    return result
+
+                setattr(page, meth, types.MethodType(_wrapped, page))
+            if hasattr(page, "_sync_bottom_bar_visibility"):
+                page._sync_bottom_bar_visibility()
+        self.page_stack.addWidget(page)
+        self._pages[name] = page
+        return page
+
+    def current_page_name(self) -> str:
+        return getattr(self, "_current_page", "calendar")
+
+    def show_service_menu_at(self, button) -> None:
+        """다른 창의 [기능] 버튼에서도 같은 기능 메뉴를 그 버튼 아래에 띄운다."""
+        try:
+            style_menu(self.service_menu, self.palette)
+            self.service_menu.exec(button.mapToGlobal(QPoint(0, button.height() + 2)))
+        except Exception:
+            logger.exception("Failed to show service menu")
+
+    def _sidebar_gutter_width(self) -> int:
+        gutter = getattr(self, "sidebar_gutter", None)
+        return gutter.width() if gutter is not None else 0
+
     def _show_service_menu(self) -> None:
         """부가 기능 버튼 클릭 시 드롭다운 팝업 메뉴 표시"""
         try:
             pos = self.service_button.mapToGlobal(QPoint(0, self.service_button.height() + 2))
+            style_menu(self.service_menu, self.palette)
             self.service_menu.exec(pos)
         except Exception:
             logger.exception("Failed to show service menu")
 
     def _open_task_manager(self) -> None:
-        """업무 관리 대시보드 창 열기"""
-        try:
-            from taskcalendar.desktop_services import force_window_to_foreground
-            from taskcalendar.qt_task_manager import TaskManagerDialog
-
-            dlg = getattr(self, "_task_manager_dialog", None)
-            if dlg is None or dlg.parent() is not None:
-                if dlg is not None and dlg.parent() is not None:
-                    try:
-                        dlg.close()
-                    except Exception:
-                        pass
-                dlg = TaskManagerDialog(None, self.repository, self)
-                self._task_manager_dialog = dlg
-            else:
-                dlg.apply_palette(self.palette)
-                dlg.reload_tasks()
-
-            if dlg.isMinimized():
-                dlg.setWindowState((dlg.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
-            dlg.show()
-            dlg.raise_()
-            dlg.activateWindow()
-            try:
-                hwnd = int(dlg.winId())
-                force_window_to_foreground(hwnd)
-                QTimer.singleShot(30, lambda h=hwnd: force_window_to_foreground(h))
-            except Exception:
-                pass
-        except Exception:
-            logger.exception("Failed to open TaskManagerDialog")
+        """[문서] 탭으로 이동"""
+        self.switch_to_window("doc")
 
     def _prewarm_work_manager(self) -> None:
-        """백그라운드에서 업무 관리 창과 WASM 한글 에디터 엔진을 미리 로드하여 클릭 시 즉시 열리도록 함"""
+        """업무 탭(과 한글 에디터 엔진)을 미리 만들어 두어 처음 누를 때 바로 열리게 한다."""
         try:
-            if getattr(self, "_work_manager_dialog", None) is None:
-                from taskcalendar.qt_work_manager import WorkManagerDialog
-                self._work_manager_dialog = WorkManagerDialog(None, self.repository, self)
+            self._ensure_page("work")
         except Exception:
             logger.debug("Failed to prewarm work manager")
 
     def _open_work_manager(self) -> None:
-        """신규 단위업무 및 편람/인수인계 창 열기"""
-        try:
-            from taskcalendar.desktop_services import force_window_to_foreground
-            from taskcalendar.qt_work_manager import WorkManagerDialog
-
-            dlg = getattr(self, "_work_manager_dialog", None)
-            if dlg is None:
-                dlg = WorkManagerDialog(None, self.repository, self)
-                self._work_manager_dialog = dlg
-            else:
-                dlg.apply_palette(self.palette)
-
-            if dlg.isMinimized():
-                dlg.setWindowState((dlg.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
-            dlg.show()
-            dlg.raise_()
-            dlg.activateWindow()
-            try:
-                hwnd = int(dlg.winId())
-                force_window_to_foreground(hwnd)
-                QTimer.singleShot(30, lambda h=hwnd: force_window_to_foreground(h))
-            except Exception:
-                pass
-        except Exception:
-            logger.exception("Failed to open WorkManagerDialog")
+        """[업무] 탭으로 이동"""
+        self.switch_to_window("work")
 
     def _toggle_desktop_widget(self, enable: bool | None = None) -> None:
         """바탕화면 달력 위젯(DesktopCal 모드) 켜기 / 끄기 토글"""
@@ -6755,16 +7927,9 @@ class MainWindow(QMainWindow):
                 file_path = data.get("file_path", "")
                 folder_path = data.get("folder_path", "")
                 target_path = folder_path if folder_path else file_path
+                # 캘린더가 이미 떠 있으면 앞으로 끌어올리지 않음 (열려 있는 문서목록창이 캘린더 뒤로 가려지는 문제 방지)
                 if self.isMinimized() or not self.isVisible():
                     self._restore_window_state()
-                else:
-                    if self.isMaximized():
-                        self.showMaximized()
-                    else:
-                        self.show()
-                    self.raise_()
-                    self.activateWindow()
-                force_window_to_foreground(int(self.winId()))
 
                 self._open_work_manager()
                 dlg = getattr(self, "_work_manager_dialog", None)
@@ -6773,7 +7938,7 @@ class MainWindow(QMainWindow):
                     dlg.raise_()
                     dlg.activateWindow()
                     try:
-                        force_window_to_foreground(int(dlg.winId()))
+                        force_window_to_foreground(int(self.winId()))  # 업무는 한 창 안의 탭
                     except Exception:
                         pass
                     if action == "import_work":
@@ -6823,6 +7988,22 @@ class MainWindow(QMainWindow):
                                         if "content" not in m_copy and "text" in m_copy:
                                             m_copy["content"] = m_copy["text"]
                                         memos_to_merge.append(m_copy)
+                        # taskcalendar:// 주소는 아무 웹페이지나 열 수 있으므로, 기존 메모를 덮어쓰기 전에 사용자 확인을 받는다.
+                        from PySide6.QtWidgets import QMessageBox
+                        sites = sorted({str(m.get("url", ""))[:80] for m in memos_to_merge if m.get("url")})
+                        site_lines = "\n".join(f"• {s}" for s in sites[:5]) + ("\n…" if len(sites) > 5 else "")
+                        answer = QMessageBox.question(
+                            self,
+                            "브라우저 메모 저장 확인",
+                            f"브라우저에서 페이지 메모 {len(memos_to_merge)}건을 바로업무에 저장하려고 합니다.\n"
+                            f"같은 메모가 있으면 내용이 바뀝니다.\n\n{site_lines}\n\n"
+                            "메모 관리 화면에서 직접 [바로업무(work/browser)로 백업]을 누른 경우에만 '예'를 선택하세요.",
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            QMessageBox.StandardButton.No,
+                        )
+                        if answer != QMessageBox.StandardButton.Yes:
+                            logger.info("[receive_external_entry] Browser memo sync declined by user")
+                            return
                         added, updated = work_files.merge_browser_memos(memos_to_merge, overwrite_existing=True)
                         bm_path = work_files.browser_memos_path()
                         logger.info(f"[receive_external_entry] Synced browser memos -> {bm_path} (+{added}, ~{updated})")
@@ -6922,6 +8103,13 @@ class MainWindow(QMainWindow):
                     memo_group=category or "일반",
                     status=status,
                 )
+                deadline_str = str(data.get("deadline", "")).strip()
+                if deadline_str:
+                    try:
+                        from datetime import date as dt_date
+                        task_entry.reply_due = dt_date.fromisoformat(deadline_str)
+                    except ValueError:
+                        pass
                 self._edit_entry(entry_type, task_entry, force_top=True)
             else:
                 entry_type = EntryType.SCHEDULE
@@ -7021,8 +8209,9 @@ class MainWindow(QMainWindow):
             saved = self.repository.upsert_entry(dialog.result)
             if entry_type == EntryType.MEMO and saved.entry_id is not None:
                 ids = [int(entry.entry_id) for entry in self._ordered_memos(self.repository.list_memos()) if entry.entry_id is not None]
-                if int(saved.entry_id) not in ids:
-                    ids.insert(0, int(saved.entry_id))
+                # 새 메모는 맨 뒤에 (이미 목록에 섞여 있으면 빼서 뒤로 옮긴다)
+                ids = [i for i in ids if i != int(saved.entry_id)]
+                ids.append(int(saved.entry_id))
                 self._save_memo_order_ids(ids, persist=False)
             self.repository.save()
             self.refresh()
@@ -7055,12 +8244,15 @@ class MainWindow(QMainWindow):
             logger.exception("open_entry_view failed")
             QMessageBox.critical(self, "오류", f"보기 창을 여는 중 오류가 발생했습니다.\n{exc}")
 
-    def _delete_entry(self, entry: CalendarEntry) -> None:
+    def _delete_entry(self, entry: CalendarEntry, confirmed: bool = False) -> None:
         target_id = entry.source_entry_id or entry.entry_id
         if not target_id:
             return
-        if QMessageBox.question(self, "삭제 확인", f"'{entry.title}' 항목을 삭제할까요?") != QMessageBox.Yes:
+        if not confirmed and QMessageBox.question(self, "삭제 확인", f"'{entry.title}' 항목을 삭제할까요?") != QMessageBox.Yes:
             return
+        board_card = getattr(self, "_memo_board_cards", {}).get(int(target_id))
+        if board_card is not None:
+            board_card._deleted = True  # 지워진 메모를 카드가 다시 저장하지 않게
         self.repository.delete_entry(target_id)
         if entry.entry_type == EntryType.MEMO:
             ids = [memo_id for memo_id in self._load_memo_order_ids() if memo_id != int(target_id)]
@@ -7395,7 +8587,9 @@ class MainWindow(QMainWindow):
         self._sync_open_group_ids(persist=True)
         return dlg
 
-    def _create_new_memo_group(self, title: str = "", assign_memo_id: int | None = None) -> QDialog | None:
+    def _create_new_memo_group(
+        self, title: str = "", assign_memo_id: int | None = None, open_on_desktop: bool = True
+    ) -> QDialog | None:
         try:
             if not title:
                 input_dlg = QInputDialog(self)
@@ -7426,6 +8620,9 @@ class MainWindow(QMainWindow):
                         if hasattr(memo_dlg, "entry"):
                             memo_dlg.entry.memo_group = gid
 
+            if not open_on_desktop:
+                self._refresh_all_group_dialogs()
+                return None
             dlg = self._open_memo_group(gid)
             self._refresh_all_group_dialogs()
             return dlg
@@ -7604,7 +8801,7 @@ class MainWindow(QMainWindow):
             self._splitter_layout_stabilized = True
             total_w = sum(self.body_splitter.sizes())
             if total_w > 0:
-                saved_w = self._get_saved_sidebar_width()
+                saved_w = self._get_saved_sidebar_width() + self._sidebar_gutter_width()
                 hw = self.body_splitter.handleWidth()
                 self.body_splitter.setSizes([max(300, total_w - saved_w - hw), saved_w])
         self._sync_topbar_sidebar_alignment()
@@ -7619,6 +8816,25 @@ class MainWindow(QMainWindow):
         body_w, _, _, body_h = self._sticker_metrics()
         self._band_baseline_cell_w = max(1, body_w // 7)
         self._band_baseline_cell_h = max(1, body_h // 6)
+
+    def _on_windows_session_ending(self, _session_manager=None) -> None:
+        # 윈도우는 종료 신호 후 몇 초 안에 프로세스를 강제로 끝낼 수 있으므로 여기서 먼저 저장한다.
+        try:
+            self._flush_current_settings_to_repository()
+        except Exception:
+            pass
+        try:
+            self._flush_repository_save()
+        except Exception:
+            pass
+        try:
+            self.repository.write_exit_backup("windows_session_ending")
+        except Exception:
+            pass
+        try:
+            self.repository.diag_snapshot("windows_session_ending", verify=True)
+        except Exception:
+            pass
 
     def _on_app_about_to_quit(self) -> None:
         if getattr(self, "_already_handled_quit", False):
@@ -7654,12 +8870,18 @@ class MainWindow(QMainWindow):
                     self._work_manager_dialog.close()
                 except Exception:
                     pass
+            if getattr(self, "_task_manager_dialog", None) is not None:
+                try:
+                    self._task_manager_dialog.close()
+                except Exception:
+                    pass
             if getattr(self, "_desktop_widget", None) is not None:
                 try:
                     self._desktop_widget.close()
                 except Exception:
                     pass
             self._flush_repository_save()
+            self.repository.write_exit_backup("app_quit")
             # 종료 시 마지막 저장이 디스크에 정상 기록됐는지 다시 읽어 확인(유실 원인 추적용)
             self.repository.diag_snapshot("quit_save_done", verify=True)
         except Exception:

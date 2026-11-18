@@ -113,53 +113,54 @@
 
   // ---------------------------------------------------------------- Shadow DOM
   var STYLE = [
-    '.tc-pm-card{position:fixed;width:' + CARD_WIDTH + 'px;height:' + CARD_HEIGHT + 'px;background:#fff;border:1px solid #CBD5E1;border-radius:8px;',
-    'box-shadow:0 8px 24px rgba(15,23,42,.18);font-family:-apple-system,BlinkMacSystemFont,"Malgun Gothic","Segoe UI",Roboto,sans-serif;',
-    'font-size:12px;color:#1E293B;z-index:2147483647;pointer-events:auto;overflow:hidden;line-height:1.4;box-sizing:border-box;',
+    '.tc-pm-card{position:fixed;width:' + CARD_WIDTH + 'px;height:' + CARD_HEIGHT + 'px;background:#fff7c2;border:1px solid #d5c880;border-radius:8px;',
+    'box-shadow:0 8px 24px rgba(49,41,33,.18);font-family:"Pretendard","Malgun Gothic","Segoe UI",sans-serif;',
+    'font-size:12px;color:#2c2c2c;z-index:2147483647;pointer-events:auto;overflow:hidden;line-height:1.4;box-sizing:border-box;',
     'display:flex;flex-direction:column;}',
     '.tc-pm-card:not(.collapsed){resize:both;min-width:220px;min-height:180px;max-width:90vw;max-height:85vh;}',
     '.tc-pm-card.collapsed{width:44px !important;height:44px !important;min-width:44px !important;min-height:44px !important;',
     'background:transparent !important;border:none !important;box-shadow:none !important;resize:none !important;',
     'border-radius:50% !important;overflow:visible !important;}',
     '.tc-pm-card.collapsed .tc-pm-head,.tc-pm-card.collapsed .tc-pm-body{display:none !important;}',
-    '.tc-pm-bubble{display:none;width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg, #2563EB, #1D4ED8);',
-    'box-shadow:0 4px 14px rgba(37,99,235,.45), 0 2px 6px rgba(0,0,0,.2);align-items:center;justify-content:center;color:#fff;',
+    '.tc-pm-bubble{display:none;width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg, #f5e99f, #e6d679);',
+    'box-shadow:0 4px 14px rgba(120,100,20,.35), 0 2px 6px rgba(0,0,0,.2);align-items:center;justify-content:center;color:#2c2c2c;',
     'font-size:20px;cursor:pointer;user-select:none;position:relative;transition:transform .15s ease, box-shadow .15s ease;}',
     '.tc-pm-card.collapsed .tc-pm-bubble{display:flex !important;}',
-    '.tc-pm-bubble:hover{transform:scale(1.08);box-shadow:0 6px 18px rgba(37,99,235,.55), 0 3px 8px rgba(0,0,0,.25);}',
-    '.tc-pm-head{display:flex;align-items:center;gap:4px;background:#2563EB;color:#fff;padding:6px 8px;cursor:move;user-select:none;flex-shrink:0;}',
+    '.tc-pm-bubble svg{width:24px !important;height:24px !important;max-width:none !important;fill:none;}',
+    '.tc-pm-bubble:hover{transform:scale(1.08);box-shadow:0 6px 18px rgba(120,100,20,.45), 0 3px 8px rgba(0,0,0,.25);}',
+    '.tc-pm-head{display:flex;align-items:center;gap:4px;background:#f5e99f;color:#2c2c2c;padding:6px 8px;font-weight:700;cursor:move;user-select:none;flex-shrink:0;}',
     '.tc-pm-grip{cursor:move;opacity:.85;font-size:13px;}',
     '.tc-pm-title{flex:1;font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
-    '.tc-pm-icon{border:none;background:rgba(255,255,255,.16);color:#fff;width:20px;height:20px;border-radius:4px;cursor:pointer;',
+    '.tc-pm-icon{border:1px solid transparent;background:transparent;color:#2c2c2c;width:22px;height:22px;border-radius:4px;cursor:pointer;',
     'font-size:12px;line-height:1;display:inline-flex;align-items:center;justify-content:center;padding:0;transition:background .12s;}',
-    '.tc-pm-icon:hover{background:rgba(255,255,255,.36);}',
-    '.tc-pm-del:hover{background:#DC2626;}',
+    '.tc-pm-icon:hover{background:rgba(255,255,255,.75);border-color:rgba(0,0,0,.15);}',
+    '.tc-pm-del:hover{background:#d15d48;color:#fff;}',
     '.tc-pm-body{padding:8px;flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;}',
     '.tc-pm-text{white-space:pre-wrap;word-break:break-word;line-height:1.5;overflow-y:auto;flex:1;min-height:0;}',
-    '.tc-pm-text.empty{color:#94A3B8;font-style:italic;}',
-    '.tc-pm-link{color:#2563EB;text-decoration:underline;word-break:break-all;cursor:pointer;}',
-    '.tc-pm-link:hover{color:#1D4ED8;}',
+    '.tc-pm-text.empty{color:#9a8f6a;font-style:italic;}',
+    '.tc-pm-link{color:#1f6f62;text-decoration:underline;word-break:break-all;cursor:pointer;}',
+    '.tc-pm-link:hover{color:#185a50;}',
     '.tc-pm-editor{display:none;flex-direction:column;gap:6px;flex:1;min-height:0;overflow:hidden;}',
     '.tc-pm-card.editing .tc-pm-editor{display:flex;}',
     '.tc-pm-card.editing .tc-pm-text{display:none;}',
-    '.tc-pm-title-input{width:100%;box-sizing:border-box;border:1px solid #CBD5E1;border-radius:4px;padding:5px 7px;',
-    'font-family:inherit;font-size:12px;font-weight:600;color:#1E293B;background:#FAFAFA;flex-shrink:0;}',
-    '.tc-pm-title-input:focus{outline:none;border-color:#2563EB;background:#fff;}',
-    '.tc-pm-input{width:100%;min-height:60px;flex:1;resize:none;box-sizing:border-box;border:1px solid #CBD5E1;border-radius:4px;padding:6px;',
-    'font-family:inherit;font-size:12px;line-height:1.5;color:#1E293B;background:#FAFAFA;overflow-y:auto;}',
-    '.tc-pm-input:focus{outline:none;border-color:#2563EB;background:#fff;}',
-    '.tc-pm-match{border:1px solid #E2E8F0;border-radius:4px;background:#F8FAFC;padding:4px 6px;font-size:11px;flex-shrink:0;max-height:85px;overflow-y:auto;}',
-    '.tc-pm-match summary{cursor:pointer;color:#1D4ED8;font-weight:600;}',
-    '.tc-pm-hint{color:#64748B;margin:4px 0;line-height:1.4;}',
+    '.tc-pm-title-input{width:100%;box-sizing:border-box;border:1px solid #d5c880;border-radius:6px;padding:5px 8px;',
+    'font-family:inherit;font-size:12px;font-weight:600;color:#2c2c2c;background:rgba(255,255,255,.6);flex-shrink:0;}',
+    '.tc-pm-title-input:focus{outline:none;border-color:#1f6f62;background:#fff;}',
+    '.tc-pm-input{width:100%;min-height:60px;flex:1;resize:none;box-sizing:border-box;border:1px solid #d5c880;border-radius:6px;padding:6px 8px;',
+    'font-family:inherit;font-size:12px;line-height:1.5;color:#2c2c2c;background:rgba(255,255,255,.6);overflow-y:auto;}',
+    '.tc-pm-input:focus{outline:none;border-color:#1f6f62;background:#fff;}',
+    '.tc-pm-match{border:1px solid #e6d679;border-radius:6px;background:rgba(255,255,255,.45);padding:4px 6px;font-size:11px;flex-shrink:0;max-height:85px;overflow-y:auto;}',
+    '.tc-pm-match summary{cursor:pointer;color:#5e5248;font-weight:600;}',
+    '.tc-pm-hint{color:#7c6e62;margin:4px 0;line-height:1.4;}',
     '.tc-pm-param{display:flex;align-items:center;gap:5px;padding:2px 0;word-break:break-all;}',
-    '.tc-pm-param input{margin:0;accent-color:#2563EB;}',
-    '.tc-pm-param span{color:#334155;}',
+    '.tc-pm-param input{margin:0;accent-color:#1f6f62;}',
+    '.tc-pm-param span{color:#3f352c;}',
     '.tc-pm-actions{display:flex;gap:6px;flex-shrink:0;padding-top:2px;}',
-    '.tc-pm-btn{flex:1;padding:6px;border-radius:4px;font-size:12px;font-weight:700;cursor:pointer;}',
-    '.tc-pm-save{background:#2563EB;color:#fff;border:none;}',
-    '.tc-pm-save:hover{background:#1D4ED8;}',
-    '.tc-pm-cancel{background:#F1F5F9;color:#475569;border:1px solid #CBD5E1;font-weight:600;}',
-    '.tc-pm-cancel:hover{background:#E2E8F0;}'
+    '.tc-pm-btn{flex:1;height:30px;padding:0 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;}',
+    '.tc-pm-save{background:#1f6f62;color:#fff;border:1px solid #1f6f62;}',
+    '.tc-pm-save:hover{background:#185a50;}',
+    '.tc-pm-cancel{background:#fffaf2;color:#312921;border:1px solid #d9cebe;}',
+    '.tc-pm-cancel:hover{background:#f6efe4;border-color:#1f6f62;}'
   ].join('');
 
   function linkify(text, container) {
@@ -237,7 +238,7 @@
   function buildMatchBox(pageKey) {
     var page = store[pageKey] || {};
     var box = h('details', 'tc-pm-match');
-    box.appendChild(h('summary', null, '⚙ 주소 매칭 설정'));
+    box.appendChild(h('summary', null, '어느 주소에서 보일지 설정'));
     box.appendChild(h('div', 'tc-pm-hint', '기본은 주소 전체로 매칭합니다. 아래 파라미터를 체크하면 매칭에서 무시합니다.'));
 
     var params = [];
@@ -330,6 +331,30 @@
     });
   }
 
+  // 접힌 메모 버블 아이콘: 핀 꽂힌 메모지 (이모지 글꼴에 기대지 않도록 SVG 로 직접 그림)
+  function buildBubbleIcon() {
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '24');
+    svg.setAttribute('height', '24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.style.display = 'block';
+    svg.style.pointerEvents = 'none';
+    var ink = '#7A5C12';
+    [
+      ['path', { d: 'M5.5 3.5h13a2 2 0 0 1 2 2v9.2l-5.8 5.8H5.5a2 2 0 0 1-2-2v-13a2 2 0 0 1 2-2z', fill: '#FFF9DB', stroke: ink, 'stroke-width': '1.5', 'stroke-linejoin': 'round' }],
+      ['path', { d: 'M20.5 14.7h-4a1.8 1.8 0 0 0-1.8 1.8v4', fill: '#F1DE8A', stroke: ink, 'stroke-width': '1.5', 'stroke-linejoin': 'round' }],
+      ['path', { d: 'M7.5 8.5h9M7.5 12h6', fill: 'none', stroke: ink, 'stroke-width': '1.5', 'stroke-linecap': 'round' }],
+      ['circle', { cx: '12', cy: '3.6', r: '1.9', fill: '#1F6F62', stroke: '#FFF9DB', 'stroke-width': '0.8' }]
+    ].forEach(function (spec) {
+      var el = document.createElementNS(NS, spec[0]);
+      Object.keys(spec[1]).forEach(function (k) { el.setAttribute(k, spec[1][k]); });
+      svg.appendChild(el);
+    });
+    return svg;
+  }
+
   function attachBubbleDragAndClick(card, bubble, memo, onExpand) {
     bubble.addEventListener('mousedown', function (e) {
       if (e.button !== 0) return;
@@ -391,8 +416,7 @@
 
     // 1. 최소화 시 표시되는 스마트폰 앱 스타일 원모양 버블
     var bubble = h('div', 'tc-pm-bubble');
-    var bubbleIcon = h('span', null, '📝');
-    bubble.appendChild(bubbleIcon);
+    bubble.appendChild(buildBubbleIcon());
     bubble.title = (memo.title ? memo.title : '페이지 메모') + '\n(클릭하여 펼치기)';
     card.appendChild(bubble);
 

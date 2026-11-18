@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>물품관리시스템 - 불용품 처분 신청</title>
+<style>
+  :root { --navy:#1f3a5f; --line:#d6dde8; --bg:#f2f5f9; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Malgun Gothic","Pretendard",sans-serif; background:var(--bg); color:#1f2937; font-size:14px; }
+  header { background:var(--navy); color:#fff; height:56px; display:flex; align-items:center; padding:0 28px; gap:14px; }
+  header h1 { font-size:20px; margin:0; }
+  .tag { background:#f59e0b; color:#1f2937; font-size:12px; font-weight:700; padding:3px 8px; border-radius:4px; }
+  header .user { margin-left:auto; font-size:13px; opacity:.9; }
+  nav { background:#fff; border-bottom:1px solid var(--line); padding:0 28px; display:flex; gap:26px; height:44px; align-items:center; font-weight:600; color:#475569; }
+  nav .on { color:var(--navy); border-bottom:3px solid var(--navy); padding:11px 0 8px; }
+  main { max-width:1280px; margin:22px auto; padding:0 20px; }
+  .crumb { color:#64748b; font-size:13px; margin-bottom:8px; }
+  h2 { margin:0 0 14px; font-size:22px; color:var(--navy); }
+  .box { background:#fff; border:1px solid var(--line); border-radius:6px; padding:18px 20px; margin-bottom:16px; }
+  .search { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  .search label { font-weight:600; color:#334155; }
+  .search select, .search input { height:32px; border:1px solid #cbd5e1; border-radius:4px; padding:0 8px; font-size:14px; }
+  .btn { height:32px; padding:0 16px; border-radius:4px; border:1px solid #94a3b8; background:#fff; font-weight:600; cursor:pointer; }
+  .btn.primary { background:var(--navy); color:#fff; border-color:var(--navy); }
+  .btn.warn { background:#b45309; color:#fff; border-color:#b45309; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { border-bottom:1px solid var(--line); padding:10px 8px; text-align:center; }
+  th { background:#eef2f7; color:#334155; font-weight:700; }
+  td.l { text-align:left; }
+  .st { font-size:12px; font-weight:700; padding:3px 8px; border-radius:10px; }
+  .st.a { background:#fef3c7; color:#92400e; } .st.b { background:#dbeafe; color:#1e40af; } .st.c { background:#dcfce7; color:#166534; }
+  .actions { display:flex; gap:8px; justify-content:flex-end; margin-top:14px; }
+  .note { color:#64748b; font-size:12.5px; margin-top:10px; }
+  .portal { margin-left:28px; display:flex; gap:6px; font-size:13px; }
+  .portal a { color:#fff; text-decoration:none; background:rgba(255,255,255,.14); padding:5px 11px; border-radius:4px; }
+  .portal a.cur { background:rgba(255,255,255,.32); font-weight:700; }
+</style>
+</head>
+<body>
+<header><h1>물품관리시스템</h1><span class="tag">모의 시연 사이트</span><span class="portal"><a href="물품관리시스템_불용처분.html" class="cur">물품관리</a><a href="재정회계시스템_세입세출외현금.html">재정회계</a><a href="온나라_모의전자결재사이트.html">온나라 전자결재</a></span><span class="user">기획예산과 | 홍길동 주무관 (시연자)</span></header>
+<nav><span>물품 취득</span><span>물품 운용</span><span class="on">불용 · 처분</span><span>재물조사</span><span>통계</span></nav>
+<main>
+  <div class="crumb">홈 › 불용 · 처분 › 불용품 처분 신청</div>
+  <h2>불용품 처분 신청</h2>
+  <div class="box search">
+    <label>회계연도</label><select><option>2026</option></select>
+    <label>처분구분</label><select><option>전체</option><option>매각</option><option>폐기</option></select>
+    <label>자산번호</label><input placeholder="예) 102030401">
+    <button class="btn primary">조회</button>
+  </div>
+  <div class="box">
+    <table>
+      <thead><tr><th><input type="checkbox"></th><th>자산번호</th><th>품명</th><th>취득연도</th><th>내용연수</th><th>취득금액(원)</th><th>처분방법</th><th>진행상태</th></tr></thead>
+      <tbody>
+        <tr><td><input type="checkbox" checked></td><td>102030401</td><td class="l">데스크톱 PC</td><td>2018</td><td>6년 경과</td><td>1,150,000</td><td>매각</td><td><span class="st a">심의대기</span></td></tr>
+        <tr><td><input type="checkbox" checked></td><td>102030502</td><td class="l">레이저 프린터</td><td>2017</td><td>5년 경과</td><td>620,000</td><td>폐기</td><td><span class="st a">심의대기</span></td></tr>
+        <tr><td><input type="checkbox"></td><td>102030708</td><td class="l">빔프로젝터</td><td>2019</td><td>5년 경과</td><td>1,890,000</td><td>매각</td><td><span class="st b">수요조사</span></td></tr>
+        <tr><td><input type="checkbox"></td><td>102030811</td><td class="l">사무용 의자</td><td>2016</td><td>8년 경과</td><td>210,000</td><td>폐기</td><td><span class="st c">처분완료</span></td></tr>
+      </tbody>
+    </table>
+    <div class="actions"><button class="btn">엑셀 다운로드</button><button class="btn warn">불용결정 요청</button><button class="btn primary">매각 공고 등록</button></div>
+    <div class="note">※ 불용결정 요청 건은 물품심사위원회 심의 후 처분됩니다.</div>
+  </div>
+</main>
+</body>
+</html>

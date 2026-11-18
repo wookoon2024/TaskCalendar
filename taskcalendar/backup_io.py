@@ -249,20 +249,19 @@ def run_auto_backup_db(
     backup_filename = f"taskcalendar_backup_{stamp}.db.enc"
     backup_filepath = backup_dir / backup_filename
 
+    # 메모리의 현재 DB 를 PC 기준 DPAPI 로 암호화해 디스크까지 기록한다.
+    # (예전에는 비밀번호 변경 대비로 평문 SQLite 사본 *.sqlite.bak 을 함께 남겼으나,
+    #  DB 가 PC 기준 암호화로 바뀌어 필요 없고 정보 유출 위험이 있어 남기지 않는다.)
+    from taskcalendar.storage import _write_durable, protect_bytes
+
     try:
-        shutil.copy2(db_path, backup_filepath)
+        if plain_db_bytes:
+            _write_durable(backup_filepath, protect_bytes(plain_db_bytes))
+        else:
+            shutil.copy2(db_path, backup_filepath)
     except Exception:
         return None
-
-    # Write fail-safe plain SQLite snapshot to ensure recovery across Windows account changes
-    if plain_db_bytes:
-        try:
-            sqlite_path = backup_dir / f"taskcalendar_backup_{stamp}.sqlite.bak"
-            sqlite_path.write_bytes(plain_db_bytes)
-            latest_sqlite = backup_dir / "database_latest.sqlite.bak"
-            latest_sqlite.write_bytes(plain_db_bytes)
-        except Exception:
-            pass
+    encrypt_plain_backups(backup_dir)
 
     # Write companion settings JSON alongside .db.enc
     if settings_dict:
@@ -296,3 +295,26 @@ def run_auto_backup_db(
             pass
 
     return now.isoformat()
+
+
+_SQLITE_HEADER = b"SQLite format 3\x00"
+
+
+def encrypt_plain_backups(backup_dir: Path) -> int:
+    """예전 버전이 남긴 평문 SQLite 백업(*.sqlite.bak)을 같은 이름 그대로 DPAPI 로 암호화한다.
+    복구 로직은 평문/암호화 둘 다 읽을 수 있으므로 복구 기능은 그대로 유지된다."""
+    from taskcalendar.storage import _write_durable, protect_bytes
+
+    converted = 0
+    for path in backup_dir.glob("*.sqlite.bak"):
+        try:
+            with path.open("rb") as fh:
+                if fh.read(len(_SQLITE_HEADER)) != _SQLITE_HEADER:
+                    continue
+            tmp = path.with_name(path.name + ".tmp")
+            _write_durable(tmp, protect_bytes(path.read_bytes()))
+            tmp.replace(path)
+            converted += 1
+        except Exception:
+            continue
+    return converted

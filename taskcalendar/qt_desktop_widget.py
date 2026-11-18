@@ -428,14 +428,14 @@ class DesktopWidgetDayCell(QFrame):
                 color: #0F172A;
             }
         """)
-        act_add_sch = menu.addAction(f"📅 {self.day_value.strftime('%m-%d')} 일정 추가")
+        act_add_sch = menu.addAction(f"{self.day_value.strftime('%m-%d')} 일정 추가")
         act_add_sch.triggered.connect(lambda: self.parent_widget.main_window._open_add_for_day(self.day_value))
 
-        act_add_memo = menu.addAction(f"📝 {self.day_value.strftime('%m-%d')} 메모 추가")
+        act_add_memo = menu.addAction(f"{self.day_value.strftime('%m-%d')} 메모 추가")
         act_add_memo.triggered.connect(lambda: self.parent_widget.main_window._edit_entry(EntryType.MEMO, None))
 
         menu.addSeparator()
-        act_open_main = menu.addAction("🗔 캘린더 메인 창 열기")
+        act_open_main = menu.addAction("캘린더 메인 창 열기")
         act_open_main.triggered.connect(self.parent_widget._open_main_calendar)
 
         menu.exec(pos)

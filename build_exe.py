@@ -8,16 +8,17 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from restore import restore_app_icon, restore_rhwp_wasm, restore_chrome_extension_zip
+from restore import restore_app_icon, restore_rhwp_wasm, restore_chrome_extension_zip, restore_sticker_v2
 
 ROOT = Path(__file__).resolve().parent
 
 SPEC_TEMPLATE = '''# -*- mode: python ; coding: utf-8 -*-
 try:
-    from restore import restore_app_icon, restore_rhwp_wasm, restore_chrome_extension_zip
+    from restore import restore_app_icon, restore_rhwp_wasm, restore_chrome_extension_zip, restore_sticker_v2
     restore_app_icon()
     restore_rhwp_wasm()
     restore_chrome_extension_zip()
+    restore_sticker_v2()
 except Exception:
     pass
 
@@ -25,7 +26,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('taskcalendar/assets', 'taskcalendar/assets'), ('data/holidays_kr.json', 'data'), ('chrome_extension', 'chrome_extension'), ('업무 템플릿', '업무 템플릿')],
+    datas=[('taskcalendar/assets', 'taskcalendar/assets'), ('taskcalendar/korean_report_hwpx', 'taskcalendar/korean_report_hwpx'), ('data/holidays_kr.json', 'data'), ('chrome_extension', 'chrome_extension')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -44,6 +45,16 @@ _unneeded_binaries = {
     'qwbmp.dll',
 }
 a.binaries = [x for x in a.binaries if not any(ub in x[0].lower() for ub in _unneeded_binaries)]
+# QtQuick/QML 은 사용하지 않는다. PySide6 버전에 따라 qml 폴더(수천 개 파일)가 딸려 들어와
+# onefile 실행 시 압축 해제 실패(Failed to extract entry ... qml)의 원인이 되므로 명시적으로 뺀다.
+a.datas = [x for x in a.datas if not x[0].replace(chr(92), '/').lower().startswith('pyside6/qml/')]
+a.binaries = [x for x in a.binaries if not x[0].replace(chr(92), '/').lower().startswith('pyside6/qml/')]
+# 크롬 개발자도구(devtools)·디버그용 WebEngine 리소스 (~97MB) 제외 — 문서 편집기는 이 파일 없이 정상 동작한다.
+# onefile 은 실행할 때마다 전부 풀기 때문에, 빼면 시작이 빨라지고 압축 해제 실패 가능성도 준다.
+a.datas = [x for x in a.datas if not (
+    x[0].replace(chr(92), '/').lower().startswith('pyside6/resources/')
+    and ('devtools' in x[0].lower() or '.debug.' in x[0].lower())
+)]
 
 pyz = PYZ(a.pure)
 
@@ -53,13 +64,14 @@ exe = EXE(
     a.binaries,
     a.datas,
     [('O', None, 'OPTION')],
-    name='바로업무',
+    # 브라우저 연동(taskcalendar:// 프로토콜)이 한글 파일명에서 동작하지 않아 영문 이름으로 빌드한다.
+    name='calendar',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,
+    runtime_tmpdir=r'%LOCALAPPDATA%\\TaskCalendar\\runtime',  # %TEMP% 대신 (부팅 직후 보안 프로그램의 TEMP 차단 회피)
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -78,6 +90,7 @@ def main() -> None:
     restore_app_icon()
     restore_rhwp_wasm()
     restore_chrome_extension_zip()
+    restore_sticker_v2()
 
     print("=== Step 2: Preparing spec file ===")
     spec_path = ROOT / "Calendar.spec"
@@ -93,23 +106,9 @@ def main() -> None:
         print("\n=== Build Completed Successfully! ===")
         dist_dir = ROOT / "dist"
         cal_exe = dist_dir / "calendar.exe"
-        baro_exe = dist_dir / "바로업무.exe"
         import shutil
-        if baro_exe.exists():
-            try:
-                shutil.copy2(baro_exe, cal_exe)
-                print("[OK] Synchronized calendar.exe with latest 바로업무.exe")
-            except Exception as e:
-                print(f"[WARN] calendar.exe is currently running; 바로업무.exe was built successfully: {e}")
-        elif cal_exe.exists():
-            try:
-                shutil.copy2(cal_exe, baro_exe)
-                print("[OK] Synchronized 바로업무.exe with latest calendar.exe")
-            except Exception as e:
-                print(f"[WARN] 바로업무.exe is currently running; calendar.exe was built successfully: {e}")
-        for exe_f in [baro_exe, cal_exe]:
-            if exe_f.exists():
-                print(f"Output executable: {exe_f} ({exe_f.stat().st_size:,} bytes)")
+        if cal_exe.exists():
+            print(f"Output executable: {cal_exe} ({cal_exe.stat().st_size:,} bytes)")
         ext_zip = ROOT / "chrome_extension.zip"
         if ext_zip.exists():
             shutil.copy2(ext_zip, dist_dir / "chrome_extension.zip")

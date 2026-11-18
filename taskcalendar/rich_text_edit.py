@@ -618,7 +618,7 @@ class RichTextEdit(QTextEdit):
                 new_grp_act.triggered.connect(lambda: parent_dlg._create_new_group(assign_current=False))
 
             if hasattr(parent_dlg, "_populate_group_menu"):
-                grp_sub = menu.addMenu("📁 그룹 지정 / 이동")
+                grp_sub = menu.addMenu("그룹 지정 / 이동")
                 grp_sub.setStyleSheet(menu.styleSheet())
                 parent_dlg._populate_group_menu(grp_sub)
 
@@ -638,23 +638,23 @@ class RichTextEdit(QTextEdit):
 
     def _add_ai_menu(self, menu) -> None:
         selected = self.textCursor().selectedText().strip()
-        ai_menu = menu.addMenu("✨ AI 작성 도우미")
+        ai_menu = menu.addMenu("AI 작성 도우미")
         ai_menu.setStyleSheet(menu.styleSheet())
 
-        act_gongmun = ai_menu.addAction("🏛️ 공문서 개조식 다듬기")
+        act_gongmun = ai_menu.addAction("공문서 개조식 다듬기")
         act_gongmun.triggered.connect(lambda: self._open_ai_preset("gongmun"))
 
-        act_summary = ai_menu.addAction("📋 3줄 핵심 요약")
+        act_summary = ai_menu.addAction("3줄 핵심 요약")
         act_summary.triggered.connect(lambda: self._open_ai_preset("summary"))
 
-        act_law = ai_menu.addAction("⚖️ 관련 법령·규정 검토")
+        act_law = ai_menu.addAction("관련 법령·규정 검토")
         act_law.triggered.connect(lambda: self._open_ai_preset("law"))
 
-        act_refine = ai_menu.addAction("✍️ 쉬운 공공언어로 순화")
+        act_refine = ai_menu.addAction("쉬운 공공언어로 순화")
         act_refine.triggered.connect(lambda: self._open_ai_preset("refine"))
 
         ai_menu.addSeparator()
-        act_chat = ai_menu.addAction("💬 자유 질문 / 대화하기")
+        act_chat = ai_menu.addAction("자유 질문 / 대화하기")
         act_chat.triggered.connect(self._open_ai_chat)
 
     def insert_text_at_cursor(self, text: str) -> None:

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>재정회계시스템 - 세입세출외현금 수납 등록</title>
+<style>
+  :root { --teal:#0f5e63; --line:#d5e3e4; --bg:#f1f6f6; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Malgun Gothic","Pretendard",sans-serif; background:var(--bg); color:#1f2937; font-size:14px; }
+  header { background:var(--teal); color:#fff; height:56px; display:flex; align-items:center; padding:0 28px; gap:14px; }
+  header h1 { font-size:20px; margin:0; }
+  .tag { background:#f59e0b; color:#1f2937; font-size:12px; font-weight:700; padding:3px 8px; border-radius:4px; }
+  header .user { margin-left:auto; font-size:13px; opacity:.9; }
+  .wrap { display:flex; max-width:1400px; margin:0 auto; }
+  aside { width:230px; background:#fff; border-right:1px solid var(--line); min-height:calc(100vh - 56px); padding:18px 0; }
+  aside div { padding:10px 24px; color:#475569; font-weight:600; }
+  aside .grp { color:#94a3b8; font-size:12px; padding-top:16px; }
+  aside .on { background:#e6f2f2; color:var(--teal); border-left:4px solid var(--teal); }
+  main { flex:1; padding:22px 30px; }
+  .crumb { color:#64748b; font-size:13px; margin-bottom:8px; }
+  h2 { margin:0 0 14px; font-size:22px; color:var(--teal); }
+  .box { background:#fff; border:1px solid var(--line); border-radius:6px; padding:20px 24px; margin-bottom:16px; }
+  .grid { display:grid; grid-template-columns:150px 1fr 150px 1fr; border-top:2px solid var(--teal); }
+  .grid > div { border-bottom:1px solid var(--line); padding:10px 12px; min-height:46px; display:flex; align-items:center; }
+  .grid .k { background:#eef5f5; font-weight:700; color:#334155; }
+  .grid input, .grid select { height:30px; border:1px solid #cbd5e1; border-radius:4px; padding:0 8px; width:100%; font-size:14px; }
+  .req::after { content:" *"; color:#dc2626; }
+  .actions { display:flex; gap:8px; justify-content:flex-end; margin-top:16px; }
+  .btn { height:34px; padding:0 18px; border-radius:4px; border:1px solid #94a3b8; background:#fff; font-weight:600; cursor:pointer; }
+  .btn.primary { background:var(--teal); color:#fff; border-color:var(--teal); }
+  table { width:100%; border-collapse:collapse; }
+  th, td { border-bottom:1px solid var(--line); padding:9px 8px; text-align:center; }
+  th { background:#eef5f5; color:#334155; }
+  .portal { margin-left:28px; display:flex; gap:6px; font-size:13px; }
+  .portal a { color:#fff; text-decoration:none; background:rgba(255,255,255,.14); padding:5px 11px; border-radius:4px; }
+  .portal a.cur { background:rgba(255,255,255,.32); font-weight:700; }
+</style>
+</head>
+<body>
+<header><h1>재정회계시스템</h1><span class="tag">모의 시연 사이트</span><span class="portal"><a href="물품관리시스템_불용처분.html">물품관리</a><a href="재정회계시스템_세입세출외현금.html" class="cur">재정회계</a><a href="온나라_모의전자결재사이트.html">온나라 전자결재</a></span><span class="user">기획예산과 | 홍길동 주무관 (시연자)</span></header>
+<div class="wrap">
+  <aside>
+    <div class="grp">세입</div><div>세입 징수결의</div><div>세입 수납 조회</div>
+    <div class="grp">세입세출외현금</div><div class="on">수납 등록</div><div>반환 · 정리</div><div>잔액 조회</div>
+    <div class="grp">세출</div><div>지출결의</div><div>지출 조회</div>
+  </aside>
+  <main>
+    <div class="crumb">홈 › 세입세출외현금 › 수납 등록</div>
+    <h2>세입세출외현금 수납 등록</h2>
+    <div class="box">
+      <div class="grid">
+        <div class="k req">회계구분</div><div><select><option>세입세출외현금</option></select></div>
+        <div class="k req">수납일자</div><div><input value="2026-12-01"></div>
+        <div class="k req">세목</div><div><select><option>불용품 매각대금</option><option>입찰보증금</option></select></div>
+        <div class="k req">납입자</div><div><input placeholder="낙찰자 성명/상호"></div>
+        <div class="k req">수납금액(원)</div><div><input placeholder="0"></div>
+        <div class="k req">수납계좌</div><div><select><option>○○은행 세입세출외현금 계좌</option></select></div>
+        <div class="k">관련 문서번호</div><div><input placeholder="[총무과-2850]"></div>
+        <div class="k">비고</div><div><input placeholder=""></div>
+      </div>
+      <div class="actions"><button class="btn">초기화</button><button class="btn primary">수납 등록</button></div>
+    </div>
+    <div class="box">
+      <table>
+        <thead><tr><th>수납일자</th><th>세목</th><th>납입자</th><th>금액(원)</th><th>관련 문서</th><th>상태</th></tr></thead>
+        <tbody>
+          <tr><td>2025-12-03</td><td>불용품 매각대금</td><td>(주)○○리사이클</td><td>2,410,000</td><td>[총무과-2611]</td><td>정리완료</td></tr>
+          <tr><td>2025-06-11</td><td>불용품 매각대금</td><td>△△자원</td><td>980,000</td><td>[총무과-1402]</td><td>정리완료</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+</div>
+</body>
+</html>

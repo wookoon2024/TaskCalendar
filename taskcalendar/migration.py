@@ -91,6 +91,21 @@ def _move_or_merge_dir(src: Path, dst: Path) -> None:
         pass
 
 
+_DECRYPT_CACHE: dict[tuple[str, int, int], bytes] = {}
+
+
+def _decrypt_db_once(db_file: Path) -> bytes:
+    """같은 DB 파일(경로·크기·수정시각 동일)은 한 번만 복호화한다. 시작할 때 분류 정보 조회가 DB 를 두 번 해독하던 것을 줄인다."""
+    from taskcalendar.storage import unprotect_bytes
+
+    st = db_file.stat()
+    key = (str(db_file), st.st_size, st.st_mtime_ns)
+    if key not in _DECRYPT_CACHE:
+        _DECRYPT_CACHE.clear()
+        _DECRYPT_CACHE[key] = unprotect_bytes(db_file.read_bytes())
+    return _DECRYPT_CACHE[key]
+
+
 def _get_category_sort_orders(db_file: Path) -> dict[tuple[int, str], int]:
     """
     암호화 DB를 복호화 메모리 DB로 로드하거나 스키마를 읽어 (tab_id, clean_name) -> sort_order 매핑을 만든다.
@@ -99,10 +114,7 @@ def _get_category_sort_orders(db_file: Path) -> dict[tuple[int, str], int]:
     if not db_file.exists():
         return mapping
     try:
-        from taskcalendar.storage import unprotect_bytes
-
-        raw_enc = db_file.read_bytes()
-        plain_bytes = unprotect_bytes(raw_enc)
+        plain_bytes = _decrypt_db_once(db_file)
         conn = sqlite3.connect(":memory:")
         try:
             conn.deserialize(plain_bytes)
@@ -130,10 +142,7 @@ def _get_category_metadata(db_file: Path) -> dict[str, dict]:
     if not db_file.exists():
         return metadata
     try:
-        from taskcalendar.storage import unprotect_bytes
-
-        raw_enc = db_file.read_bytes()
-        plain_bytes = unprotect_bytes(raw_enc)
+        plain_bytes = _decrypt_db_once(db_file)
         conn = sqlite3.connect(":memory:")
         try:
             conn.deserialize(plain_bytes)
@@ -436,16 +445,9 @@ def migrate_to_data_root() -> None:
     if stale_root_att.exists() and stale_root_att.is_dir():
         _move_or_merge_dir(stale_root_att, calendar_attachments_root())
 
-    # 8. DB 내 첨부파일 경로 갱신 및 중복 카테고리 정리
-    if has_legacy:
-        _update_migration_progress("데이터베이스 첨부파일 및 분류 체계를 정리하고 있습니다...", 90, prog_state)
-    try:
-        from taskcalendar.storage import EncryptedRepository
-        repo = EncryptedRepository(db_path())
-        repo.migrate_work_attachments_into_work_tree()
-        repo.cleanup_duplicate_work_categories()
-    except Exception as e:
-        logger.debug("Work attachments DB path migration error: %s", e)
+    # 8. DB 내 첨부파일 경로 갱신 및 중복 카테고리 정리는 cleanup_database_paths() 에서 한다.
+    #    (여기서 저장소를 따로 열면 시작할 때마다 DB 를 두 번 해독·로드하게 되므로,
+    #     app.run() 이 연 저장소를 넘겨받아 처리한다.)
 
     # 9. 비어 있는 구 디렉토리 정리
     for old_d in (old_db_dir, old_work_dir, root_att):
@@ -462,3 +464,13 @@ def migrate_to_data_root() -> None:
             prog_state[0].close()
         except Exception:
             pass
+
+
+def cleanup_database_paths(repo) -> None:
+    """DB 내 첨부파일 경로 갱신 및 중복 업무 분류 정리 (migrate_to_data_root 의 8단계).
+    app.run() 이 이미 연 저장소를 그대로 사용해 DB 를 한 번만 연다."""
+    try:
+        repo.migrate_work_attachments_into_work_tree()
+        repo.cleanup_duplicate_work_categories()
+    except Exception as e:
+        logger.debug("Work attachments DB path migration error: %s", e)

@@ -5,10 +5,10 @@
   <title>바로업무로 보내기</title>
   <style>
     :root {
-      --primary: #2563EB;
-      --primary-hover: #1D4ED8;
-      --border: #CBD5E1;
-      --light-blue: #EFF6FF;
+      --primary: #1f6f62;
+      --primary-hover: #185a50;
+      --border: #d9cebe;
+      --light-blue: #e4f1ec;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -22,10 +22,10 @@
       position: relative;
     }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Segoe UI", Roboto, sans-serif;
-      background: #F8FAFC;
-      color: #1E293B;
-      padding: 10px 12px;
+      font-family: "Pretendard", "Malgun Gothic", "Segoe UI", sans-serif;
+      background: #fffaf2;
+      color: #312921;
+      padding: 10px 14px 12px;
       font-size: 12px;
       user-select: none;
       display: flex;
@@ -48,13 +48,15 @@
       flex-shrink: 0;
     }
     .btn-gov {
-      background: #FFFFFF;
-      color: #1D4ED8;
-      border: 1px solid #93C5FD;
-      border-radius: 4px;
-      padding: 4px 7px;
-      font-size: 11px;
-      font-weight: 600;
+      background: #fffaf2;
+      color: #312921;
+      border: 1px solid #d9cebe;
+      border-radius: 6px;
+      height: 26px;
+      padding: 0 10px;
+      font-size: 12px;
+      font-weight: 500;
+      font-family: inherit;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
@@ -65,18 +67,20 @@
       transition: none;
     }
     .btn-gov:hover {
-      background: #EFF6FF;
+      background: #f6efe4;
+      border-color: #1f6f62;
+      color: #1f6f62;
     }
     .btn-gov.field-targeted {
-      background: #2563EB !important;
+      background: #1f6f62 !important;
       color: white !important;
-      border-color: #2563EB !important;
+      border-color: #1f6f62 !important;
     }
 
     /* 사이트 맞춤 규칙 적용 상태 (우측 회색 글씨, 한 줄로 표시) */
     .site-rule-status {
       font-size: 10px;
-      color: #64748B;
+      color: #7c6e62;
       font-weight: 500;
       text-align: right;
       white-space: nowrap;
@@ -87,7 +91,7 @@
     }
     .site-rule-status .domain-label {
       font-size: 10px;
-      color: #94A3B8;
+      color: #a99c8f;
       font-family: monospace;
       margin-left: 2px;
     }
@@ -100,31 +104,31 @@
       padding: 0 2px;
       background: transparent;
       border: none;
-      border-bottom: 2px solid #2563EB;
+      border-bottom: 1px solid #e8dfd2;
       flex-shrink: 0;
     }
+    /* 앱 맨 위 탭과 같은 밑줄 탭 */
     .tab-btn {
       flex: 1;
-      padding: 7px 0;
+      height: 34px;
       text-align: center;
-      font-size: 12px;
-      font-weight: 600;
-      color: #475569;
-      background: #F1F5F9;
-      border: 1px solid #CBD5E1;
-      border-bottom: none;
-      border-top-left-radius: 5px;
-      border-top-right-radius: 5px;
-      border-bottom-left-radius: 0;
-      border-bottom-right-radius: 0;
+      font-size: 13px;
+      font-weight: 500;
+      color: #7c6e62;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
       cursor: pointer;
       transition: none;
+      font-family: inherit;
     }
+    .tab-btn:hover { color: #312921; }
     .tab-btn.active {
-      background: #2563EB;
-      color: #FFFFFF;
-      border-color: #2563EB;
-      font-weight: bold;
+      background: transparent;
+      color: #1f6f62;
+      border-bottom-color: #1f6f62;
+      font-weight: 600;
     }
 
     /* 등록 폼 뷰 */
@@ -136,7 +140,7 @@
     }
     .fields-box {
       background: white;
-      border: 1px solid #CBD5E1;
+      border: 1px solid #d9cebe;
       border-top: none;
       border-bottom-left-radius: 6px;
       border-bottom-right-radius: 6px;
@@ -183,7 +187,7 @@
     }
     .field-row + .field-row { border-top: 1px solid #f0f0f0; }
     .field-row input[type="checkbox"] {
-      accent-color: #2563EB;
+      accent-color: #1f6f62;
       flex-shrink: 0;
     }
     .field-label {
@@ -191,7 +195,7 @@
       font-size: 11px;
       width: 44px;
       flex-shrink: 0;
-      color: #334155;
+      color: #3f352c;
     }
     .field-input {
       flex: 1;
@@ -200,20 +204,27 @@
       border-radius: 4px;
       font-size: 11px;
       font-family: inherit;
-      color: #1E293B;
-      background: #FAFAFA;
+      color: #312921;
+      background: #fffaf2;
       min-width: 0;
       user-select: text;
     }
     .field-input:focus {
       outline: none;
-      border-color: #2563EB;
+      border-color: #1f6f62;
       background: white;
     }
     .field-input:disabled {
       background: #f0f0f0;
       color: #aaa;
     }
+    .reply-quick-row { display: flex; gap: 4px; margin: -2px 0 6px 26px; }
+    .reply-quick-row button {
+      font-size: 11px; padding: 2px 7px; border: 1px solid #d9cebe; border-radius: 4px;
+      background: #fffaf2; color: #3f352c; cursor: pointer;
+    }
+    .reply-quick-row button:hover { border-color: #1f7a67; background: #fff; }
+    .reply-quick-row button.chosen { border-color: #1f6f62; background: #e4f1ec; color: #1f6f62; font-weight: 600; }
     textarea.field-input {
       resize: none;
       line-height: 1.45;
@@ -221,9 +232,9 @@
       transition: height 0.15s ease;
     }
     .btn-field-pick {
-      background: #EFF6FF;
-      border: 1px solid #BFDBFE;
-      color: #1D4ED8;
+      background: #e4f1ec;
+      border: 1px solid #b9d8cf;
+      color: #185a50;
       border-radius: 4px;
       padding: 0 4px;
       font-size: 11px;
@@ -236,12 +247,12 @@
       justify-content: center;
     }
     .btn-field-pick:hover, .btn-field-pick.active {
-      background: #2563EB;
+      background: #1f6f62;
       color: white;
-      border-color: #2563EB;
+      border-color: #1f6f62;
     }
     .field-row.field-pick-selected {
-      background: #EFF6FF;
+      background: #e4f1ec;
       border-radius: 4px;
     }
 
@@ -253,28 +264,31 @@
     }
     .actions button, .config-actions button {
       flex: 1;
-      padding: 9px;
-      border-radius: 5px;
-      font-size: 12px;
-      font-weight: bold;
+      height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
       cursor: pointer;
+      font-family: inherit;
     }
     .btn-submit {
-      background: #2563EB;
+      background: #1f6f62;
       color: white;
       border: none;
     }
     .btn-submit:hover {
-      background: #1D4ED8;
+      background: #185a50;
     }
     .btn-cancel {
-      background: #F1F5F9;
-      color: #475569;
-      border: 1px solid #CBD5E1;
-      font-weight: 600;
+      background: #fffaf2;
+      color: #312921;
+      border: 1px solid #d9cebe;
+      font-weight: 500;
     }
     .btn-cancel:hover {
-      background: #E2E8F0;
+      background: #f6efe4;
+      border-color: #1f6f62;
     }
 
     /* ========== 사이트 맞춤 설정 뷰 ========== */
@@ -295,14 +309,14 @@
     .config-title {
       font-size: 13px;
       font-weight: bold;
-      color: #1E293B;
+      color: #312921;
       display: flex;
       align-items: center;
       gap: 4px;
     }
     .config-domain-badge {
       font-size: 10px;
-      background: #EDE9FE;
+      background: #e4f1ec;
       color: var(--primary);
       padding: 2px 6px;
       border-radius: 4px;
@@ -314,8 +328,8 @@
     }
     .config-guide {
       font-size: 11px;
-      color: #64748B;
-      background: #F1F5F9;
+      color: #7c6e62;
+      background: #f6efe4;
       border-radius: 6px;
       padding: 6px 8px;
       margin-bottom: 8px;
@@ -334,15 +348,15 @@
       width: 6px;
     }
     .config-scroll-area::-webkit-scrollbar-track {
-      background: #F1F5F9;
+      background: #f6efe4;
       border-radius: 3px;
     }
     .config-scroll-area::-webkit-scrollbar-thumb {
-      background: #CBD5E1;
+      background: #d9cebe;
       border-radius: 3px;
     }
     .config-scroll-area::-webkit-scrollbar-thumb:hover {
-      background: #94A3B8;
+      background: #a99c8f;
     }
 
     .cfg-card {
@@ -361,7 +375,7 @@
     .cfg-card-label {
       font-weight: 600;
       font-size: 11px;
-      color: #334155;
+      color: #3f352c;
     }
     .cfg-status-pill {
       font-size: 10px;
@@ -370,26 +384,26 @@
       font-weight: 500;
     }
     .pill-empty {
-      background: #F1F5F9;
-      color: #64748B;
+      background: #f6efe4;
+      color: #7c6e62;
     }
     .pill-matched {
       background: #DCFCE7;
       color: #15803D;
     }
     .pill-fail {
-      background: #FEE2E2;
-      color: #B91C1C;
+      background: #fbe7e2;
+      color: #b9493a;
     }
     .pill-none {
-      background: #F1F5F9;
-      color: #475569;
-      border: 1px solid #CBD5E1;
+      background: #f6efe4;
+      color: #5e5248;
+      border: 1px solid #d9cebe;
     }
     .pill-custom {
-      background: #F3F0FF;
+      background: #e4f1ec;
       color: var(--primary);
-      border: 1px solid #DDD6FE;
+      border: 1px solid #b9d8cf;
       font-weight: bold;
     }
     .cfg-input-group {
@@ -402,7 +416,7 @@
       border: 1px solid var(--border);
       border-radius: 4px;
       font-size: 11px;
-      background: #FAFAFA;
+      background: #fffaf2;
       min-width: 0;
       user-select: text;
     }
@@ -412,8 +426,8 @@
       background: white;
     }
     .cfg-input:disabled {
-      background: #F1F5F9;
-      color: #94A3B8;
+      background: #f6efe4;
+      color: #a99c8f;
     }
     .btn-cfg-search {
       padding: 4px 7px;
@@ -432,9 +446,9 @@
     }
     .btn-cfg-none {
       padding: 4px 7px;
-      background: #F1F5F9;
-      color: #475569;
-      border: 1px solid #CBD5E1;
+      background: #f6efe4;
+      color: #5e5248;
+      border: 1px solid #d9cebe;
       border-radius: 4px;
       font-size: 11px;
       font-weight: 600;
@@ -443,20 +457,20 @@
       transition: all 0.15s ease;
     }
     .btn-cfg-none:hover {
-      background: #E2E8F0;
-      color: #1E293B;
-      border-color: #94A3B8;
+      background: #e8dfd2;
+      color: #312921;
+      border-color: #a99c8f;
     }
     .btn-cfg-none.active {
-      background: #64748B;
+      background: #7c6e62;
       color: white;
-      border-color: #64748B;
+      border-color: #7c6e62;
     }
     .btn-cfg-custom {
       padding: 4px 7px;
-      background: #F3F0FF;
+      background: #e4f1ec;
       color: var(--primary);
-      border: 1px solid #DDD6FE;
+      border: 1px solid #b9d8cf;
       border-radius: 4px;
       font-size: 11px;
       font-weight: 600;
@@ -465,7 +479,7 @@
       transition: all 0.15s ease;
     }
     .btn-cfg-custom:hover {
-      background: #EDE9FE;
+      background: #e4f1ec;
     }
     .btn-cfg-custom.active {
       background: var(--primary);
@@ -477,8 +491,8 @@
     .cfg-template-panel {
       margin-top: 5px;
       padding: 6px 7px;
-      background: #F8FAFC;
-      border: 1px solid #E2E8F0;
+      background: #fffaf2;
+      border: 1px solid #e8dfd2;
       border-radius: 5px;
       display: flex;
       flex-direction: column;
@@ -487,11 +501,11 @@
     .cfg-tpl-input {
       width: 100%;
       padding: 4px 6px;
-      border: 1px solid #CBD5E1;
+      border: 1px solid #d9cebe;
       border-radius: 4px;
       font-size: 11px;
       font-family: inherit;
-      color: #1E293B;
+      color: #312921;
       background: white;
       user-select: text;
     }
@@ -513,14 +527,14 @@
     }
     .cfg-chip-label {
       font-size: 10px;
-      color: #64748B;
+      color: #7c6e62;
       font-weight: 600;
       margin-right: 2px;
     }
     .cfg-chip {
       padding: 2px 5px;
       background: #FFFFFF;
-      border: 1px solid #CBD5E1;
+      border: 1px solid #d9cebe;
       border-radius: 3px;
       font-size: 10px;
       color: var(--primary);
@@ -541,16 +555,16 @@
       gap: 3px;
       margin-top: 4px;
       padding-top: 4px;
-      border-top: 1px dashed #E2E8F0;
+      border-top: 1px dashed #e8dfd2;
     }
     .cfg-pattern-input {
       width: 100%;
       padding: 3px 6px;
-      border: 1px solid #CBD5E1;
+      border: 1px solid #d9cebe;
       border-radius: 4px;
       font-size: 11px;
       font-family: monospace, inherit;
-      color: #0F172A;
+      color: #241e18;
       background: white;
     }
     .cfg-pattern-input:focus {
@@ -560,26 +574,26 @@
     }
     .cfg-quick-pattern {
       padding: 2px 5px;
-      background: #EDE9FE;
-      border: 1px solid #DDD6FE;
+      background: #e4f1ec;
+      border: 1px solid #b9d8cf;
       border-radius: 3px;
       font-size: 10px;
-      color: #6D28D9;
+      color: #185a50;
       font-weight: 600;
       cursor: pointer;
       transition: all 0.1s ease;
     }
     .cfg-quick-pattern:hover {
-      background: #7C3AED;
+      background: #1f6f62;
       color: white;
-      border-color: #7C3AED;
+      border-color: #1f6f62;
     }
 
     .cfg-preview-box {
       margin-top: 5px;
       padding: 4px 6px;
-      background: #F8FAFC;
-      border: 1px dashed #CBD5E1;
+      background: #fffaf2;
+      border: 1px dashed #d9cebe;
       border-radius: 4px;
       font-size: 10px;
       display: flex;
@@ -587,7 +601,7 @@
       gap: 2px;
     }
     .cfg-prev-text {
-      color: #1E293B;
+      color: #312921;
       font-weight: 500;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -600,9 +614,9 @@
       font-size: 9px;
     }
     .btn-danger {
-      background: #FEE2E2;
-      color: #B91C1C;
-      border: 1px solid #FECACA;
+      background: #fbe7e2;
+      color: #b9493a;
+      border: 1px solid #f3c5bb;
     }
     .btn-danger:hover {
       background: #FCA5A5;
@@ -612,33 +626,33 @@
     .sub-pick-btn {
       padding: 2px 7px;
       background: white;
-      border: 1px solid #93C5FD;
+      border: 1px solid #8fc1b3;
       border-radius: 3px;
       font-size: 11px;
       font-weight: 600;
-      color: #1D4ED8;
+      color: #185a50;
       cursor: pointer;
     }
     .sub-pick-btn:hover {
-      background: #2563EB;
+      background: #1f6f62;
       color: white;
-      border-color: #2563EB;
+      border-color: #1f6f62;
     }
     .cfg-subpick-box {
       padding: 5px 8px;
       background: #FFFFFF;
-      border: 1px solid #CBD5E1;
+      border: 1px solid #d9cebe;
       border-radius: 4px;
       font-size: 11px;
-      color: #1E293B;
+      color: #312921;
       user-select: text;
       cursor: text;
       line-height: 1.4;
       word-break: break-all;
     }
     .cfg-subpick-box::selection {
-      background: #BFDBFE;
-      color: #1E3A8A;
+      background: #b9d8cf;
+      color: #134a42;
     }
 
     /* 바로업무 팝업 내부 확인 모달 (웹페이지 변조 원천 차단) */
@@ -648,7 +662,7 @@
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(15, 23, 42, 0.55);
+      background: rgba(49, 41, 33, 0.55);
       z-index: 1000;
       display: flex;
       align-items: center;
@@ -659,14 +673,14 @@
       background: #FFFFFF;
       border-radius: 8px;
       box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
-      border: 1px solid #CBD5E1;
+      border: 1px solid #d9cebe;
       width: 100%;
       max-width: 360px;
       padding: 14px 16px;
       display: flex;
       flex-direction: column;
       gap: 10px;
-      color: #1E293B;
+      color: #312921;
     }
     .modal-confirm-header {
       display: flex;
@@ -676,7 +690,7 @@
     .modal-confirm-title {
       font-size: 13px;
       font-weight: 700;
-      color: #1E3A8A;
+      color: #134a42;
       display: flex;
       align-items: center;
       gap: 4px;
@@ -684,14 +698,14 @@
     .modal-confirm-close {
       border: none;
       background: transparent;
-      color: #94A3B8;
+      color: #a99c8f;
       font-size: 16px;
       font-weight: bold;
       cursor: pointer;
       line-height: 1;
     }
     .modal-confirm-close:hover {
-      color: #1E293B;
+      color: #312921;
     }
     .modal-confirm-sec {
       display: flex;
@@ -701,15 +715,15 @@
     .modal-confirm-lbl {
       font-size: 11px;
       font-weight: 600;
-      color: #64748B;
+      color: #7c6e62;
     }
     .modal-confirm-raw {
-      background: #F8FAFC;
-      border: 1px solid #E2E8F0;
+      background: #fffaf2;
+      border: 1px solid #e8dfd2;
       border-radius: 4px;
       padding: 6px 8px;
       font-size: 11px;
-      color: #1E293B;
+      color: #312921;
       max-height: 60px;
       overflow-y: auto;
       word-break: break-all;
@@ -718,11 +732,11 @@
     .modal-confirm-input {
       width: 100%;
       padding: 6px 8px;
-      border: 1.5px solid #2563EB;
+      border: 1.5px solid #1f6f62;
       border-radius: 4px;
       font-size: 12px;
       font-weight: 600;
-      color: #1E293B;
+      color: #312921;
       background: #FFFFFF;
       outline: none;
       box-sizing: border-box;
@@ -737,7 +751,7 @@
     .modal-confirm-chips-lbl {
       font-size: 10px;
       font-weight: 600;
-      color: #2563EB;
+      color: #1f6f62;
     }
     .modal-confirm-chips {
       display: flex;
@@ -746,18 +760,18 @@
     }
     .modal-confirm-chip-btn {
       padding: 2px 6px;
-      background: #EFF6FF;
-      border: 1px solid #BFDBFE;
+      background: #e4f1ec;
+      border: 1px solid #b9d8cf;
       border-radius: 3px;
       font-size: 10px;
       font-weight: 600;
-      color: #1D4ED8;
+      color: #185a50;
       cursor: pointer;
     }
     .modal-confirm-chip-btn:hover {
-      background: #2563EB;
+      background: #1f6f62;
       color: white;
-      border-color: #2563EB;
+      border-color: #1f6f62;
     }
     .modal-confirm-actions {
       display: flex;
@@ -766,9 +780,9 @@
       margin-top: 4px;
     }
     .btn-modal-cancel {
-      background: #F1F5F9;
-      color: #475569;
-      border: 1px solid #CBD5E1;
+      background: #f6efe4;
+      color: #5e5248;
+      border: 1px solid #d9cebe;
       border-radius: 4px;
       padding: 6px 12px;
       font-size: 11px;
@@ -776,10 +790,10 @@
       cursor: pointer;
     }
     .btn-modal-cancel:hover {
-      background: #E2E8F0;
+      background: #e8dfd2;
     }
     .btn-modal-ok {
-      background: #2563EB;
+      background: #1f6f62;
       color: white;
       border: none;
       border-radius: 4px;
@@ -789,7 +803,7 @@
       cursor: pointer;
     }
     .btn-modal-ok:hover {
-      background: #1D4ED8;
+      background: #185a50;
     }
   </style>
 </head>
@@ -852,6 +866,21 @@
         <span class="field-label">날짜</span>
         <input type="date" class="field-input" id="val-date">
         <button type="button" class="btn-field-pick" data-pick="date" title="웹페이지에서 날짜 직접 찍기">🎯</button>
+      </div>
+
+      <!-- 3-1. 회신기한 (업무 탭) — 바로업무 문서의 회신기한으로 등록되고 캘린더 회신 일정과 연결됨 -->
+      <div class="field-row" id="item-deadline" style="display: none;">
+        <input type="checkbox" id="chk-deadline">
+        <span class="field-label">회신기한</span>
+        <input type="date" class="field-input" id="val-deadline">
+      </div>
+      <div class="reply-quick-row" id="item-deadline-quick" style="display: none;">
+        <button type="button" data-days="0">당일</button>
+        <button type="button" data-days="1">1일 뒤</button>
+        <button type="button" data-days="3">3일 뒤</button>
+        <button type="button" data-days="7">7일 뒤</button>
+        <button type="button" data-days="14">14일 뒤</button>
+        <button type="button" data-months="1">1달 뒤</button>
       </div>
 
       <!-- 4. 분류 및 상태 (업무 탭, 2개 1줄 배치) -->
@@ -982,7 +1011,7 @@
             <span class="cfg-chip-label">🎯 2차 추출 추천 단어 (클릭 시 자동 선택):</span>
             <div class="cfg-chips-row" id="cfg-subpick-chips-department"></div>
             <details style="margin-top: 4px; font-size: 10px; cursor: pointer;">
-              <summary style="color: #64748B; font-weight: 600;">⚙️ 고급 정규식 직접 수정</summary>
+              <summary style="color: #7c6e62; font-weight: 600;">⚙️ 고급 정규식 직접 수정</summary>
               <input type="text" class="cfg-pattern-input" id="cfg-pattern-department" placeholder="예: \[(.*?)\] 또는 ^([^\s]+)" style="margin-top: 3px;">
               <div class="cfg-chips-row" style="margin-top: 3px;">
                 <span class="cfg-chip-label">빠른 패턴:</span>
@@ -1024,7 +1053,7 @@
             <span class="cfg-chip-label">🎯 2차 추출 추천 단어 (클릭 시 자동 선택):</span>
             <div class="cfg-chips-row" id="cfg-subpick-chips-author"></div>
             <details style="margin-top: 4px; font-size: 10px; cursor: pointer;">
-              <summary style="color: #64748B; font-weight: 600;">⚙️ 고급 정규식 직접 수정</summary>
+              <summary style="color: #7c6e62; font-weight: 600;">⚙️ 고급 정규식 직접 수정</summary>
               <input type="text" class="cfg-pattern-input" id="cfg-pattern-author" placeholder="예: \[(.*?)\] 또는 주무관\[(.*?)\]" style="margin-top: 3px;">
               <div class="cfg-chips-row" style="margin-top: 3px;">
                 <span class="cfg-chip-label">빠른 패턴:</span>
@@ -1218,7 +1247,7 @@
         <div class="modal-confirm-raw" id="modal-confirm-raw"></div>
       </div>
       <div class="modal-confirm-sec">
-        <div class="modal-confirm-lbl">✏️ 등록할 내용 <span style="font-weight: normal; color: #2563EB;">(원하는 단어만 남기면 자동 정규화)</span>:</div>
+        <div class="modal-confirm-lbl">✏️ 등록할 내용 <span style="font-weight: normal; color: #1f6f62;">(원하는 단어만 남기면 자동 정규화)</span>:</div>
         <input type="text" class="modal-confirm-input" id="modal-confirm-input">
         <div class="modal-confirm-chips-row" id="modal-confirm-chips-row" style="display: none;">
           <span class="modal-confirm-chips-lbl">💡 추천:</span>

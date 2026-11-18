@@ -148,6 +148,26 @@ def _dialog_icon() -> QIcon:
     return QIcon(str(icon_path))
 
 
+def _find_builtin_sticker(fname: str) -> Path:
+    """기본 스티커 파일 찾기: stickers/ → stickers/v2/ (v2.2.0 새 스티커) → stickers/legacy/ (옛 스티커)."""
+    for parts in (("stickers", fname), ("stickers", "v2", fname), ("stickers", "legacy", fname)):
+        candidate = asset_path(*parts)
+        if candidate.exists():
+            return candidate
+    return asset_path("stickers", fname)
+
+
+def _sticker_v2_items() -> tuple[list[dict], list[dict]]:
+    """(카테고리 목록, 스티커 목록) — assets/stickers/v2/manifest.json"""
+    import json
+
+    try:
+        data = json.loads(asset_path("stickers", "v2", "manifest.json").read_text(encoding="utf-8"))
+        return list(data.get("categories", [])), list(data.get("stickers", []))
+    except Exception:
+        return [], []
+
+
 def get_sticker_pixmap(icon_type: str) -> QPixmap | None:
     if not icon_type:
         return None
@@ -156,12 +176,11 @@ def get_sticker_pixmap(icon_type: str) -> QPixmap | None:
         fname = icon_type[7:]
         file_path = custom_stickers_path(fname)
     elif icon_type.startswith("built_in:"):
-        fname = icon_type[9:]
-        file_path = asset_path("stickers", fname)
+        file_path = _find_builtin_sticker(icon_type[9:])
     elif icon_type.endswith(".png"):
         file_path = custom_stickers_path(icon_type)
         if not file_path.exists():
-            file_path = asset_path("stickers", icon_type)
+            file_path = _find_builtin_sticker(icon_type)
     if file_path and file_path.exists():
         return QPixmap(str(file_path))
     return None
@@ -780,119 +799,184 @@ class ElidedLabel(QLabel):
 
 
 class IconPickerPopup(QDialog):
+    """일정 스티커 고르기. 달력 [꾸미기] 패널과 같은 모양:
+    강조색 테두리 카드 · [≡ 스티커 … 없애기 / 닫기] 머리줄 · 분류 칩 · 34px 스티커 칸 6줄."""
+
+    COLS = 6
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        from taskcalendar.ui_common import style_button
+
         self.palette = resolve_palette(parent)
         self.setWindowTitle("스티커 선택")
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setFixedSize(480, 380)
-        self.setStyleSheet(dialog_stylesheet(self.palette))
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFixedSize(300, 360)
         self.selected_icon: str | None = None
         self.selected_label: str = ""
+        p = self.palette
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        card = QFrame()
+        card.setObjectName("stickerPickerCard")
+        outer.addWidget(card)
+        card.setStyleSheet(f"""
+            QFrame#stickerPickerCard {{ background: {p['panel']}; border: 2px solid {p['accent']}; border-radius: 12px; }}
+            QLabel {{ background: transparent; border: none; }}
+            QLabel#pickerTitle {{ color: {p['text']}; font-size: 14px; font-weight: 700; }}
+            QLabel#pickerHint {{ color: {p['muted']}; font-size: 11px; }}
+            QPushButton#pickerCat {{ background: transparent; color: {p['muted']}; border: 1px solid {p.get('line_soft', p['line'])};
+                border-radius: 12px; padding: 0 8px; font-size: 11px; min-height: 22px; max-height: 22px; }}
+            QPushButton#pickerCat:hover {{ border-color: {p['accent']}; color: {p['accent']}; }}
+            QPushButton#pickerCat:checked {{ background: {p['accent']}; color: {p.get('button_text', '#FFFFFF')};
+                border-color: {p['accent']}; font-weight: 600; }}
+            QToolButton#pickerChip {{ background: {p['panel_alt']}; border: 1px solid {p.get('line_soft', p['line'])};
+                border-radius: 8px; font-size: 18px; }}
+            QToolButton#pickerChip:hover {{ border: 1px solid {p['accent']}; background: {p.get('accent_soft', p['panel_alt'])}; }}
+            QScrollArea {{ background: transparent; border: none; }}
+            QWidget#pickerGridHost {{ background: transparent; }}
+        """)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 10, 14, 12)
         layout.setSpacing(8)
 
-        header_layout = QHBoxLayout()
-        header_title = QLabel("🎨 스티커 & 아이콘")
-        header_title.setStyleSheet(f"font-size: 13px; font-weight: bold; color: {self.palette['text']};")
-        header_layout.addWidget(header_title)
-        header_layout.addStretch(1)
-
-        none_btn = QPushButton("스티커 제거")
-        none_btn.setStyleSheet(f"font-size: 11px; padding: 3px 8px; background: {self.palette['panel_alt']}; color: {self.palette['danger']}; border: 1px solid {self.palette['line']}; border-radius: 4px; font-weight: bold;")
-        none_btn.setCursor(Qt.PointingHandCursor)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        title = QLabel("≡ 스티커")
+        title.setObjectName("pickerTitle")
+        head.addWidget(title)
+        head.addStretch(1)
+        none_btn = QPushButton("없애기")
+        none_btn.setToolTip("이 일정의 스티커를 뺍니다")
+        style_button(none_btn, p, "secondary", "S")
         none_btn.clicked.connect(self._select_none)
-        header_layout.addWidget(none_btn)
-
-        close_btn = QPushButton()
-        close_btn.setIcon(QIcon(str(asset_path("memo_close.svg"))))
-        close_btn.setIconSize(QSize(11, 11))
-        close_btn.setFixedSize(22, 22)
-        close_btn.setCursor(Qt.PointingHandCursor)
+        head.addWidget(none_btn)
+        close_btn = QPushButton("닫기")
         close_btn.setToolTip("닫기 (Esc)")
-        close_btn.setStyleSheet(f"""
-            QPushButton {{
-                font-size: 11px;
-                font-weight: bold;
-                color: {self.palette['muted']};
-                background: transparent;
-                border: 1px solid {self.palette['line']};
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background: {self.palette['panel_alt']};
-                color: {self.palette['text']};
-                border-color: {self.palette['muted']};
-            }}
-        """)
+        style_button(close_btn, p, "secondary", "S")
         close_btn.clicked.connect(self.reject)
-        header_layout.addWidget(close_btn)
+        head.addWidget(close_btn)
+        layout.addLayout(head)
 
-        layout.addLayout(header_layout)
+        # 분류 칩: 새 스티커 분류 + 내 스티커 + 이모지
+        self._categories, self._stickers = _sticker_v2_items()
+        groups: list[tuple[str, str]] = [(c.get("id", ""), c.get("label", "")) for c in self._categories
+                                         if any(st.get("category") == c.get("id") for st in self._stickers)]
+        groups += [("__custom__", "내 스티커"), ("__emoji__", "이모지")]
+        cat_grid = QGridLayout()
+        cat_grid.setContentsMargins(0, 0, 0, 0)
+        cat_grid.setHorizontalSpacing(4)
+        cat_grid.setVerticalSpacing(4)
+        self._cat_buttons: dict[str, QPushButton] = {}
+        for i, (gid, label) in enumerate(groups):
+            b = QPushButton(label)
+            b.setObjectName("pickerCat")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, g=gid: self._show_group(g))
+            cat_grid.addWidget(b, i // 4, i % 4)
+            self._cat_buttons[gid] = b
+        layout.addLayout(cat_grid)
 
-        self.tabs = QTabWidget()
-        self.tabs.setUsesScrollButtons(False)
+        self.hint = QLabel("")
+        self.hint.setObjectName("pickerHint")
+        layout.addWidget(self.hint)
 
-        # 1. 내 스티커 Tab
-        self.tabs.addTab(self._build_custom_stickers_tab(), "내 스티커")
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._grid_host = QWidget()
+        self._grid_host.setObjectName("pickerGridHost")
+        host_layout = QVBoxLayout(self._grid_host)
+        host_layout.setContentsMargins(0, 0, 0, 0)
+        host_layout.setSpacing(6)
+        self._grid = QGridLayout()
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(6)
+        host_layout.addLayout(self._grid)
+        self._grid_extra = QHBoxLayout()
+        host_layout.addLayout(self._grid_extra)
+        host_layout.addStretch(1)
+        scroll.setWidget(self._grid_host)
+        layout.addWidget(scroll, 1)
 
-        # 2. 기본 스티커 Tab
-        self.tabs.addTab(self._build_builtin_stickers_tab(), "기본")
+        self._show_group(groups[0][0] if groups else "__emoji__")
 
-        # 3~6. Emoji Category Tabs (업무, 기념일, 일상, 강조)
-        short_names = {
-            "업무/일정": "업무",
-            "기념일/가족": "기념일",
-            "일상/생활": "일상",
-            "강조/스티커": "강조",
-        }
-        for cat_name, items in STICKER_CATEGORIES.items():
-            disp_name = short_names.get(cat_name, cat_name)
-            self.tabs.addTab(self._build_emoji_tab(items), disp_name)
+    # 칸 채우기 ----------------------------------------------------------------
+    def _clear_grid(self) -> None:
+        for lay in (self._grid, self._grid_extra):
+            while lay.count():
+                item = lay.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    w.hide()
+                    w.deleteLater()
 
-        layout.addWidget(self.tabs)
+    def _chip(self, tooltip: str) -> QToolButton:
+        btn = QToolButton()
+        btn.setObjectName("pickerChip")
+        btn.setFixedSize(34, 34)
+        btn.setIconSize(QSize(24, 24))
+        btn.setToolTip(tooltip)
+        btn.setCursor(Qt.PointingHandCursor)
+        return btn
 
-    def _build_custom_stickers_tab(self) -> QWidget:
-        container = QWidget()
-        vbox = QVBoxLayout(container)
-        vbox.setContentsMargins(6, 6, 6, 6)
-        vbox.setSpacing(6)
+    def _place(self, widgets: list[QWidget]) -> None:
+        for i, w in enumerate(widgets):
+            self._grid.addWidget(w, i // self.COLS, i % self.COLS)
 
-        top_row = QHBoxLayout()
-        add_btn = QPushButton("➕ PNG 스티커 등록...")
-        add_btn.setCursor(Qt.PointingHandCursor)
-        add_btn.setStyleSheet(f"font-size: 11px; font-weight: bold; padding: 4px 10px; background: {self.palette['accent']}; color: {self.palette['button_text']}; border: none; border-radius: 4px;")
-        add_btn.clicked.connect(self._add_custom_png)
-        top_row.addWidget(add_btn)
+    def _show_group(self, gid: str) -> None:
+        for key, b in self._cat_buttons.items():
+            b.setChecked(key == gid)
+        self._clear_grid()
+        chips: list[QWidget] = []
+        if gid == "__emoji__":
+            self.hint.setText("이모지 — 누르면 일정에 붙습니다")
+            for _cat, items in STICKER_CATEGORIES.items():
+                for emoji, label in items:
+                    btn = self._chip(label)
+                    btn.setText(emoji)
+                    btn.clicked.connect(lambda _chk=False, e=emoji, l=label: self._choose(e, l))
+                    chips.append(btn)
+        elif gid == "__custom__":
+            self.hint.setText("내가 등록한 PNG — 오른쪽 클릭으로 삭제")
+            dest_dir = custom_stickers_path()
+            png_files = sorted(dest_dir.glob("*.png"), key=lambda f: f.stat().st_mtime, reverse=True) if dest_dir.exists() else []
+            for f in png_files:
+                btn = self._chip(f.name)
+                btn.setIcon(QIcon(str(f)))
+                btn.clicked.connect(lambda _chk=False, fname=f.name: self._choose(f"custom:{fname}", fname))
+                btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                btn.customContextMenuRequested.connect(lambda _pt, file_p=f: self._show_custom_context_menu(file_p))
+                chips.append(btn)
+            add_btn = QPushButton("PNG 스티커 등록…")
+            from taskcalendar.ui_common import style_button
 
-        tip_lbl = QLabel("※ 등록된 스티커 우클릭 시 삭제")
-        tip_lbl.setStyleSheet(f"font-size: 10px; color: {self.palette['muted']};")
-        top_row.addWidget(tip_lbl)
-        top_row.addStretch(1)
-        vbox.addLayout(top_row)
-
-        self.custom_scroll = QScrollArea()
-        self.custom_scroll.setWidgetResizable(True)
-        self.custom_scroll.setStyleSheet("border: none; background: transparent;")
-        self.custom_grid_widget = QWidget()
-        self.custom_grid = QGridLayout(self.custom_grid_widget)
-        self.custom_grid.setContentsMargins(4, 4, 4, 4)
-        self.custom_grid.setSpacing(6)
-        self.custom_scroll.setWidget(self.custom_grid_widget)
-        vbox.addWidget(self.custom_scroll)
-
-        self._refresh_custom_stickers_grid()
-        return container
+            style_button(add_btn, self.palette, "secondary", "S")
+            add_btn.clicked.connect(self._add_custom_png)
+            self._grid_extra.addWidget(add_btn)
+            self._grid_extra.addStretch(1)
+        else:
+            label = next((c.get("label", "") for c in self._categories if c.get("id") == gid), "")
+            self.hint.setText(f"{label} — 누르면 일정에 붙습니다")
+            for st in self._stickers:
+                if st.get("category") != gid:
+                    continue
+                fname = f"{st.get('name', '')}.png"
+                path = asset_path("stickers", "v2", fname)
+                if not path.exists():
+                    continue
+                btn = self._chip(st.get("label", ""))
+                btn.setIcon(QIcon(str(path)))
+                btn.clicked.connect(lambda _chk=False, f=fname, l=st.get("label", ""): self._choose(f"built_in:{f}", l))
+                chips.append(btn)
+        self._place(chips)
 
     def _add_custom_png(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "PNG 스티커 선택",
-            "",
-            "PNG 이미지 (*.png);;모든 이미지 (*.png *.jpg *.jpeg *.webp)"
+            self, "PNG 스티커 선택", "", "PNG 이미지 (*.png);;모든 이미지 (*.png *.jpg *.jpeg *.webp)"
         )
         if not file_path:
             return
@@ -906,128 +990,18 @@ class IconPickerPopup(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "오류", f"스티커 복사 실패: {e}")
             return
-        self._refresh_custom_stickers_grid()
+        self._show_group("__custom__")
 
-    def _refresh_custom_stickers_grid(self) -> None:
-        while self.custom_grid.count():
-            item = self.custom_grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-
-        dest_dir = custom_stickers_path()
-        png_files = sorted(dest_dir.glob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not png_files:
-            empty_lbl = QLabel("등록된 스티커가 없습니다.\n상단의 '➕ PNG 스티커 등록...' 버튼으로 추가해 보세요.")
-            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty_lbl.setStyleSheet(f"color: {self.palette['muted']}; font-size: 11px; padding: 25px;")
-            self.custom_grid.addWidget(empty_lbl, 0, 0, 1, 6)
-            return
-
-        row, col = 0, 0
-        for p in png_files:
-            btn = QToolButton()
-            btn.setProperty("class", "sticker-btn")
-            btn.setIcon(QIcon(str(p)))
-            btn.setIconSize(QSize(32, 32))
-            btn.setToolTip(f"{p.name}\n(좌클릭: 선택 / 우클릭: 삭제)")
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.clicked.connect(lambda _chk=False, fname=p.name: self._choose(f"custom:{fname}", fname))
-            btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            btn.customContextMenuRequested.connect(lambda pt, file_p=p: self._show_custom_context_menu(pt, file_p))
-            self.custom_grid.addWidget(btn, row, col)
-            col += 1
-            if col >= 6:
-                col = 0
-                row += 1
-
-    def _show_custom_context_menu(self, point: QPoint, file_p: Path) -> None:
+    def _show_custom_context_menu(self, file_p: Path) -> None:
         menu = QMenu(self)
-        del_act = menu.addAction("🗑️ 스티커 삭제")
-        action = menu.exec(QCursor.pos())
-        if action == del_act:
+        del_act = menu.addAction("스티커 삭제")
+        if menu.exec(QCursor.pos()) == del_act:
             if QMessageBox.question(self, "스티커 삭제", f"'{file_p.name}' 스티커를 삭제하시겠습니까?") == QMessageBox.Yes:
                 try:
                     file_p.unlink(missing_ok=True)
                 except Exception:
                     pass
-                self._refresh_custom_stickers_grid()
-
-    def _build_builtin_stickers_tab(self) -> QWidget:
-        container = QWidget()
-        vbox = QVBoxLayout(container)
-        vbox.setContentsMargins(6, 6, 6, 6)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("border: none; background: transparent;")
-        grid_widget = QWidget()
-        grid = QGridLayout(grid_widget)
-        grid.setContentsMargins(4, 4, 4, 4)
-        grid.setSpacing(6)
-
-        sticker_dir = asset_path("stickers")
-        builtin_names = [
-            ("star.png", "별"),
-            ("heart_pink.png", "하트"),
-            ("clover.png", "클로버"),
-            ("coffee_time.png", "커피"),
-            ("food.png", "식사"),
-            ("rice_bowl.png", "밥"),
-            ("meeting.png", "회의"),
-            ("leave_day.png", "휴가"),
-            ("medicine_pill.png", "약"),
-            ("money.png", "급여"),
-            ("car.png", "출장/차"),
-            ("cat.png", "고양이"),
-            ("bunny.png", "토끼"),
-            ("ribbon.png", "리본"),
-        ]
-        row, col = 0, 0
-        for fname, label in builtin_names:
-            p = sticker_dir / fname
-            if p.exists():
-                btn = QToolButton()
-                btn.setProperty("class", "sticker-btn")
-                btn.setIcon(QIcon(str(p)))
-                btn.setIconSize(QSize(32, 32))
-                btn.setToolTip(label)
-                btn.setCursor(Qt.PointingHandCursor)
-                btn.clicked.connect(lambda _chk=False, f=fname, l=label: self._choose(f"built_in:{f}", l))
-                grid.addWidget(btn, row, col)
-                col += 1
-                if col >= 6:
-                    col = 0
-                    row += 1
-        scroll.setWidget(grid_widget)
-        vbox.addWidget(scroll)
-        return container
-
-    def _build_emoji_tab(self, items: list[tuple[str, str]]) -> QWidget:
-        container = QWidget()
-        vbox = QVBoxLayout(container)
-        vbox.setContentsMargins(6, 6, 6, 6)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("border: none; background: transparent;")
-        grid_widget = QWidget()
-        grid = QGridLayout(grid_widget)
-        grid.setContentsMargins(4, 4, 4, 4)
-        grid.setSpacing(6)
-        row, col = 0, 0
-        for emoji, label in items:
-            btn = QToolButton()
-            btn.setProperty("class", "sticker-btn")
-            btn.setText(emoji)
-            btn.setToolTip(label)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.clicked.connect(lambda _chk=False, e=emoji, l=label: self._choose(e, l))
-            grid.addWidget(btn, row, col)
-            col += 1
-            if col >= 6:
-                col = 0
-                row += 1
-        scroll.setWidget(grid_widget)
-        vbox.addWidget(scroll)
-        return container
+                self._show_group("__custom__")
 
     def _choose(self, icon_code: str, label: str) -> None:
         self.selected_icon = icon_code
@@ -2495,7 +2469,36 @@ class EntryDialog(QDialog):
         self._expanded_width = target_w
         self._expanded_height = target_h
         self._debounced_save_memo_geometry(250)
+        # 계산값이 테두리·문서 여백만큼 모자라면 스크롤바가 남는다 → 남은 만큼 한 번 더 키운다
+        QTimer.singleShot(0, lambda: self._grow_memo_until_no_scroll(3, max_w, max_h))
         return True
+
+    def _grow_memo_until_no_scroll(self, passes_left: int, max_w: int, max_h: int) -> None:
+        """자동 맞춤 뒤에도 스크롤바가 보이면 넘치는 만큼 창을 키운다 (화면 95% 까지)."""
+        if passes_left <= 0 or getattr(self, "_is_collapsed", False) or not hasattr(self, "description_input"):
+            return
+        editor = self.description_input
+        hbar = editor.horizontalScrollBar()
+        vbar = editor.verticalScrollBar()
+        extra_w = 0
+        extra_h = 0
+        if hbar is not None and hbar.maximum() > 0:
+            extra_w = hbar.maximum() + 2
+        if vbar is not None and vbar.maximum() > 0:
+            extra_h = vbar.maximum() + 2
+        if not extra_w and not extra_h:
+            return
+        new_w = min(max_w, self.width() + extra_w)
+        new_h = min(max_h, self.height() + extra_h)
+        if new_w == self.width() and new_h == self.height():
+            return
+        avail = _screen_geometry_for(self.x(), self.y(), max(1, new_w), max(1, new_h))
+        x, y, new_w, new_h = clamp_rect_into_screen(avail, self.x(), self.y(), new_w, new_h, min_w=240, min_h=120)
+        self.setGeometry(x, y, new_w, new_h)
+        self._expanded_width = new_w
+        self._expanded_height = new_h
+        self._debounced_save_memo_geometry(250)
+        QTimer.singleShot(0, lambda: self._grow_memo_until_no_scroll(passes_left - 1, max_w, max_h))
 
     def _get_memo_resize_direction(self, global_pos: QPoint) -> str | None:
         local_pos = self.mapFromGlobal(global_pos)
@@ -2701,7 +2704,7 @@ class EntryDialog(QDialog):
             parent = getattr(self, "_owner_window", None) or self.parent()
             grp = parent.repository.get_memo_group(curr_group_id) if parent and hasattr(parent, "repository") else None
             grp_name = grp.get("title", "그룹") if grp else "소속 그룹"
-            open_grp_act = menu.addAction(f"📂 소속 그룹 열기 ({grp_name})")
+            open_grp_act = menu.addAction(f"소속 그룹 열기 ({grp_name})")
             open_grp_act.triggered.connect(lambda: parent._open_memo_group(curr_group_id) if parent and hasattr(parent, "_open_memo_group") else None)
             open_grp_memos_act = menu.addAction(f"그룹 메모 모두 열기 ({grp_name})")
             open_grp_memos_act.triggered.connect(lambda: self._open_group_memos(curr_group_id))
@@ -2715,7 +2718,7 @@ class EntryDialog(QDialog):
         close_all_act.triggered.connect(self._close_all_memos)
         menu.addSeparator()
 
-        group_menu = menu.addMenu("📁 그룹 지정 / 이동")
+        group_menu = menu.addMenu("그룹 지정 / 이동")
         group_menu.setStyleSheet(menu.styleSheet())
         self._populate_group_menu(group_menu)
         menu.addSeparator()
@@ -2781,13 +2784,13 @@ class EntryDialog(QDialog):
             for grp in groups:
                 gid = grp.get("id", "")
                 gtitle = grp.get("title", "그룹")
-                act = group_menu.addAction(f"📁 {gtitle}")
+                act = group_menu.addAction(f"{gtitle}")
                 act.setCheckable(True)
                 act.setChecked(curr_group_id == gid)
                 act.triggered.connect(lambda _=False, target_id=gid: self._set_memo_group(target_id))
             group_menu.addSeparator()
 
-        new_grp_act = group_menu.addAction("➕ 새 그룹 생성 및 이동...")
+        new_grp_act = group_menu.addAction("새 그룹 생성 및 이동...")
         new_grp_act.triggered.connect(lambda: self._create_new_group(assign_current=True))
 
     def _set_memo_group(self, group_id: str) -> None:
@@ -3501,6 +3504,10 @@ class EntryDialog(QDialog):
                 self._collapse_btn.setToolTip("메모 접기")
             
         self._debounced_save_memo_geometry(250)
+        # 메모 보드의 같은 메모 카드도 함께 접기 / 펼치기
+        owner = getattr(self, "_owner_window", None) or self.parent()
+        if owner is not None and hasattr(owner, "_on_floating_memo_collapse_changed") and self.entry is not None:
+            owner._on_floating_memo_collapse_changed(self.entry.entry_id, self._is_collapsed)
 
     def _debounced_save_memo_geometry(self, delay_ms: int = 250) -> None:
         self._save_memo_geometry(persist=False)
@@ -3645,8 +3652,9 @@ class EntryDialog(QDialog):
             
             if is_new and saved.entry_id is not None and hasattr(parent, "_ordered_memos") and hasattr(parent, "_save_memo_order_ids"):
                 ids = [int(e.entry_id) for e in parent._ordered_memos(parent.repository.list_memos()) if e.entry_id is not None]
-                if int(saved.entry_id) not in ids:
-                    ids.insert(0, int(saved.entry_id))
+                # 새 메모는 맨 뒤에 (이미 목록에 섞여 있으면 빼서 뒤로 옮긴다)
+                ids = [i for i in ids if i != int(saved.entry_id)]
+                ids.append(int(saved.entry_id))
                 parent._save_memo_order_ids(ids, persist=False)
                 
             if is_new and saved.entry_id is not None and hasattr(parent, "_active_memo_dialogs"):
@@ -3663,6 +3671,8 @@ class EntryDialog(QDialog):
                 
             if persist_disk:
                 parent.repository.save()
+            if hasattr(parent, "_debounced_render_memo_page"):
+                parent._debounced_render_memo_page()
             if refresh_parent:
                 if hasattr(parent, "sidebar_mode") and parent.sidebar_mode == "memo":
                     parent._render_sidebar()
@@ -4024,7 +4034,9 @@ class MiniMemoCardWidget(QFrame):
 
     def update_content(self, entry: CalendarEntry) -> None:
         self.entry = entry
-        title_text = (entry.title or "제목 없음").strip()
+        from taskcalendar.ui_common import memo_display_title
+
+        title_text = memo_display_title(entry.title, self._plain_snippet(entry.description))[0]
         if hasattr(self, "title_lbl"):
             if hasattr(self.title_lbl, "set_full_text"):
                 self.title_lbl.set_full_text(title_text)
@@ -4061,7 +4073,9 @@ class MiniMemoCardWidget(QFrame):
             }}
         """)
 
-        title_text = (self.entry.title or "제목 없음").strip()
+        from taskcalendar.ui_common import memo_display_title
+
+        title_text = memo_display_title(self.entry.title, self._plain_snippet(self.entry.description))[0]
 
         # Content snippet (strip html if html)
         snippet = self._plain_snippet(self.entry.description)
@@ -5675,7 +5689,7 @@ class FloatingGroupDialog(QDialog):
                 color: #0f172a;
             }
         """)
-        add_act = menu.addAction("➕ 새 메모 추가")
+        add_act = menu.addAction("새 메모 추가")
         add_act.triggered.connect(self._on_add_memo_clicked)
         menu.addSeparator()
 
@@ -5690,19 +5704,19 @@ class FloatingGroupDialog(QDialog):
         mode_act.triggered.connect(self._toggle_view_mode)
         menu.addSeparator()
 
-        color_menu = menu.addMenu("🎨 그룹 색상 변경")
+        color_menu = menu.addMenu("그룹 색상 변경")
         color_menu.setStyleSheet(menu.styleSheet())
         for k, th in MEMO_THEMES.items():
             act = color_menu.addAction(th['name'])
             act.triggered.connect(lambda _=False, key=k: (self._apply_theme(key), self._save_group_state()))
 
-        pin_act = menu.addAction("📌 항상 위에 고정")
+        pin_act = menu.addAction("항상 위에 고정")
         pin_act.setCheckable(True)
         pin_act.setChecked(self._is_floating)
         pin_act.triggered.connect(self._toggle_pin)
 
         menu.addSeparator()
-        del_act = menu.addAction("🗑️ 그룹 삭제")
+        del_act = menu.addAction("그룹 삭제")
         del_act.triggered.connect(self._on_delete_group)
 
         menu.exec(global_pos)
@@ -7176,7 +7190,75 @@ class SettingsDialog(QDialog):
 
         pg_doc_layout.addWidget(doc_display_card)
 
-        # 2. 크롬 확장프로그램 (Chrome Extension) 연동 카드
+        # 2. 문서 회신기한 카드
+        from taskcalendar import doc_reply
+        from taskcalendar.storage import EncryptedRepository
+
+        _reply_repo = EncryptedRepository.get_global_instance()
+        self._doc_reply_values = doc_reply.load_settings(_reply_repo) if _reply_repo else dict(doc_reply.DEFAULTS)
+        reply_card = QFrame()
+        reply_card.setObjectName("card")
+        reply_layout = QVBoxLayout(reply_card)
+        reply_layout.setContentsMargins(14, 12, 14, 12)
+        reply_layout.setSpacing(8)
+        reply_title = QLabel("문서 회신기한")
+        reply_title.setObjectName("sectionTitle")
+        reply_layout.addWidget(reply_title)
+
+        self.doc_reply_auto_check = QCheckBox("회신기한을 입력하면 캘린더에 회신 일정을 자동 등록 (기본 체크)")
+        self.doc_reply_auto_check.setChecked(self._doc_reply_values["doc_reply_auto_calendar"] != "0")
+        reply_layout.addWidget(self.doc_reply_auto_check)
+
+        self.doc_reply_move_check = QCheckBox("캘린더에서 회신 일정을 다른 날로 옮기면 문서의 회신기한도 함께 변경")
+        self.doc_reply_move_check.setChecked(self._doc_reply_values["doc_reply_move_sync"] != "0")
+        reply_layout.addWidget(self.doc_reply_move_check)
+
+        reply_form = QGridLayout()
+        reply_form.setHorizontalSpacing(10)
+        reply_form.setVerticalSpacing(6)
+        reply_form.setColumnStretch(1, 1)
+
+        reply_form.addWidget(QLabel("일정 제목 형식"), 0, 0)
+        self.doc_reply_title_edit = QLineEdit(self._doc_reply_values["doc_reply_title_format"])
+        self.doc_reply_title_edit.setPlaceholderText(doc_reply.DEFAULTS["doc_reply_title_format"])
+        self.doc_reply_title_edit.setToolTip("{제목} 자리에 문서 제목이 들어갑니다")
+        reply_form.addWidget(self.doc_reply_title_edit, 0, 1)
+
+        reply_form.addWidget(QLabel("알림 시점"), 1, 0)
+        offsets_row = QHBoxLayout()
+        offsets_row.setSpacing(12)
+        _current_offsets = {t.strip() for t in self._doc_reply_values["doc_reply_alert_offsets"].split(",")}
+        self.doc_reply_offset_checks = {}
+        for offset in doc_reply.ALERT_OFFSET_CHOICES:
+            chk = QCheckBox("당일" if offset == 0 else f"{offset}일 전")
+            chk.setChecked(str(offset) in _current_offsets)
+            self.doc_reply_offset_checks[offset] = chk
+            offsets_row.addWidget(chk)
+        offsets_row.addWidget(QLabel("알림 시각"))
+        self.doc_reply_time_edit = QLineEdit(self._doc_reply_values["doc_reply_alert_time"])
+        self.doc_reply_time_edit.setFixedWidth(64)
+        self.doc_reply_time_edit.setPlaceholderText("09:00")
+        offsets_row.addWidget(self.doc_reply_time_edit)
+        offsets_row.addStretch(1)
+        reply_form.addLayout(offsets_row, 1, 1)
+
+        reply_form.addWidget(QLabel("빠른 기한 버튼"), 2, 0)
+        self.doc_reply_buttons_edit = QLineEdit(self._doc_reply_values["doc_reply_quick_buttons"])
+        self.doc_reply_buttons_edit.setPlaceholderText(doc_reply.DEFAULTS["doc_reply_quick_buttons"])
+        self.doc_reply_buttons_edit.setToolTip("쉼표로 구분. 0 은 당일, 숫자는 N일 뒤, 숫자+m 은 N달 뒤 (예: 0,1,3,7,14,1m)")
+        reply_form.addWidget(self.doc_reply_buttons_edit, 2, 1)
+        reply_layout.addLayout(reply_form)
+
+        reply_desc = QLabel(
+            "문서를 '완료'로 바꾸면 회신 일정도 완료로 표시되고 남은 알림이 멈춥니다.\n"
+            "PC가 꺼져 있어 놓친 알림은 다음에 프로그램을 켤 때 표시됩니다."
+        )
+        reply_desc.setObjectName("subtitle")
+        reply_desc.setWordWrap(True)
+        reply_layout.addWidget(reply_desc)
+        pg_doc_layout.addWidget(reply_card)
+
+        # 3. 크롬 확장프로그램 (Chrome Extension) 연동 카드
         chrome_card = QFrame()
         chrome_card.setObjectName("card")
         chrome_layout = QVBoxLayout(chrome_card)
@@ -7438,6 +7520,26 @@ class SettingsDialog(QDialog):
                 modifiers = {"Ctrl", "Alt"}
         return modifiers, token
 
+    def _collect_doc_reply_settings(self) -> dict[str, str]:
+        import re as _re
+
+        values = dict(self._doc_reply_values)
+        values["doc_reply_auto_calendar"] = "1" if self.doc_reply_auto_check.isChecked() else "0"
+        values["doc_reply_move_sync"] = "1" if self.doc_reply_move_check.isChecked() else "0"
+        title_format = self.doc_reply_title_edit.text().strip()
+        if title_format:
+            values["doc_reply_title_format"] = title_format
+        values["doc_reply_alert_offsets"] = ",".join(
+            str(offset) for offset, chk in self.doc_reply_offset_checks.items() if chk.isChecked()
+        )
+        alert_time = self.doc_reply_time_edit.text().strip()
+        if _re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", alert_time):
+            values["doc_reply_alert_time"] = alert_time
+        buttons = self.doc_reply_buttons_edit.text().strip()
+        if buttons:
+            values["doc_reply_quick_buttons"] = buttons
+        return values
+
     def _save(self) -> None:
         cal_modifiers: list[str] = []
         if self.shortcut_ctrl_check.isChecked():
@@ -7568,6 +7670,7 @@ class SettingsDialog(QDialog):
             "ui_font_family": self.ui_font_family_combo.currentFont().family() or DEFAULT_FAMILY,
             "ui_font_scale": str(self.ui_font_scale_combo.currentData() or DEFAULT_SCALE),
             "work_enable_context_menu": self.work_context_menu_check.isChecked(),
+            "doc_reply_settings": self._collect_doc_reply_settings(),
             "work_copy_attachments_default": self.work_copy_attachments_check.isChecked(),
             "work_delete_attachments_default": self.work_delete_attachments_check.isChecked(),
             "work_default_cycle": getattr(self, "_work_default_cycle", "수시"),
@@ -9868,39 +9971,31 @@ class WelcomeFeatureIntroDialog(QDialog):
         body.addWidget(detail_panel, 1)
         layout.addLayout(body, 1)
 
-        # 페이지 이동 바
-        nav = QHBoxLayout()
-        nav.setSpacing(8)
-        self.lbl_page_indicator = QLabel(self)
-        self.lbl_page_indicator.setObjectName("itemDesc")
-        nav.addWidget(self.lbl_page_indicator)
-        nav.addStretch(1)
-
-        self.btn_prev = QPushButton("← 이전", self)
-        self.btn_prev.setObjectName("secondaryBtn")
-        self.btn_prev.clicked.connect(self._on_prev_page)
-        nav.addWidget(self.btn_prev)
-
-        self.btn_next = QPushButton("다음 →", self)
-        self.btn_next.setObjectName("secondaryBtn")
-        self.btn_next.clicked.connect(self._on_next_page)
-        nav.addWidget(self.btn_next)
-        layout.addLayout(nav)
-
+        # 하단 바: [다시 보지 않기] 1/5 ······ [이전] [다음] [시작]
         footer = QHBoxLayout()
         footer.setSpacing(8)
         self.dismiss_check = QCheckBox("다시 보지 않기")
         self.dismiss_check.setChecked(is_dismissed)
         self.dismiss_check.setStyleSheet(f"color: {self.palette['muted']}; font-size: 12px; font-weight: 500;")
         footer.addWidget(self.dismiss_check)
+
+        self.lbl_page_indicator = QLabel(self)
+        self.lbl_page_indicator.setObjectName("itemDesc")
+        footer.addSpacing(10)
+        footer.addWidget(self.lbl_page_indicator)
         footer.addStretch(1)
 
-        settings_btn = QPushButton("⚙️ 환경설정 열기")
-        settings_btn.setObjectName("secondaryBtn")
-        settings_btn.clicked.connect(self._on_open_settings)
-        footer.addWidget(settings_btn)
+        self.btn_prev = QPushButton("이전", self)
+        self.btn_prev.setObjectName("secondaryBtn")
+        self.btn_prev.clicked.connect(self._on_prev_page)
+        footer.addWidget(self.btn_prev)
 
-        confirm_btn = QPushButton("시작하기")
+        self.btn_next = QPushButton("다음", self)
+        self.btn_next.setObjectName("secondaryBtn")
+        self.btn_next.clicked.connect(self._on_next_page)
+        footer.addWidget(self.btn_next)
+
+        confirm_btn = QPushButton("시작", self)
         confirm_btn.setObjectName("primaryBtn")
         confirm_btn.clicked.connect(self.accept)
         footer.addWidget(confirm_btn)
@@ -9937,10 +10032,6 @@ class WelcomeFeatureIntroDialog(QDialog):
 
     def _on_next_page(self) -> None:
         self._show_page(self._page_index + 1)
-
-    def _on_open_settings(self) -> None:
-        self.open_settings_requested = True
-        self.accept()
 
     def is_dismissed_checked(self) -> bool:
         return self.dismiss_check.isChecked()

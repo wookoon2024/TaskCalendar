@@ -1,0 +1,501 @@
+{
+ "categories": [
+  {
+   "id": "work",
+   "label": "업무"
+  },
+  {
+   "id": "company",
+   "label": "회사 일정"
+  },
+  {
+   "id": "people",
+   "label": "인사·경조사"
+  },
+  {
+   "id": "appointment",
+   "label": "약속"
+  },
+  {
+   "id": "mood",
+   "label": "기분·컨디션"
+  },
+  {
+   "id": "status",
+   "label": "처리 상태"
+  },
+  {
+   "id": "leave",
+   "label": "휴가·근무"
+  },
+  {
+   "id": "celebrate",
+   "label": "기념일"
+  },
+  {
+   "id": "season",
+   "label": "계절·날씨"
+  },
+  {
+   "id": "lines",
+   "label": "선·테두리"
+  }
+ ],
+ "stickers": [
+  {
+   "name": "v2_deadline_flag",
+   "label": "마감",
+   "category": "work",
+   "animated": true,
+   "still": 0
+  },
+  {
+   "name": "v2_important",
+   "label": "중요",
+   "category": "work",
+   "animated": true,
+   "still": 0
+  },
+  {
+   "name": "v2_meeting",
+   "label": "회의",
+   "category": "work",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_business_trip",
+   "label": "출장",
+   "category": "work",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_report",
+   "label": "보고서",
+   "category": "work",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_approval_stamp",
+   "label": "결재",
+   "category": "work",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_education",
+   "label": "교육",
+   "category": "work",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_civil_call",
+   "label": "민원 전화",
+   "category": "work",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_commute",
+   "label": "출근",
+   "category": "company",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_overtime",
+   "label": "야근",
+   "category": "company",
+   "animated": true,
+   "still": 0
+  },
+  {
+   "name": "v2_workshop",
+   "label": "워크숍",
+   "category": "company",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_cheers",
+   "label": "회식",
+   "category": "company",
+   "animated": true,
+   "still": 4
+  },
+  {
+   "name": "v2_audit",
+   "label": "감사",
+   "category": "company",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_presentation",
+   "label": "발표",
+   "category": "company",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_field_work",
+   "label": "외근",
+   "category": "company",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_transfer",
+   "label": "전입·전출",
+   "category": "company",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_promotion",
+   "label": "승진",
+   "category": "people",
+   "animated": true,
+   "still": 0
+  },
+  {
+   "name": "v2_medal",
+   "label": "축하 메달",
+   "category": "people",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_welcome",
+   "label": "환영",
+   "category": "people",
+   "animated": true,
+   "still": 2
+  },
+  {
+   "name": "v2_farewell",
+   "label": "송별",
+   "category": "people",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_wedding",
+   "label": "결혼",
+   "category": "people",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_birth",
+   "label": "출산",
+   "category": "people",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_condolence",
+   "label": "조문",
+   "category": "people",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_meal",
+   "label": "식사",
+   "category": "appointment",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_lunchbox",
+   "label": "점심",
+   "category": "appointment",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_tea_time",
+   "label": "차 마시기",
+   "category": "appointment",
+   "animated": true,
+   "still": 0
+  },
+  {
+   "name": "v2_coffee",
+   "label": "커피",
+   "category": "appointment",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_dessert",
+   "label": "디저트",
+   "category": "appointment",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_beer",
+   "label": "술 약속",
+   "category": "appointment",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_handshake",
+   "label": "만남",
+   "category": "appointment",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_phone_call",
+   "label": "전화 약속",
+   "category": "appointment",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_happy",
+   "label": "기쁨",
+   "category": "mood",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_excited",
+   "label": "신남",
+   "category": "mood",
+   "animated": true,
+   "still": 0
+  },
+  {
+   "name": "v2_angry",
+   "label": "화남",
+   "category": "mood",
+   "animated": true,
+   "still": 0
+  },
+  {
+   "name": "v2_gloomy",
+   "label": "우울",
+   "category": "mood",
+   "animated": true,
+   "still": 0
+  },
+  {
+   "name": "v2_sad",
+   "label": "슬픔",
+   "category": "mood",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_tired",
+   "label": "피곤",
+   "category": "mood",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_stress",
+   "label": "스트레스",
+   "category": "mood",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_worried",
+   "label": "걱정",
+   "category": "mood",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_sick_leave",
+   "label": "병가",
+   "category": "mood",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_sick",
+   "label": "아픔",
+   "category": "mood",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_done_check",
+   "label": "완료",
+   "category": "status",
+   "animated": true,
+   "still": 7
+  },
+  {
+   "name": "v2_in_progress",
+   "label": "진행 중",
+   "category": "status",
+   "animated": true,
+   "still": 0
+  },
+  {
+   "name": "v2_on_hold",
+   "label": "보류",
+   "category": "status",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_cancelled",
+   "label": "취소",
+   "category": "status",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_vacation",
+   "label": "연가",
+   "category": "leave",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_half_day",
+   "label": "반차",
+   "category": "leave",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_night_duty",
+   "label": "당직",
+   "category": "leave",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_remote",
+   "label": "재택",
+   "category": "leave",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_birthday_cake",
+   "label": "생일",
+   "category": "celebrate",
+   "animated": true,
+   "still": 0
+  },
+  {
+   "name": "v2_gift",
+   "label": "선물",
+   "category": "celebrate",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_fireworks",
+   "label": "축하",
+   "category": "celebrate",
+   "animated": true,
+   "still": 5
+  },
+  {
+   "name": "v2_heart",
+   "label": "하트",
+   "category": "celebrate",
+   "animated": true,
+   "still": 0
+  },
+  {
+   "name": "v2_star",
+   "label": "별",
+   "category": "celebrate",
+   "animated": true,
+   "still": 0
+  },
+  {
+   "name": "v2_sun",
+   "label": "해",
+   "category": "season",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_rain_umbrella",
+   "label": "비",
+   "category": "season",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_snowman",
+   "label": "눈사람",
+   "category": "season",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_cherry_blossom",
+   "label": "벚꽃",
+   "category": "season",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_maple_leaf",
+   "label": "단풍",
+   "category": "season",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_highlighter_yellow",
+   "label": "형광펜(노랑)",
+   "category": "lines",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_highlighter_pink",
+   "label": "형광펜(분홍)",
+   "category": "lines",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_highlighter_mint",
+   "label": "형광펜(민트)",
+   "category": "lines",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_circle_hand",
+   "label": "동그라미",
+   "category": "lines",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_box_outline",
+   "label": "네모 테두리",
+   "category": "lines",
+   "animated": false,
+   "still": 0
+  },
+  {
+   "name": "v2_arrow_hand",
+   "label": "화살표",
+   "category": "lines",
+   "animated": false,
+   "still": 0
+  }
+ ]
+}

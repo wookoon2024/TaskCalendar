@@ -9,8 +9,8 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QDate, QEvent, QItemSelectionModel, QObject, QPoint, QSize, QStringListModel, Qt, QTimer, QUrl
-from PySide6.QtGui import QBrush, QColor, QCursor, QDesktopServices, QFont, QIcon
+from PySide6.QtCore import QDate, QEvent, QItemSelectionModel, QObject, QPoint, QPointF, QRectF, QSize, QStringListModel, Qt, QTimer, QUrl
+from PySide6.QtGui import QBrush, QColor, QCursor, QDesktopServices, QFont, QFontMetrics, QIcon, QImage, QPainter
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStyle,
     QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -49,6 +50,7 @@ from PySide6.QtWidgets import (
 )
 
 from taskcalendar.fonts import font_family_css, make_ui_font_like, scale_px, ui_font_family
+from taskcalendar import doc_reply
 from taskcalendar.models import CalendarEntry, EntryType
 from taskcalendar.paths import asset_path
 from taskcalendar.storage import EncryptedRepository
@@ -56,6 +58,18 @@ from taskcalendar.qt_styles import resolve_palette, _shade
 from taskcalendar.themes import THEMES
 
 logger = logging.getLogger(__name__)
+
+
+def _months_before(d: date, months: int) -> date:
+    """d에서 months개월 전 날짜 (해당 월에 같은 일이 없으면 그 달 말일)"""
+    y, m = divmod(d.year * 12 + d.month - 1 - months, 12)
+    m += 1
+    for day in (d.day, 30, 29, 28):
+        try:
+            return date(y, m, day)
+        except ValueError:
+            continue
+    return date(y, m, 28)
 
 
 def get_dialog_palette(parent=None, repository=None, main_window=None) -> dict[str, str]:
@@ -275,22 +289,200 @@ CATEGORY_CONFIG_DARK = {
 }
 
 
+def split_doc_source(description: str) -> tuple[str, str]:
+    """문서 비고에서 끝에 붙은 '출처: URL' 을 떼어 (본문, URL) 로 돌려준다."""
+    desc = description or ""
+    for marker in ("📎 출처:", "\n출처:", "출처:"):
+        if marker in desc:
+            body, url = desc.rsplit(marker, 1)
+            return body.strip(), url.strip()
+    return desc.strip(), ""
+
+
+def join_doc_source(body: str, url: str) -> str:
+    body = (body or "").strip()
+    url = (url or "").strip()
+    return f"{body}\n\n출처: {url}".strip() if url else body
+
+
+# 목록 셀에 그릴 꼬리표·회신기한 정보를 담는 데이터 역할
+DOC_TAGS_ROLE = Qt.UserRole + 41
+DOC_REPLY_ROLE = Qt.UserRole + 42
+
+# 회신기한 단계별 색: (글자, 배경)
+REPLY_LEVEL_COLORS = {
+    "over": ("#B42318", "#FDE8E6"),
+    "today": ("#B54708", "#FDEBD2"),
+    "soon": ("#B54708", "#FBF1CF"),
+    "normal": ("#2D3748", "#E4F1EC"),
+    "done": ("#A0A6AE", "#EEEFF1"),
+}
+REPLY_LEVEL_COLORS_DARK = {
+    "over": ("#FF9C92", "#4A2421"),
+    "today": ("#FFB46B", "#47331C"),
+    "soon": ("#F2D16B", "#3F3819"),
+    "normal": ("#7FD4BF", "#1E3A33"),
+    "done": ("#8A8F98", "#2A2E35"),
+}
+DOC_TAG_COLORS = {
+    "출처": ("#2F5C9A", "#E6EEF8"),
+    "업무": ("#1F6F62", "#E4F1EC"),
+}
+DOC_TAG_COLORS_DARK = {
+    "출처": ("#9DC1F0", "#22324A"),
+    "업무": ("#7FD4BF", "#1E3A33"),
+}
+
+
+def reply_due_info(reply_due, reply_time: str, is_done: bool, today: date | None = None) -> tuple[str, str, str]:
+    """회신기한 → (D-day 글자, 단계, 툴팁). 기한이 없으면 ('', '', '').
+
+    -3 = 3일 남음, 0 = 오늘까지, +2 = 2일 지남 (숫자만).
+    """
+    if not reply_due:
+        return "", "", ""
+    today = today or date.today()
+    days = (reply_due - today).days
+    full = reply_due.strftime("%Y-%m-%d") + (f" {reply_time}" if reply_time else "")
+    dday = "0" if days == 0 else (f"-{days}" if days > 0 else f"+{-days}")
+    if is_done:
+        return dday, "done", f"회신기한 {full} (처리 완료)"
+    if days < 0:
+        return dday, "over", f"회신기한 {full} — {-days}일 지났습니다"
+    if days == 0:
+        return dday, "today", f"회신기한 {full} — 오늘까지입니다"
+    if days <= 3:
+        return dday, "soon", f"회신기한 {full} — {days}일 남았습니다"
+    return dday, "normal", f"회신기한 {full} — {days}일 남았습니다"
+
+
+_INK_CACHE: dict[tuple[str, str], tuple[int, int]] = {}
+
+
+def _text_ink_span(font: QFont, text: str) -> tuple[int, int]:
+    """글자를 실제로 그려 보고 잉크의 (위, 아래) 를 기준선 기준으로 잰다. 글꼴 힌팅까지 반영됨."""
+    key = (font.key(), text)
+    if key in _INK_CACHE:
+        return _INK_CACHE[key]
+    fm = QFontMetrics(font)
+    w = max(4, fm.horizontalAdvance(text) + 8)
+    h = fm.height() + 8
+    img = QImage(w, h, QImage.Format_ARGB32_Premultiplied)
+    img.fill(0)
+    p = QPainter(img)
+    p.setFont(font)
+    p.setPen(QColor("#000000"))
+    base = 4 + fm.ascent()
+    p.drawText(QPointF(4, base), text)
+    p.end()
+    top, bottom = None, None
+    for y in range(h):
+        for x in range(w):
+            if (img.pixel(x, y) >> 24) & 0xFF > 60:
+                if top is None:
+                    top = y
+                bottom = y
+                break
+    if top is None:
+        span = (-fm.ascent(), 0)
+    else:
+        span = (top - base, bottom + 1 - base)
+    _INK_CACHE[key] = span
+    return span
+
+
+def draw_text_centered(painter, fm: QFontMetrics, rect: QRectF, text: str) -> None:
+    """실제 그려지는 글자 모양 기준으로 위아래·좌우 여백이 같게 가운데에 그린다."""
+    top, bottom = _text_ink_span(painter.font(), text)
+    x = rect.center().x() - fm.horizontalAdvance(text) / 2
+    baseline = round(rect.center().y() - (top + bottom) / 2)
+    painter.drawText(QPointF(x, baseline), text)
+
+
 class RowHoverDelegate(QStyledItemDelegate):
-    """테이블 마우스 오버 시 1줄 전체 배경색을 균일하게 칠해주는 델리게이트"""
+    """테이블 마우스 오버 시 1줄 전체 배경색을 균일하게 칠해주는 델리게이트.
+
+    문서 목록에서는 제목 옆 꼬리표(출처·업무)와 회신기한 알약도 여기서 그린다.
+    """
+
+    TAG_H = 18
+    TAG_GAP = 4
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.hovered_row: int = -1
         self.hover_color: QColor = QColor("#F8FAFC")
+        self.dark = False
+
+    def _tag_width(self, fm: QFontMetrics, text: str) -> int:
+        return fm.horizontalAdvance(text) + 12
 
     def paint(self, painter, option, index) -> None:
         if index.row() == self.hovered_row and not (option.state & QStyle.State_Selected):
             painter.fillRect(option.rect, self.hover_color)
-        super().paint(painter, option, index)
+
+        reply = index.data(DOC_REPLY_ROLE)
+        if reply:
+            self._paint_reply(painter, option, index, reply)
+            return
+
+        tags = index.data(DOC_TAGS_ROLE)
+        if not tags:
+            super().paint(painter, option, index)
+            return
+
+        font = QFont(option.font)
+        font.setPointSizeF(max(7.5, font.pointSizeF() - 1.5))
+        font.setBold(False)
+        fm = QFontMetrics(font)
+        widths = [self._tag_width(fm, t) for t in tags]
+        tags_w = sum(widths) + self.TAG_GAP * len(tags) + 4
+
+        # 글자는 꼬리표 자리를 비워 두고 그린다 (넘치면 … 으로 줄임)
+        text_opt = QStyleOptionViewItem(option)
+        text_opt.rect = option.rect.adjusted(0, 0, -min(tags_w, max(0, option.rect.width() - 60)), 0)
+        super().paint(painter, text_opt, index)
+
+        colors = DOC_TAG_COLORS_DARK if self.dark else DOC_TAG_COLORS
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setFont(font)
+        x = option.rect.right() - tags_w + self.TAG_GAP
+        y = option.rect.center().y() - self.TAG_H // 2
+        for text, w in zip(tags, widths):
+            key = "업무" if text.startswith("업무") else "출처"
+            fg, bg = colors[key]
+            rect = QRectF(x, y, w, self.TAG_H)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(bg))
+            painter.drawRoundedRect(rect, self.TAG_H / 2, self.TAG_H / 2)
+            painter.setPen(QColor(fg))
+            draw_text_centered(painter, fm, rect, text)
+            x += w + self.TAG_GAP
+        painter.restore()
+
+    def _paint_reply(self, painter, option, index, reply) -> None:
+        text, level = reply
+        bg_opt = QStyleOptionViewItem(option)
+        self.initStyleOption(bg_opt, index)
+        bg_opt.text = ""
+        style = bg_opt.widget.style() if bg_opt.widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, bg_opt, painter, bg_opt.widget)
+
+        # 배경 없이 글자색만 (굵게 하지 않음)
+        fg, _bg = (REPLY_LEVEL_COLORS_DARK if self.dark else REPLY_LEVEL_COLORS).get(level, ("#475569", "#F1F5F9"))
+        painter.save()
+        painter.setFont(option.font)
+        painter.setPen(QColor(fg))
+        painter.drawText(option.rect, Qt.AlignCenter, text)
+        painter.restore()
 
 
 class PillBadgeWidget(QWidget):
-    """알약(Pill) 형태의 깔끔한 뱃지 버튼 위젯 (단일 클릭 드롭다운 메뉴 연결)"""
+    """알약(Pill) 형태의 깔끔한 뱃지 버튼 위젯 (단일 클릭 드롭다운 메뉴 연결).
+
+    plain_color 를 주면 배경·테두리·색 없이 그 글자색의 평범한 글자로 보인다 (상태 열).
+    """
 
     def __init__(
         self,
@@ -299,53 +491,52 @@ class PillBadgeWidget(QWidget):
         on_click,
         on_context=None,
         parent: QWidget | None = None,
+        plain_color: str | None = None,
+        plain_hover: str | None = None,
     ) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setStyleSheet("background: transparent;")
         self.on_click = on_click
         self.on_context = on_context
+        self.plain_color = plain_color
+        self.plain_hover = plain_hover or "#CBD5E1"
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setAlignment(Qt.AlignCenter)
 
-        cfg = config.get(text, {"bg": "#F1F5F9", "text": "#475569", "border": "#CBD5E1"})
-        bg = cfg.get("bg", "#F1F5F9")
-        color = cfg.get("text", "#475569")
-        border = cfg.get("border", "#CBD5E1")
-
-        self.btn = QPushButton(f"{text}  ▾")
+        self.btn = QPushButton()
         self.btn.setCursor(Qt.PointingHandCursor)
         self.btn.setFixedHeight(24)
-        self.btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {bg};
-                color: {color};
-                border: 1px solid {border};
-                border-radius: 12px;
-                padding: 0 10px;
-                font-family: {font_family_css()};
-                font-size: 11px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                border-color: {color};
-                background-color: #FFFFFF;
-            }}
-        """)
         self.btn.clicked.connect(lambda: self.on_click(self.btn))
         if self.on_context:
             self.btn.setContextMenuPolicy(Qt.CustomContextMenu)
             self.btn.customContextMenuRequested.connect(lambda p: self.on_context(QCursor.pos()))
         layout.addWidget(self.btn)
+        self.update_badge(text, config)
 
     def update_badge(self, text: str, config: dict) -> None:
         """전체 테이블 재빌드 없이 해당 셀의 뱃지 텍스트와 색상만 즉시 갱신"""
+        self.btn.setText(f"{text}  ▾")
+        if self.plain_color:
+            self.btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: transparent;
+                    color: {self.plain_color};
+                    border: 1px solid transparent;
+                    border-radius: 6px;
+                    padding: 0 8px;
+                    font-family: {font_family_css()};
+                    font-size: 12px;
+                    font-weight: normal;
+                }}
+                QPushButton:hover {{ border-color: {self.plain_hover}; }}
+            """)
+            return
         cfg = config.get(text, {"bg": "#F1F5F9", "text": "#475569", "border": "#CBD5E1"})
         bg = cfg.get("bg", "#F1F5F9")
         color = cfg.get("text", "#475569")
         border = cfg.get("border", "#CBD5E1")
-        self.btn.setText(f"{text}  ▾")
         self.btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {bg};
@@ -377,9 +568,11 @@ class SimpleListManagerDialog(QDialog):
         palette: dict[str, str] | None = None,
     ) -> None:
         super().__init__(parent)
+        from taskcalendar.ui_common import style_button
+
         self.palette = palette or get_dialog_palette(parent)
         self.setWindowTitle(title)
-        self.setFixedSize(360, 430)
+        self.setFixedSize(360, 440)
         self.immutable_item = immutable_item
         # 기본 고정 항목은 항상 맨 앞에 위치
         if self.immutable_item:
@@ -388,145 +581,114 @@ class SimpleListManagerDialog(QDialog):
             self.items = list(items)
         self.on_save_callback = on_save_callback
 
-        # font-family 를 명시해야 전역 폰트(Pretendard)가 상속되어
-        # 캘린더·업무 화면과 동일하게 깨짐 없이 렌��링된다.
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {self.palette['bg']};
-                color: {self.palette['text']};
-                font-family: {font_family_css()};
-            }}
-            QListWidget, QLineEdit, QPushButton, QLabel,
-            QComboBox, QTableWidget, QTextEdit {{
-                font-family: {font_family_css()};
-            }}
-        """)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-
-        notice = f"<b>{title}</b>"
-        muted_c = self.palette.get("muted", "#718096")
-        if self.immutable_item:
-            notice += f"<br><span style='color: {muted_c}; font-size: 11px;'>※ '{self.immutable_item}'은(는) 기본 고정 항목으로 수정/삭제할 수 없습니다.</span>"
-        lbl_notice = QLabel(notice)
-        lbl_notice.setStyleSheet(f"color: {self.palette['text']};")
-        layout.addWidget(lbl_notice)
-
         panel = self.palette.get("panel", "#FFFFFF")
         panel_alt = self.palette.get("panel_alt", "#F8FAFC")
         text = self.palette.get("text", "#1F2328")
+        muted = self.palette.get("muted", "#718096")
         line = self.palette.get("line", "#CBD5E0")
         line_soft = self.palette.get("line_soft", line)
         accent = self.palette.get("accent", "#1F7A67")
         accent_soft = self.palette.get("accent_soft", panel_alt)
-        btn_text = self.palette.get("button_text", "#FFFFFF")
-        danger = self.palette.get("danger", "#E53E3E")
 
-        self.list_widget = QListWidget()
-        self.list_widget.setStyleSheet(f"""
+        # 캘린더·메모 화면과 같은 공통 모양: 패널 바탕, 12px 글씨, 30px 입력칸·버튼, 6~8px 모서리
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {panel};
+                color: {text};
+                font-family: {font_family_css()};
+            }}
+            QLabel {{ background: transparent; border: none; }}
+            QLabel#listManagerTitle {{ color: {text}; font-size: 15px; font-weight: 700; }}
+            QLabel#listManagerNote {{ color: {muted}; font-size: 12px; }}
             QListWidget {{
                 background-color: {panel};
                 color: {text};
-                border: 1px solid {line};
-                border-radius: 6px;
+                border: 1px solid {line_soft};
+                border-radius: 8px;
                 padding: 4px;
                 font-size: 12px;
+                outline: 0;
+                font-family: {font_family_css()};
             }}
             QListWidget::item {{
-                padding: 6px;
-                border-bottom: 1px solid {line_soft};
+                padding: 8px 10px;
+                border-radius: 6px;
+                margin: 1px 0;
             }}
+            QListWidget::item:hover {{ background-color: {panel_alt}; }}
             QListWidget::item:selected {{
                 background-color: {accent_soft};
-                color: {text};
+                color: {accent};
             }}
-        """)
-        for item in self.items:
-            display_text = f"🔒 {item} (기본 고정)" if item == self.immutable_item else item
-            self.list_widget.addItem(display_text)
-        layout.addWidget(self.list_widget, 1)
-
-        # 추가 입력창
-        add_layout = QHBoxLayout()
-        self.new_item_input = QLineEdit()
-        self.new_item_input.setPlaceholderText("새 항목 입력...")
-        self.new_item_input.setFixedHeight(30)
-        self.new_item_input.setStyleSheet(f"""
             QLineEdit {{
-                background-color: {panel};
+                background-color: {panel_alt};
                 color: {text};
                 border: 1px solid {line};
                 border-radius: 6px;
-                padding: 4px 8px;
+                padding: 0 8px;
+                font-size: 12px;
+                font-family: {font_family_css()};
             }}
-            QLineEdit:focus {{
-                border-color: {accent};
-            }}
+            QLineEdit:focus {{ border-color: {accent}; }}
         """)
-        self.new_item_input.returnPressed.connect(self._add_item)
-        add_layout.addWidget(self.new_item_input)
 
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 16)
+        layout.setSpacing(10)
+
+        lbl_title = QLabel(title)
+        lbl_title.setObjectName("listManagerTitle")
+        layout.addWidget(lbl_title)
+        if self.immutable_item:
+            lbl_note = QLabel(f"'{self.immutable_item}'은(는) 기본 항목이라 수정·삭제할 수 없습니다.")
+            lbl_note.setObjectName("listManagerNote")
+            lbl_note.setWordWrap(True)
+            layout.addWidget(lbl_note)
+
+        self.list_widget = QListWidget()
+        # 윈도우11 기본 스타일은 선택 줄에 밑줄 같은 초점 표시를 덧그리므로 Fusion 으로 그린다
+        from taskcalendar.ui_common import _menu_base_style
+
+        if _menu_base_style() is not None:
+            self.list_widget.setStyle(_menu_base_style())
+        for item in self.items:
+            display_text = f"{item}  ·  기본 고정" if item == self.immutable_item else item
+            self.list_widget.addItem(display_text)
+        if self.immutable_item and self.list_widget.count():
+            fixed = self.list_widget.item(0)
+            fixed.setForeground(QColor(muted))
+        layout.addWidget(self.list_widget, 1)
+
+        # 추가 입력칸 + [추가]
+        add_layout = QHBoxLayout()
+        add_layout.setSpacing(6)
+        self.new_item_input = QLineEdit()
+        self.new_item_input.setPlaceholderText("새 항목 이름 (Enter)")
+        self.new_item_input.setFixedHeight(30)
+        self.new_item_input.returnPressed.connect(self._add_item)
+        add_layout.addWidget(self.new_item_input, 1)
         btn_add = QPushButton("추가")
-        btn_add.setFixedHeight(30)
-        btn_add.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {accent};
-                color: {btn_text};
-                font-weight: bold;
-                border-radius: 6px;
-                padding: 0 14px;
-                border: 1px solid {accent};
-            }}
-            QPushButton:hover {{
-                background-color: {_shade(accent, -0.12)};
-            }}
-        """)
+        style_button(btn_add, self.palette, "secondary", "M")
         btn_add.clicked.connect(self._add_item)
         add_layout.addWidget(btn_add)
         layout.addLayout(add_layout)
 
-        # 하단 버튼
+        # 하단: [선택 항목 삭제] ······ [취소] [저장]
         btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(6)
         btn_del = QPushButton("선택 항목 삭제")
-        btn_del.setFixedHeight(30)
-        btn_del.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {panel_alt};
-                color: {danger};
-                border: 1px solid {line};
-                border-radius: 6px;
-                padding: 0 10px;
-            }}
-            QPushButton:hover {{
-                background-color: {panel};
-                border-color: {danger};
-            }}
-        """)
+        style_button(btn_del, self.palette, "ghost", "M")
         btn_del.clicked.connect(self._delete_item)
         btn_layout.addWidget(btn_del)
-
         btn_layout.addStretch(1)
-
-        btn_ok = QPushButton("저장 완료")
-        btn_ok.setFixedHeight(30)
-        btn_ok.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {panel};
-                color: {text};
-                border: 1px solid {line};
-                border-radius: 6px;
-                padding: 0 14px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {panel_alt};
-            }}
-        """)
+        btn_cancel = QPushButton("취소")
+        style_button(btn_cancel, self.palette, "secondary", "M")
+        btn_cancel.clicked.connect(self.reject)
+        btn_layout.addWidget(btn_cancel)
+        btn_ok = QPushButton("저장")
+        style_button(btn_ok, self.palette, "primary", "M")
         btn_ok.clicked.connect(self._save_and_close)
         btn_layout.addWidget(btn_ok)
-
         layout.addLayout(btn_layout)
 
     def _add_item(self) -> None:
@@ -580,7 +742,7 @@ class TaskEditDialog(QDialog):
 
         is_new = (task is None or task.entry_id is None)
         self.setWindowTitle("새 문서 등록" if is_new else "문서 정보 수정")
-        self.resize(620, 560)
+        self.resize(640, 630)
         # font-family 를 명시해야 전역 폰트(Pretendard)가 상속되어 글자가 깨지지 않는다.
         self.setStyleSheet(f"""
             QDialog {{
@@ -806,11 +968,82 @@ class TaskEditDialog(QDialog):
         status_layout.addWidget(btn_status_mgr)
         grid.addLayout(status_layout, 3, 1)
 
-        # 5. 비고 / 세부내용 (4,0~4,3)
+        # 5. 회신기한 (4,0~4,3) — 빠른 기한 버튼 + 캘린더 등록
+        lbl_reply = QLabel("회신기한:")
+        lbl_reply.setStyleSheet(lbl_style)
+        lbl_reply.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        grid.addWidget(lbl_reply, 4, 0)
+
+        self._reply_settings = doc_reply.load_settings(self.repository)
+        reply_box = QVBoxLayout()
+        reply_box.setContentsMargins(0, 0, 0, 0)
+        reply_box.setSpacing(4)
+
+        reply_row = QHBoxLayout()
+        reply_row.setContentsMargins(0, 0, 0, 0)
+        reply_row.setSpacing(4)
+        self.reply_check = QCheckBox()
+        self.reply_check.setToolTip("회신기한 사용")
+        reply_row.addWidget(self.reply_check)
+
+        self.reply_date_edit = SafeDateEdit()
+        self.reply_date_edit.setCalendarPopup(True)
+        self.reply_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.reply_date_edit.setFixedHeight(30)
+        self.reply_date_edit.setMinimumWidth(132)
+        self.reply_date_edit.setDate(date.today())
+        self.reply_date_edit.setStyleSheet(self.date_edit.styleSheet())
+        self.reply_date_edit.setEnabled(False)
+        reply_row.addWidget(self.reply_date_edit)
+
+        for label, token in doc_reply.parse_quick_buttons(self._reply_settings["doc_reply_quick_buttons"]):
+            btn_quick = QPushButton(label)
+            btn_quick.setFixedHeight(30)
+            btn_quick.setStyleSheet(sub_btn_style)
+            btn_quick.setToolTip("등록일자 기준으로 회신기한을 이 날짜로 정합니다")
+            btn_quick.clicked.connect(lambda _=False, t=token: self._apply_reply_quick(t))
+            reply_row.addWidget(btn_quick)
+
+        btn_reply_clear = QPushButton("지우기")
+        btn_reply_clear.setFixedHeight(30)
+        btn_reply_clear.setStyleSheet(sub_btn_style)
+        btn_reply_clear.clicked.connect(lambda: self.reply_check.setChecked(False))
+        reply_row.addWidget(btn_reply_clear)
+        reply_row.addStretch(1)
+        reply_box.addLayout(reply_row)
+
+        reply_info_row = QHBoxLayout()
+        reply_info_row.setContentsMargins(0, 0, 0, 0)
+        reply_info_row.setSpacing(8)
+        self.reply_calendar_check = QCheckBox("캘린더에 등록")
+        self.reply_calendar_check.setToolTip("회신기한 날짜에 회신 일정을 자동으로 등록하고 이 문서와 연결합니다")
+        self.reply_calendar_check.setEnabled(False)
+        reply_info_row.addWidget(self.reply_calendar_check)
+
+        self.reply_info_label = QLabel("")
+        self.reply_info_label.setStyleSheet(f"color: {self.palette.get('muted', '#64748B')}; font-size: 11px;")
+        reply_info_row.addWidget(self.reply_info_label)
+
+        self.btn_reply_prev_workday = QPushButton("직전 근무일로")
+        self.btn_reply_prev_workday.setFixedHeight(22)
+        self.btn_reply_prev_workday.setStyleSheet(sub_btn_style)
+        self.btn_reply_prev_workday.clicked.connect(
+            lambda: self.reply_date_edit.setDate(doc_reply.previous_workday(self.reply_date_edit.date().toPython()))
+        )
+        self.btn_reply_prev_workday.hide()
+        reply_info_row.addWidget(self.btn_reply_prev_workday)
+        reply_info_row.addStretch(1)
+        reply_box.addLayout(reply_info_row)
+        grid.addLayout(reply_box, 4, 1, 1, 3)
+
+        self.reply_check.toggled.connect(self._on_reply_toggled)
+        self.reply_date_edit.dateChanged.connect(lambda _d: self._update_reply_info())
+
+        # 6. 비고 / 세부내용 (5,0~5,3)
         lbl_desc = QLabel("비고/내용:")
         lbl_desc.setStyleSheet(lbl_style)
         lbl_desc.setAlignment(Qt.AlignRight | Qt.AlignTop)
-        grid.addWidget(lbl_desc, 4, 0)
+        grid.addWidget(lbl_desc, 5, 0)
 
         self.desc_input = QTextEdit()
         self.desc_input.setPlaceholderText("결재 요지, 업무 세부내용, 지시사항 등")
@@ -829,26 +1062,26 @@ class TaskEditDialog(QDialog):
                 border-color: {accent};
             }}
         """)
-        grid.addWidget(self.desc_input, 4, 1, 1, 3)
-        grid.setRowStretch(4, 1)
+        grid.addWidget(self.desc_input, 5, 1, 1, 3)
+        grid.setRowStretch(5, 1)
 
         # 6. 출처 URL (5,0~5,3)
         lbl_url = QLabel("출처 URL:")
         lbl_url.setStyleSheet(lbl_style)
         lbl_url.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        grid.addWidget(lbl_url, 5, 0)
+        grid.addWidget(lbl_url, 6, 0)
 
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("온나라 문서 링크 또는 웹사이트 URL")
         self.url_input.setFixedHeight(28)
         self.url_input.setStyleSheet(input_style)
-        grid.addWidget(self.url_input, 5, 1, 1, 3)
+        grid.addWidget(self.url_input, 6, 1, 1, 3)
 
         # 7. 관련 업무 (6,0~6,3) — 업무 관리의 문서와 1:1 로 연결
         lbl_work = QLabel("관련 업무:")
         lbl_work.setStyleSheet(lbl_style)
         lbl_work.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        grid.addWidget(lbl_work, 6, 0)
+        grid.addWidget(lbl_work, 7, 0)
 
         work_row = QHBoxLayout()
         work_row.setSpacing(6)
@@ -878,7 +1111,7 @@ class TaskEditDialog(QDialog):
         """)
         self.btn_select_work.clicked.connect(self._open_work_link_dialog)
         work_row.addWidget(self.btn_select_work)
-        grid.addLayout(work_row, 6, 1, 1, 3)
+        grid.addLayout(work_row, 7, 1, 1, 3)
 
         layout.addLayout(grid, 1)
 
@@ -930,6 +1163,35 @@ class TaskEditDialog(QDialog):
         btn_box.addWidget(btn_save)
 
         layout.addLayout(btn_box)
+
+    def _on_reply_toggled(self, checked: bool) -> None:
+        self.reply_date_edit.setEnabled(checked)
+        self.reply_calendar_check.setEnabled(checked)
+        if checked and not getattr(self, "_reply_loading", False):
+            # 기한을 새로 넣는 경우에만 설정의 '자동 등록' 기본값을 따른다.
+            self.reply_calendar_check.setChecked(self._reply_settings["doc_reply_auto_calendar"] != "0")
+        self._update_reply_info()
+
+    def _apply_reply_quick(self, token: str) -> None:
+        """빠른 기한 버튼: 등록일자로부터 그 기간 뒤의 날짜를 회신기한으로 정한다 (당일, 7일 뒤, 1달 뒤 …)."""
+        base = self.date_edit.date().toPython()
+        self.reply_date_edit.setDate(doc_reply.add_period(base, token))
+        self.reply_check.setChecked(True)
+        self._update_reply_info()
+
+    def _update_reply_info(self) -> None:
+        if not self.reply_check.isChecked():
+            self.reply_info_label.setText("")
+            self.btn_reply_prev_workday.hide()
+            return
+        due = self.reply_date_edit.date().toPython()
+        weekday = "월화수목금토일"[due.weekday()]
+        text = f"{due.month}/{due.day}({weekday}) · {doc_reply.dday_text(due)}"
+        holiday = doc_reply.holiday_name(due)
+        if holiday:
+            text += f" · ⚠ {holiday}(휴일)"
+        self.reply_info_label.setText(text)
+        self.btn_reply_prev_workday.setVisible(bool(holiday))
 
     def _setup_dept_completer(self) -> None:
         """기존 부서 목록으로 자동완성 세팅"""
@@ -1066,23 +1328,25 @@ class TaskEditDialog(QDialog):
             self.status_combo.setCurrentText(st)
 
         # 출처 URL과 설명 분리 파싱
-        desc = self.task.description or ""
-        url = ""
-        if "📎 출처:" in desc:
-            parts = desc.rsplit("📎 출처:", 1)
-            desc = parts[0].strip()
-            url = parts[1].strip()
-        elif "\n출처:" in desc:
-            parts = desc.rsplit("\n출처:", 1)
-            desc = parts[0].strip()
-            url = parts[1].strip()
-        elif "출처:" in desc:
-            parts = desc.rsplit("출처:", 1)
-            desc = parts[0].strip()
-            url = parts[1].strip()
+        desc, url = split_doc_source(self.task.description or "")
 
         self.desc_input.setPlainText(desc)
         self.url_input.setText(url)
+
+        # 회신기한: 기존 문서는 실제 회신 일정 유무를, 새 문서는 설정의 기본값을 따른다.
+        reply_due = getattr(self.task, "reply_due", None)
+        if reply_due:
+            self._reply_loading = True
+            self.reply_date_edit.setDate(reply_due)
+            self.reply_check.setChecked(True)
+            self._reply_loading = False
+            if self.task.entry_id:
+                self.reply_calendar_check.setChecked(
+                    self.repository.get_reply_schedule(self.task.entry_id) is not None
+                )
+            else:
+                self.reply_calendar_check.setChecked(self._reply_settings["doc_reply_auto_calendar"] != "0")
+            self._update_reply_info()
 
         # 연결된 업무 목록 로드
         if self.task.entry_id:
@@ -1112,6 +1376,16 @@ class TaskEditDialog(QDialog):
         full_desc = desc
         if url:
             full_desc = f"{desc}\n\n출처: {url}".strip()
+
+        reply_due = self.reply_date_edit.date().toPython() if self.reply_check.isChecked() else None
+        if reply_due and reply_due < target_date:
+            answer = QMessageBox.question(
+                self,
+                "회신기한 확인",
+                f"회신기한({reply_due})이 등록일자({target_date})보다 빠릅니다.\n그대로 저장할까요?",
+            )
+            if answer != QMessageBox.Yes:
+                return
 
         now = datetime.now()
         if not self.task:
@@ -1143,7 +1417,19 @@ class TaskEditDialog(QDialog):
             self.task.status = status
             self.task.updated_at = now
 
+        if not reply_due:
+            self.task.reply_time = ""
+        self.task.reply_due = reply_due
         self.repository.upsert_entry(self.task)
+
+        # 회신 일정: 체크돼 있으면 만들거나 맞추고, 아니면 지운다.
+        try:
+            self.repository.set_reply_schedule(
+                self.task, enabled=bool(reply_due) and self.reply_calendar_check.isChecked()
+            )
+            doc_reply.mark_passed_as_shown(self.repository, self.task)
+        except Exception:
+            logger.warning("Failed to sync reply schedule", exc_info=True)
 
         # 연결된 업무 반영 (문서 → 업무)
         if self.task.entry_id:
@@ -1164,13 +1450,27 @@ class TaskManagerDialog(QDialog):
     엑셀(.xlsx)로 내보내는 업무 관리 대시보드 창
     """
 
+    # 기간 빠른 선택 버튼: (버튼 라벨, 기간 콤보 항목)
+    QUICK_PERIODS = [
+        ("오늘", "오늘"),
+        ("7일", "최근 7일"),
+        ("30일", "최근 30일"),
+        ("3개월", "최근 3개월"),
+        ("6개월", "최근 6개월"),
+        ("1년", "최근 1년"),
+        ("전체", "기간"),
+    ]
+    COL_CHECK = 8  # 체크박스 열 (논리 인덱스는 맨 뒤, 화면에서는 맨 왼쪽으로 이동)
+    COL_REPLY = 9  # 회신기한 날짜 열 (논리 인덱스는 맨 뒤, 화면에서는 상태 옆, 직접 수정 가능)
+    COL_DDAY = 10  # 회신기한 D-day 열 (회신기한 바로 옆)
+
     def __init__(self, parent: QWidget | None, repository: EncryptedRepository, main_window=None) -> None:
         super().__init__(parent)
         self.repository = repository
         self.main_window = main_window
         self.palette = get_dialog_palette(parent, repository, main_window)
 
-        self.setWindowTitle("문서 관리")
+        self.setWindowTitle("바로업무 - 문서")
         self.setWindowFlags(self.windowFlags() | Qt.WindowMaximizeButtonHint | Qt.WindowMinimizeButtonHint)
         self.resize(1100, 700)
         self.setMinimumSize(850, 520)
@@ -1182,51 +1482,63 @@ class TaskManagerDialog(QDialog):
         self._current_tab = "all"
         self._current_page = 1
         self._current_date_anchor = None
+        self._checked_ids: set = set()  # 좌측 체크박스로 체크한 문서 ID (일괄 처리 대상)
 
         self._init_ui()
         self.reload_tasks()
 
     def _init_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
+        # 바깥 레이아웃: 맨 위 띠는 창 끝까지 붙이고, 나머지 내용은 안쪽 레이아웃(기존 여백)에 둔다.
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(16, 12, 16, 14)
         layout.setSpacing(10)
 
-        # 1. 상단 헤더: 메인 액션 버튼 [등록] [설정] [엑셀저장] (같은 줄, 우측 정렬)
-        header_layout = QHBoxLayout()
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(8)
-        header_layout.addStretch(1)
+        # 1. 맨 윗줄: 세 창 공통 전환 줄 [캘린더 | 문서 | 업무] ······ [등록] [분류·상태] [엑셀저장] [기능] [설정]
+        from taskcalendar.ui_common import WindowSwitcherBar
 
-        # 신규 등록 버튼 (검색 버튼과 동일한 크기(세로 28px) 및 테마 강조색 스타일)
-        self.btn_add = QPushButton("등록")
-        self.btn_add.setFixedHeight(28)
+        mw = self.main_window
+        self.window_switcher = WindowSwitcherBar(
+            self.palette,
+            "doc",
+            mw.switch_to_window if mw is not None and hasattr(mw, "switch_to_window") else (lambda _n: None),
+            getattr(mw, "show_service_menu_at", None),
+            getattr(mw, "_open_settings", None),
+        )
+
+        self.btn_add = QPushButton("＋ 문서 등록")
         self.btn_add.clicked.connect(self._on_add_task)
-        header_layout.addWidget(self.btn_add)
+        self.window_switcher.add_action(self.btn_add, "primary")
 
-        # 분류/상태 설정 버튼 (세로 높이 28px)
-        self.btn_manage_meta = QPushButton("설정")
-        self.btn_manage_meta.setFixedHeight(28)
+        # 앱 전체 [설정] 과 헷갈리지 않도록 이름을 '분류·상태' 로 바꾼다 (분류·상태 목록 관리 메뉴)
+        self.btn_manage_meta = QPushButton("분류·상태")
+        self.btn_manage_meta.setToolTip("문서 분류와 처리상태 목록 관리")
         self.btn_manage_meta.clicked.connect(self._open_meta_manager_menu)
-        header_layout.addWidget(self.btn_manage_meta)
+        self.window_switcher.add_action(self.btn_manage_meta)
 
-        # 엑셀저장 버튼 (세로 높이 28px)
         self.btn_export = QPushButton("엑셀저장")
-        self.btn_export.setFixedHeight(28)
         self.btn_export.clicked.connect(self._export_to_excel)
-        header_layout.addWidget(self.btn_export)
+        self.window_switcher.add_action(self.btn_export)
 
-        layout.addLayout(header_layout)
+        root_layout.addWidget(self.window_switcher)
+        root_layout.addLayout(layout, 1)
 
         # 2. 검색 및 필터 툴바 카드 (분류, 상태, 기간(시작일~종료일), 제목+내용 검색 순서)
         self.toolbar_card = QFrame()
         self.toolbar_card.setObjectName("toolbar_card")
-        tb_layout = QHBoxLayout(self.toolbar_card)
-        tb_layout.setContentsMargins(12, 8, 12, 8)
+        tb_outer = QVBoxLayout(self.toolbar_card)
+        tb_outer.setContentsMargins(0, 8, 0, 8)  # 좌우 시작점을 아래 목록과 맞춤
+        tb_outer.setSpacing(6)
+        tb_layout = QHBoxLayout()
+        tb_layout.setContentsMargins(0, 0, 0, 0)
         tb_layout.setSpacing(10)
+        tb_outer.addLayout(tb_layout)
 
         # (1) 분류
         self.category_combo = QComboBox()
-        self.category_combo.setFixedHeight(32)
+        self.category_combo.setFixedHeight(30)
         self.category_combo.setFixedWidth(85)
         if self.category_combo.view():
             self.category_combo.view().setMinimumWidth(100)
@@ -1237,7 +1549,7 @@ class TaskManagerDialog(QDialog):
 
         # (2) 상태
         self.status_combo = QComboBox()
-        self.status_combo.setFixedHeight(32)
+        self.status_combo.setFixedHeight(30)
         self.status_combo.setFixedWidth(85)
         if self.status_combo.view():
             self.status_combo.view().setMinimumWidth(90)
@@ -1245,22 +1557,41 @@ class TaskManagerDialog(QDialog):
         self.status_combo.currentIndexChanged.connect(self._on_status_combo_changed)
         self.status_combo.activated.connect(self._on_status_combo_changed)
         tb_layout.addWidget(self.status_combo)
+        self._tb_layout = tb_layout
 
-        # (3) 기간(시작일~종료일)
+        # (3) 기간: [기간 ▾] 버튼 하나. 누르면 빠른 기간 칩 + 직접 지정(시작일 ~ 종료일) 팝업
+        self.btn_period = QPushButton("기간: 전체 ▾")
+        self.btn_period.setFixedHeight(30)
+        self.btn_period.setMinimumWidth(150)
+        self.btn_period.setCursor(Qt.PointingHandCursor)
+        self.btn_period.setToolTip("조회 기간 (오늘·최근 7일·…·전체, 또는 시작일~종료일 직접 지정)")
+        self.btn_period.clicked.connect(self._show_period_popup)
+        tb_layout.addWidget(self.btn_period)
+
+        self.period_popup = QFrame(self, Qt.Popup)
+        self.period_popup.setObjectName("periodPopup")
+        _pp = QVBoxLayout(self.period_popup)
+        _pp.setContentsMargins(12, 10, 12, 12)
+        _pp.setSpacing(8)
+        self._period_popup_layout = _pp
         self.period_combo = QComboBox()
-        self.period_combo.setFixedHeight(32)
+        self.period_combo.setFixedHeight(30)
         self.period_combo.setFixedWidth(100)
         if self.period_combo.view():
             self.period_combo.view().setMinimumWidth(110)
-        self.period_combo.addItems(["기간", "오늘", "이번 주", "이번 달", "최근 3개월", "올해", "직접 지정"])
+        self.period_combo.addItems([
+            "기간", "오늘", "최근 7일", "최근 30일", "이번 주", "이번 달",
+            "최근 3개월", "최근 6개월", "최근 1년", "올해", "직접 지정",
+        ])
         self.period_combo.currentIndexChanged.connect(self._on_period_combo_changed)
         self.period_combo.activated.connect(self._on_period_combo_changed)
-        tb_layout.addWidget(self.period_combo)
+        # 기간 선택은 아래 빠른 기간 칩(오늘·7일·…·전체)이 대신한다. 칩이 이 값을 바꿔 필터에 쓰므로 객체는 남기고 화면에서만 뺀다.
+        self.period_combo.hide()
 
         self.start_date_edit = SafeDateEdit()
         self.start_date_edit.setCalendarPopup(True)
         self.start_date_edit.setDisplayFormat("yyyy-MM-dd")
-        self.start_date_edit.setFixedHeight(32)
+        self.start_date_edit.setFixedHeight(30)
         self.start_date_edit.setFixedWidth(125)
         self.start_date_edit.setDate(date.today() - timedelta(days=30))
         self.start_date_edit.setEnabled(True)
@@ -1268,15 +1599,12 @@ class TaskManagerDialog(QDialog):
         self.start_date_edit.editingFinished.connect(self._on_custom_date_changed)
         if self.start_date_edit.calendarWidget():
             self.start_date_edit.calendarWidget().clicked.connect(self._on_custom_date_changed)
-        tb_layout.addWidget(self.start_date_edit)
-
         self.lbl_tilde = QLabel("~")
-        tb_layout.addWidget(self.lbl_tilde)
 
         self.end_date_edit = SafeDateEdit()
         self.end_date_edit.setCalendarPopup(True)
         self.end_date_edit.setDisplayFormat("yyyy-MM-dd")
-        self.end_date_edit.setFixedHeight(32)
+        self.end_date_edit.setFixedHeight(30)
         self.end_date_edit.setFixedWidth(125)
         self.end_date_edit.setDate(date.today())
         self.end_date_edit.setEnabled(True)
@@ -1284,15 +1612,58 @@ class TaskManagerDialog(QDialog):
         self.end_date_edit.editingFinished.connect(self._on_custom_date_changed)
         if self.end_date_edit.calendarWidget():
             self.end_date_edit.calendarWidget().clicked.connect(self._on_custom_date_changed)
-        tb_layout.addWidget(self.end_date_edit)
 
-        # (4) 제목+내용 검색 (남은 가로 공간 확장)
+        # (4) 제목+내용 검색: 오른쪽 끝에 적당한 폭으로 (가운데는 비워 둔다)
+        tb_layout.addStretch(1)
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍  제목+내용 검색...")
-        self.search_input.setFixedHeight(32)
+        self.search_input.setPlaceholderText("제목+내용 검색 (Enter)")
+        self.search_input.setFixedHeight(30)
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.textChanged.connect(self._apply_filters)
-        tb_layout.addWidget(self.search_input, 1)
+        # 캘린더·메모 검색과 같게: Enter 또는 [검색] 버튼으로 실행, 검색어를 지우면 바로 전체
+        self._search_query = ""
+        self.search_input.returnPressed.connect(self._run_search)
+        self.search_input.textChanged.connect(lambda t: self._run_search() if not t.strip() else None)
+        self.search_input.setFixedWidth(240)
+        tb_layout.addWidget(self.search_input)
+        self.btn_search = QPushButton("검색")
+        self.btn_search.setFixedHeight(30)
+        self.btn_search.setCursor(Qt.PointingHandCursor)
+        self.btn_search.clicked.connect(self._run_search)
+        tb_layout.addWidget(self.btn_search)
+
+        # (5) 기간 빠른 선택 버튼 (클릭 한 번으로 조회 기간 변경)
+        quick_row = QHBoxLayout()
+        quick_row.setContentsMargins(0, 0, 0, 0)
+        quick_row.setSpacing(4)
+        self.lbl_quick_period = QLabel("빠른 기간")  # 화면에는 두지 않음 (스타일 코드 호환용)
+        self.lbl_quick_period.hide()
+        self._quick_period_buttons: list[tuple[QPushButton, str]] = []
+        for label, period in self.QUICK_PERIODS:
+            btn = QPushButton(label)
+            btn.setFixedHeight(26)
+            # 선택되면 굵은 글씨가 되므로, 굵은 글씨 기준으로 폭을 고정해 옆 버튼이 밀리지 않게 한다
+            _bold = QFont(btn.font())
+            _bold.setPixelSize(12)
+            _bold.setWeight(QFont.Weight.DemiBold)
+            btn.setFixedWidth(max(44, QFontMetrics(_bold).horizontalAdvance(label) + 30))
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, p=period: (self._set_quick_period(p), self.period_popup.hide()))
+            quick_row.addWidget(btn)
+            self._quick_period_buttons.append((btn, period))
+        quick_row.addStretch(1)
+        self._lbl_period_quick = QLabel("빠른 선택")
+        self._period_popup_layout.addWidget(self._lbl_period_quick)
+        self._period_popup_layout.addLayout(quick_row)
+        self._lbl_period_custom = QLabel("직접 지정")
+        self._period_popup_layout.addWidget(self._lbl_period_custom)
+        date_row = QHBoxLayout()
+        date_row.setContentsMargins(0, 0, 0, 0)
+        date_row.setSpacing(6)
+        date_row.addWidget(self.start_date_edit)
+        date_row.addWidget(self.lbl_tilde)
+        date_row.addWidget(self.end_date_edit)
+        date_row.addStretch(1)
+        self._period_popup_layout.addLayout(date_row)
 
         layout.addWidget(self.toolbar_card)
 
@@ -1326,6 +1697,36 @@ class TaskManagerDialog(QDialog):
         tabs_bar.addWidget(self.btn_tab_done, 0, Qt.AlignTop)
         tabs_bar.addStretch(1)
 
+        # 체크한 문서 일괄 처리 바 (체크한 항목이 있을 때만 표시)
+        self.bulk_bar = QWidget()
+        self.bulk_bar.setFixedHeight(26)
+        bulk_layout = QHBoxLayout(self.bulk_bar)
+        bulk_layout.setContentsMargins(0, 0, 8, 0)
+        bulk_layout.setSpacing(4)
+        self.lbl_bulk_count = QLabel("")
+        bulk_layout.addWidget(self.lbl_bulk_count)
+        self.btn_bulk_done = QPushButton("완료 처리")
+        self.btn_bulk_status = QPushButton("상태 ▾")
+        self.btn_bulk_category = QPushButton("분류 ▾")
+        self.btn_bulk_link = QPushButton("업무 연결")
+        self.btn_bulk_delete = QPushButton("삭제")
+        self.btn_bulk_clear = QPushButton("선택 해제")
+        self.btn_bulk_done.clicked.connect(lambda: self._bulk_change_status("완료"))
+        self.btn_bulk_status.clicked.connect(self._show_bulk_status_menu)
+        self.btn_bulk_category.clicked.connect(self._show_bulk_category_menu)
+        self.btn_bulk_link.clicked.connect(self._bulk_link_work)
+        self.btn_bulk_delete.clicked.connect(self._bulk_delete)
+        self.btn_bulk_clear.clicked.connect(self._clear_checked)
+        for btn in (
+            self.btn_bulk_done, self.btn_bulk_status, self.btn_bulk_category,
+            self.btn_bulk_link, self.btn_bulk_delete, self.btn_bulk_clear,
+        ):
+            btn.setFixedHeight(24)
+            btn.setCursor(Qt.PointingHandCursor)
+            bulk_layout.addWidget(btn)
+        self.bulk_bar.setVisible(False)
+        tabs_bar.addWidget(self.bulk_bar, 0, Qt.AlignVCenter)
+
         # 오른쪽 끝: 페이징 네비게이션 ([◀] [정보] [▶]) + 페이징 단위 선택 셀렉트(QComboBox)
         self.paging_nav_widget = QWidget()
         self.paging_nav_widget.setFixedHeight(26)
@@ -1335,7 +1736,7 @@ class TaskManagerDialog(QDialog):
         nav_layout.setSizeConstraint(QLayout.SetFixedSize)
 
         self.btn_page_prev = QPushButton("◀")
-        self.btn_page_prev.setFixedSize(22, 22)
+        self.btn_page_prev.setFixedSize(24, 24)
         self.btn_page_prev.setCursor(Qt.PointingHandCursor)
         self.btn_page_prev.clicked.connect(self._on_page_prev)
 
@@ -1343,17 +1744,17 @@ class TaskManagerDialog(QDialog):
         self.lbl_page_info.setAlignment(Qt.AlignCenter)
 
         self.btn_page_next = QPushButton("▶")
-        self.btn_page_next.setFixedSize(22, 22)
+        self.btn_page_next.setFixedSize(24, 24)
         self.btn_page_next.setCursor(Qt.PointingHandCursor)
         self.btn_page_next.clicked.connect(self._on_page_next)
 
         nav_layout.addWidget(self.btn_page_prev)
         nav_layout.addWidget(self.lbl_page_info)
         nav_layout.addWidget(self.btn_page_next)
-        tabs_bar.addWidget(self.paging_nav_widget, 0, Qt.AlignVCenter)
+        self._tb_layout.insertWidget(self._tb_layout.indexOf(self.btn_period) + 1, self.paging_nav_widget, 0, Qt.AlignVCenter)
 
         self.paging_combo = QComboBox()
-        self.paging_combo.setFixedHeight(24)
+        self.paging_combo.setFixedHeight(26)
         self.paging_combo.setFixedWidth(110)
         self.paging_combo.addItems([
             "전체",
@@ -1371,20 +1772,20 @@ class TaskManagerDialog(QDialog):
         else:
             self.paging_combo.setCurrentIndex(0)
         self.paging_combo.currentIndexChanged.connect(self._on_paging_combo_changed)
-        tabs_bar.addWidget(self.paging_combo, 0, Qt.AlignVCenter)
+        self._tb_layout.insertWidget(self._tb_layout.indexOf(self.btn_period) + 1, self.paging_combo, 0, Qt.AlignVCenter)
 
         table_container.addWidget(self.tabs_widget)
 
         # 4. 하단 리스트 테이블 (QTableWidget) - 8개 컬럼 구성
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(11)
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.setShowGrid(True)
 
-        self.HEADER_COLUMNS = ["등록일자", "분류", "업무 제목", "부서", "기안자 / 작성자", "상태", "비고 / 세부내용", "편집"]
+        self.HEADER_COLUMNS = ["등록일자", "분류", "업무 제목", "부서", "기안자 / 작성자", "상태", "비고 / 세부내용", "편집", "", "회신기한", "D-day"]
         self._sort_column: int = 0
         self._sort_order: Qt.SortOrder = Qt.DescendingOrder
         self._update_header_labels()
@@ -1397,8 +1798,21 @@ class TaskManagerDialog(QDialog):
         # 헤더 좌우 드래그로 모든 셀/컬럼 크기 조절 가능하도록 Interactive 모드로 설정
         header.setSectionResizeMode(QHeaderView.Interactive)
         header.setSectionResizeMode(7, QHeaderView.Fixed)  # 편집 아이콘 열은 55px 고정
+        header.setSectionResizeMode(self.COL_CHECK, QHeaderView.Fixed)  # 체크박스 열은 34px 고정
+        header.moveSection(header.visualIndex(self.COL_CHECK), 0)  # 체크박스 열을 화면 맨 왼쪽에 표시
+        header.moveSection(header.visualIndex(self.COL_REPLY), header.visualIndex(5) + 1)  # 회신기한은 상태 바로 옆
+        header.moveSection(header.visualIndex(self.COL_DDAY), header.visualIndex(self.COL_REPLY) + 1)
 
-        self._default_col_widths = [110, 90, 240, 110, 110, 90, 220, 55]
+        # 머리글 전체선택 체크박스 (행 체크박스와 같은 모양)
+        self.header_check = QCheckBox(header.viewport())
+        self.header_check.setCursor(Qt.PointingHandCursor)
+        self.header_check.setToolTip("현재 보이는 문서 전체 선택 / 해제")
+        self.header_check.clicked.connect(lambda _=False: self._toggle_check_all_displayed())
+        header.sectionResized.connect(self._position_header_check)
+        header.sectionMoved.connect(self._position_header_check)
+        header.geometriesChanged.connect(self._position_header_check)
+
+        self._default_col_widths = [110, 90, 240, 110, 110, 90, 220, 55, 34, 110, 72]
         self._restore_column_widths()
 
         self._save_columns_timer = QTimer(self)
@@ -1441,7 +1855,7 @@ class TaskManagerDialog(QDialog):
         # font-family 명시: 상속되지 않으면 캘린더·업무 화면과 달리 글자가 깨진다.
         self.setStyleSheet(f"""
             QDialog {{
-                background-color: {self.palette['bg']};
+                background-color: {self.palette.get('panel', '#FFFFFF')};
                 color: {self.palette['text']};
                 font-family: {font_family_css()};
             }}
@@ -1470,9 +1884,9 @@ class TaskManagerDialog(QDialog):
         self.paging_combo.setStyleSheet(f"""
             QComboBox {{
                 border: 1px solid {line};
-                border-radius: 4px;
-                padding: 1px 16px 1px 6px;
-                font-size: 11px;
+                border-radius: 6px;
+                padding: 1px 16px 1px 8px;
+                font-size: 12px;
                 font-weight: 500;
                 background-color: {panel};
                 color: {text};
@@ -1505,10 +1919,10 @@ class TaskManagerDialog(QDialog):
         btn_style = f"""
             QPushButton {{
                 border: 1px solid {line};
-                border-radius: 4px;
+                border-radius: 6px;
                 background-color: {panel};
                 color: {text};
-                font-size: 10px;
+                font-size: 12px;
                 font-weight: bold;
                 padding: 0px;
             }}
@@ -1524,10 +1938,50 @@ class TaskManagerDialog(QDialog):
         """
         self.btn_page_prev.setStyleSheet(btn_style)
         self.btn_page_next.setStyleSheet(btn_style)
-        self.lbl_page_info.setStyleSheet(f"font-size: 11px; font-weight: 600; color: {text};")
+        self.lbl_page_info.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {text};")
+
+        # 체크한 문서 일괄 처리 바
+        btn_text = self.palette.get("button_text", "#FFFFFF")
+        bulk_btn_style = f"""
+            QPushButton {{
+                border: 1px solid {line};
+                border-radius: 6px;
+                background-color: {panel};
+                color: {text};
+                font-size: 12px;
+                padding: 1px 10px;
+            }}
+            QPushButton:hover {{
+                background-color: {panel_alt};
+                border-color: {accent};
+            }}
+        """
+        for btn in (
+            self.btn_bulk_status, self.btn_bulk_category,
+            self.btn_bulk_link, self.btn_bulk_delete, self.btn_bulk_clear,
+        ):
+            btn.setStyleSheet(bulk_btn_style)
+        self.btn_bulk_done.setStyleSheet(f"""
+            QPushButton {{
+                border: 1px solid {accent};
+                border-radius: 6px;
+                background-color: {accent};
+                color: {btn_text};
+                font-size: 12px;
+                font-weight: 600;
+                padding: 1px 8px;
+            }}
+            QPushButton:hover {{
+                background-color: {_shade(accent, -0.12)};
+            }}
+        """)
+        self.lbl_bulk_count.setStyleSheet(f"font-size: 12px; font-weight: 600; color: {accent}; margin-right: 4px;")
 
     def _apply_header_button_styles(self) -> None:
-        """상단 [등록], [설정], [엑셀저장] 버튼 스킨 스타일 갱신"""
+        """상단 [등록], [분류·상태], [엑셀저장] 버튼 스킨 스타일 갱신 (공통 전환 줄 규격 S/M/L 사용)"""
+        if hasattr(self, "window_switcher"):
+            self.window_switcher.apply_palette(self.palette)
+            return
         accent = self.palette.get("accent", "#1F7A67")
         btn_text = self.palette.get("button_text", "#FFFFFF")
         accent_hover = _shade(accent, -0.12)
@@ -1592,8 +2046,8 @@ class TaskManagerDialog(QDialog):
         self.toolbar_card.setStyleSheet(f"""
             QFrame#toolbar_card {{
                 background-color: {panel};
-                border: 1px solid {line_soft};
-                border-radius: 8px;
+                border: none;
+                border-radius: 0px;
             }}
             QLabel {{
                 border: none;
@@ -1673,6 +2127,17 @@ class TaskManagerDialog(QDialog):
 
         if hasattr(self, "lbl_tilde"):
             self.lbl_tilde.setStyleSheet(f"border: none; background: transparent; color: {muted}; font-weight: bold;")
+        self._update_quick_period_styles()
+        if hasattr(self, "btn_search"):
+            from taskcalendar.ui_common import style_button
+
+            style_button(self.btn_search, self.palette, "secondary", "M")
+        if hasattr(self, "btn_period"):
+            from taskcalendar.ui_common import style_button as _sb
+
+            _sb(self.btn_period, self.palette, "secondary", "M")
+            # 옆의 분류·상태 셀렉트처럼 글자를 왼쪽에
+            self.btn_period.setStyleSheet(self.btn_period.styleSheet() + " QPushButton { text-align: left; padding-left: 8px; }")
 
         self.search_input.setStyleSheet(f"""
             QLineEdit {{
@@ -1699,13 +2164,39 @@ class TaskManagerDialog(QDialog):
         line = self.palette.get("line", "#CBD5E0")
         line_soft = self.palette.get("line_soft", line)
         accent_soft = self.palette.get("accent_soft", "#EEF2FF")
+        accent = self.palette.get("accent", "#1F7A67")
+        check_white_icon = str(asset_path("checkmark_white.svg")).replace("\\", "/")
 
         self.table.setStyleSheet(f"""
+            QCheckBox {{
+                background: transparent;
+                spacing: 0px;
+            }}
+            QCheckBox::indicator {{
+                width: 15px;
+                height: 15px;
+                border: 1px solid {line};
+                border-radius: 4px;
+                background-color: {panel};
+            }}
+            QCheckBox::indicator:hover {{
+                border-color: {accent};
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {accent};
+                border: 1px solid {accent};
+                image: url("{check_white_icon}");
+            }}
             QTableWidget {{
                 background-color: {panel};
                 border: 1px solid {line};
                 border-top: 1px solid {line};
-                border-radius: 0px 6px 6px 6px;
+                /* 모서리를 하나씩 지정 (border-radius 에 값 4개를 주면 Qt 는 0×6 타원으로 읽어
+                   탭 바로 아래 왼쪽 테두리가 5px 쯤 끊겨 보인다) */
+                border-top-left-radius: 0px;
+                border-top-right-radius: 6px;
+                border-bottom-left-radius: 6px;
+                border-bottom-right-radius: 6px;
                 gridline-color: {line_soft};
                 font-size: 13px;
                 outline: 0px;
@@ -1874,7 +2365,7 @@ class TaskManagerDialog(QDialog):
             border_left = f"1px solid {line}" if is_first else "none"
 
             if is_active:
-                btn.setFixedHeight(29)
+                btn.setFixedHeight(28)  # 탭 줄 높이와 같게 (29px 이면 아래 1px 이 잘려 모서리가 깨짐)
                 btn.setStyleSheet(f"""
                     QPushButton {{
                         background-color: {panel};
@@ -1883,7 +2374,7 @@ class TaskManagerDialog(QDialog):
                         border-top: 1px solid {line};
                         border-left: {border_left};
                         border-right: 1px solid {line};
-                        border-bottom: 1px solid {panel};
+                        border-bottom: none;
                         border-top-left-radius: {tl_radius};
                         border-top-right-radius: {tr_radius};
                         border-bottom-left-radius: 0px;
@@ -1902,7 +2393,7 @@ class TaskManagerDialog(QDialog):
                         border-top: 1px solid {line};
                         border-left: {border_left};
                         border-right: 1px solid {line};
-                        border-bottom: 1px solid {line};
+                        border-bottom: none;
                         border-top-left-radius: {tl_radius};
                         border-top-right-radius: {tr_radius};
                         border-bottom-left-radius: 0px;
@@ -1972,6 +2463,12 @@ class TaskManagerDialog(QDialog):
         if selected == "오늘":
             self.start_date_edit.setDate(today)
             self.end_date_edit.setDate(today)
+        elif selected == "최근 7일":
+            self.start_date_edit.setDate(today - timedelta(days=6))
+            self.end_date_edit.setDate(today)
+        elif selected == "최근 30일":
+            self.start_date_edit.setDate(today - timedelta(days=29))
+            self.end_date_edit.setDate(today)
         elif selected == "이번 주":
             start_w = today - timedelta(days=today.weekday())
             end_w = start_w + timedelta(days=6)
@@ -1986,7 +2483,13 @@ class TaskManagerDialog(QDialog):
             self.start_date_edit.setDate(start_m)
             self.end_date_edit.setDate(end_m)
         elif selected == "최근 3개월":
-            self.start_date_edit.setDate(today - timedelta(days=90))
+            self.start_date_edit.setDate(_months_before(today, 3))
+            self.end_date_edit.setDate(today)
+        elif selected == "최근 6개월":
+            self.start_date_edit.setDate(_months_before(today, 6))
+            self.end_date_edit.setDate(today)
+        elif selected == "최근 1년":
+            self.start_date_edit.setDate(_months_before(today, 12))
             self.end_date_edit.setDate(today)
         elif selected == "올해":
             self.start_date_edit.setDate(date(today.year, 1, 1))
@@ -1999,7 +2502,86 @@ class TaskManagerDialog(QDialog):
         self.start_date_edit.blockSignals(False)
         self.end_date_edit.blockSignals(False)
         self._current_page = 1
+        self._update_quick_period_styles()
         self._apply_filters()
+
+    _PERIOD_BUTTON_LABELS = {"기간": "전체", "직접 지정": ""}
+
+    def _update_period_button_text(self) -> None:
+        if not hasattr(self, "btn_period"):
+            return
+        current = self.period_combo.currentText()
+        label = self._PERIOD_BUTTON_LABELS.get(current, current)
+        if not label:  # 직접 지정
+            label = f"{self.start_date_edit.date().toString('yyyy-MM-dd')} ~ {self.end_date_edit.date().toString('yyyy-MM-dd')}"
+        self.btn_period.setText(f"기간: {label} ▾")
+
+    def _show_period_popup(self) -> None:
+        self._update_quick_period_styles()
+        p = self.palette
+        self.period_popup.setStyleSheet(f"""
+            QFrame#periodPopup {{ background-color: #FFFFFF; border: 1px solid {_shade(p.get('line', '#CBD5E0'), -0.15)};
+                border-radius: 8px; }}
+            QLabel {{ color: {p.get('muted', '#718096')}; font-size: 12px; background: transparent; border: none; }}
+        """)
+        self.period_popup.adjustSize()
+        pos = self.btn_period.mapToGlobal(QPoint(0, self.btn_period.height() + 4))
+        self.period_popup.move(pos)
+        self.period_popup.show()
+
+    def _set_quick_period(self, period: str) -> None:
+        """기간 빠른 선택 버튼 클릭 시 기간 콤보를 맞추고 날짜를 오늘 기준으로 다시 계산"""
+        idx = self.period_combo.findText(period)
+        if idx < 0:
+            return
+        self.period_combo.blockSignals(True)
+        self.period_combo.setCurrentIndex(idx)
+        self.period_combo.blockSignals(False)
+        self._on_period_combo_changed()
+
+    def _update_quick_period_styles(self) -> None:
+        """현재 기간 콤보 값과 같은 빠른 선택 버튼만 강조 표시"""
+        if not hasattr(self, "_quick_period_buttons"):
+            return
+        panel = self.palette.get("panel", "#FFFFFF")
+        panel_alt = self.palette.get("panel_alt", "#F8FAFC")
+        text = self.palette.get("text", "#1F2328")
+        muted = self.palette.get("muted", "#718096")
+        line = self.palette.get("line", "#CBD5E0")
+        accent = self.palette.get("accent", "#1F7A67")
+        btn_text = self.palette.get("button_text", "#FFFFFF")
+        current = self.period_combo.currentText()
+
+        self.lbl_quick_period.setStyleSheet(f"border: none; background: transparent; color: {muted}; font-size: 12px;")
+        self._update_period_button_text()
+        for btn, period in self._quick_period_buttons:
+            if period == current:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {accent};
+                        color: {btn_text};
+                        border: 1px solid {accent};
+                        border-radius: 13px;
+                        padding: 0px;
+                        font-size: 12px;
+                        font-weight: 600;
+                    }}
+                """)
+            else:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background-color: {panel};
+                        color: {text};
+                        border: 1px solid {line};
+                        border-radius: 13px;
+                        padding: 0px;
+                        font-size: 12px;
+                    }}
+                    QPushButton:hover {{
+                        background-color: {panel_alt};
+                        border-color: {accent};
+                    }}
+                """)
 
     def _on_custom_date_changed(self, *args) -> None:
         """사용자가 날짜를 직접 변경 시 '직접 지정' 모드로 전환 후 즉시 필터 적용"""
@@ -2022,6 +2604,7 @@ class TaskManagerDialog(QDialog):
                 self.period_combo.setCurrentIndex(idx)
             self.period_combo.blockSignals(False)
         self._current_page = 1
+        self._update_quick_period_styles()
         self._apply_filters()
 
     def _open_category_manager(self) -> None:
@@ -2061,9 +2644,14 @@ class TaskManagerDialog(QDialog):
         self._all_tasks.sort(key=lambda x: (x.day or date.min, x.created_at or datetime.min), reverse=True)
         self._apply_filters()
 
+    def _run_search(self) -> None:
+        self._search_query = self.search_input.text().strip()
+        self._apply_filters()
+
     def _apply_filters(self, *args) -> None:
         """탭(전체/등록/진행/완료), 분류, 상태, 기간, 검색어 필터 즉시 적용"""
-        query = self.search_input.text().strip().lower()
+        query = getattr(self, "_search_query", "").strip().lower()
+        self._update_period_button_text()
         selected_cat = self.category_combo.currentText()
         selected_status = self.status_combo.currentText()
         selected_period = self.period_combo.currentText()
@@ -2115,6 +2703,8 @@ class TaskManagerDialog(QDialog):
             filtered.append(task)
 
         self._filtered_tasks = filtered
+        # 필터에서 빠진 문서는 체크 해제 (보이지 않는 문서가 일괄 처리되지 않도록)
+        self._checked_ids &= {t.entry_id for t in filtered}
         self._sort_tasks()
         self._render_table()
         self._save_filter_state(persist_disk=False)
@@ -2202,12 +2792,15 @@ class TaskManagerDialog(QDialog):
             self._update_tab_styles()
         finally:
             self._restoring_filters = False
+            self._update_quick_period_styles()
 
     def _update_header_labels(self) -> None:
         """현재 정렬 컬럼 및 방향에 따라 헤더 라벨에 정렬 화살표(▲/▼) 표시"""
         labels = []
         for idx, name in enumerate(self.HEADER_COLUMNS):
-            if idx == self._sort_column:
+            if idx == self.COL_CHECK:
+                labels.append("")  # 머리글 칸에는 실제 체크박스(header_check)를 올려 둔다
+            elif idx == self._sort_column:
                 arrow = " ▲" if self._sort_order == Qt.AscendingOrder else " ▼"
                 labels.append(f"{name}{arrow}")
             else:
@@ -2216,7 +2809,10 @@ class TaskManagerDialog(QDialog):
 
     def _on_header_clicked(self, col: int) -> None:
         """컬럼 헤더 클릭 시 해당 열 기준 오름차순/내림차순 정렬 (편집 컬럼 제외)"""
-        if col >= 7:
+        if col == self.COL_CHECK:
+            self._toggle_check_all_displayed()
+            return
+        if col == 7:
             return
 
         if self._sort_column == col:
@@ -2303,10 +2899,15 @@ class TaskManagerDialog(QDialog):
             widths = None
             if raw:
                 widths = json.loads(raw)
+            # 체크박스·회신기한·D-day 열이 생기기 전에 저장된 너비는 빠진 칸을 기본값으로 채움
+            if isinstance(widths, list) and 8 <= len(widths) < self.table.columnCount():
+                widths = widths + self._default_col_widths[len(widths):]
             if widths and isinstance(widths, list) and len(widths) == self.table.columnCount():
                 for i, w in enumerate(widths):
                     if i == 7:
                         self.table.setColumnWidth(i, 55)
+                    elif i == self.COL_CHECK:
+                        self.table.setColumnWidth(i, 34)
                     else:
                         self.table.setColumnWidth(i, max(40, int(w)))
             else:
@@ -2322,6 +2923,7 @@ class TaskManagerDialog(QDialog):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         QTimer.singleShot(0, self._adjust_columns_to_fill_width)
+        QTimer.singleShot(0, self._position_header_check)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -2365,6 +2967,12 @@ class TaskManagerDialog(QDialog):
         elif self._sort_column == 6:  # 비고 / 세부내용
             def key_fn(t):
                 return ((t.description or "").strip().lower(), t.day or date.min)
+        elif self._sort_column in (self.COL_REPLY, self.COL_DDAY):  # 회신기한 (기한 없는 문서는 늘 뒤로)
+            def key_fn(t):
+                due = getattr(t, "reply_due", None)
+                if due:
+                    return (0 if not reverse else 1, due)
+                return (1 if not reverse else 0, date.max)
         else:
             return
 
@@ -2374,8 +2982,8 @@ class TaskManagerDialog(QDialog):
         """분류/상태 설정 드롭다운 메뉴"""
         menu = QMenu(self)
         menu.setStyleSheet(self._menu_stylesheet())
-        act_cat = menu.addAction("📁 업무 분류 항목 관리...")
-        act_stat = menu.addAction("🏷️ 처리 상태 항목 관리...")
+        act_cat = menu.addAction("업무 분류 항목 관리...")
+        act_stat = menu.addAction("처리 상태 항목 관리...")
         chosen = menu.exec(self.btn_manage_meta.mapToGlobal(QPoint(0, self.btn_manage_meta.height() + 2)))
         if chosen == act_cat:
             self._open_category_manager()
@@ -2389,11 +2997,11 @@ class TaskManagerDialog(QDialog):
         menu.setStyleSheet(self._menu_stylesheet())
         actions = {}
         for c in cats:
-            act = menu.addAction(f"📁 {c}")
+            act = menu.addAction(f"{c}")
             actions[act] = c
 
         menu.addSeparator()
-        act_manage = menu.addAction("⚙️ 분류 항목 관리...")
+        act_manage = menu.addAction("분류 항목 관리...")
 
         chosen = menu.exec(btn.mapToGlobal(QPoint(0, btn.height() + 2)))
         if chosen in actions:
@@ -2423,11 +3031,11 @@ class TaskManagerDialog(QDialog):
         badge_status_cfg = STATUS_CONFIG_DARK if is_dark else STATUS_CONFIG
         for s in statuses:
             icon = badge_status_cfg.get(s, {}).get("icon", "▫️")
-            act = menu.addAction(f"{icon} {s}")
+            act = menu.addAction(f"{s}")
             actions[act] = s
 
         menu.addSeparator()
-        act_manage = menu.addAction("⚙️ 상태 항목 관리...")
+        act_manage = menu.addAction("상태 항목 관리...")
 
         chosen = menu.exec(btn.mapToGlobal(QPoint(0, btn.height() + 2)))
         if chosen in actions:
@@ -2658,8 +3266,20 @@ class TaskManagerDialog(QDialog):
         text_muted = QColor(self.palette.get("muted", "#A0AEC0"))
 
         row_font = make_ui_font_like(10)
+        if hasattr(self, "hover_delegate"):
+            self.hover_delegate.dark = is_dark
+        work_titles: dict[int, list[str]] = {}
+        try:
+            work_titles = self.repository.linked_work_titles_for_entries(
+                [t.entry_id for t in tasks_to_show if t.entry_id]
+            )
+        except Exception:
+            work_titles = {}
+        today = date.today()
         for row_idx, task in enumerate(tasks_to_show):
             is_done = (task.status == "완료")
+            desc_body, source_url = split_doc_source(task.description or "")
+            linked_titles = work_titles.get(task.entry_id or -1, [])
             text_color = text_muted if is_done else text_normal
 
             if is_done:
@@ -2700,6 +3320,17 @@ class TaskManagerDialog(QDialog):
             item_title.setForeground(text_color)
             item_title.setFont(f)
             item_title.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+            tags = []
+            tip_lines = [task.title or ""]
+            if source_url:
+                tags.append("출처")
+                tip_lines.append(f"출처: {source_url}  (우클릭 → 출처 웹페이지 열기)")
+            if linked_titles:
+                tags.append(f"업무 {len(linked_titles)}개")
+                tip_lines.append("관련 업무: " + ", ".join(linked_titles))
+            if tags:
+                item_title.setData(DOC_TAGS_ROLE, tags)
+                item_title.setToolTip("\n".join(tip_lines))
             self.table.setItem(row_idx, 2, item_title)
 
             # 3: 부서 (직접 편집 가능)
@@ -2730,6 +3361,8 @@ class TaskManagerDialog(QDialog):
                 badge_status_cfg,
                 lambda btn, t=task, r=row_idx: self._show_status_menu(t, btn, r),
                 on_context=lambda pos, t=task, r=row_idx: self._show_context_menu_for_task(t, pos, r),
+                plain_color=self.palette.get("muted", "#94A3B8") if is_done else self.palette.get("text", "#2D3748"),
+                plain_hover=self.palette.get("line", "#CBD5E1"),
             )
             status_widget.setProperty("row_idx", row_idx)
             status_widget.btn.setProperty("row_idx", row_idx)
@@ -2738,9 +3371,9 @@ class TaskManagerDialog(QDialog):
             self.table.setCellWidget(row_idx, 5, status_widget)
 
             # 6: 비고 / 세부내용 (직접 편집 가능)
-            desc_preview = (task.description or "").replace("\n", "  ").strip()
+            desc_preview = desc_body.replace("\n", "  ").strip()
             item_desc = QTableWidgetItem(desc_preview)
-            item_desc.setToolTip(task.description or "")
+            item_desc.setToolTip(desc_body)
             item_desc.setForeground(text_color)
             item_desc.setFont(f)
             item_desc.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
@@ -2791,9 +3424,150 @@ class TaskManagerDialog(QDialog):
 
             self.table.setCellWidget(row_idx, 7, edit_container)
 
+            # 9: 회신기한 (등록일자처럼 날짜, 직접 수정 가능 — 비우면 회신기한 없앰)
+            reply_due = getattr(task, "reply_due", None)
+            dday_text, reply_level, reply_tip = reply_due_info(
+                reply_due, getattr(task, "reply_time", "") or "", is_done, today
+            )
+            item_reply = QTableWidgetItem(reply_due.strftime("%Y-%m-%d") if reply_due else "")
+            item_reply.setTextAlignment(Qt.AlignCenter)
+            item_reply.setForeground(text_color)
+            item_reply.setFont(f)
+            item_reply.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsEditable)
+            item_reply.setToolTip(reply_tip or "더블클릭해서 회신기한 입력 (예: 2026-11-30)")
+            self.table.setItem(row_idx, self.COL_REPLY, item_reply)
+
+            # 10: D-day (남은 날 색 알약: D-3 · D-day · D+1)
+            item_dday = QTableWidgetItem(dday_text)
+            item_dday.setTextAlignment(Qt.AlignCenter)
+            item_dday.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+            if dday_text:
+                item_dday.setData(DOC_REPLY_ROLE, (dday_text, reply_level))
+                item_dday.setToolTip(reply_tip)
+            self.table.setItem(row_idx, self.COL_DDAY, item_dday)
+
+            # 8: 체크박스 (화면 맨 왼쪽, 일괄 처리 대상 선택)
+            item_check = QTableWidgetItem()
+            item_check.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+            self.table.setItem(row_idx, self.COL_CHECK, item_check)
+
+            chk = QCheckBox()
+            chk.setCursor(Qt.PointingHandCursor)
+            chk.setChecked(task.entry_id in self._checked_ids)
+            chk.toggled.connect(lambda checked, t=task: self._on_row_check_toggled(t, checked))
+
+            check_container = QWidget()
+            check_container.setAttribute(Qt.WA_TranslucentBackground, True)
+            check_container.setStyleSheet("background: transparent;")
+            check_layout = QHBoxLayout(check_container)
+            check_layout.setContentsMargins(0, 0, 0, 0)
+            check_layout.setAlignment(Qt.AlignCenter)
+            check_layout.addWidget(chk)
+
+            check_container.setProperty("row_idx", row_idx)
+            chk.setProperty("row_idx", row_idx)
+            check_container.installEventFilter(self)
+            chk.installEventFilter(self)
+            self.table.setCellWidget(row_idx, self.COL_CHECK, check_container)
+
             self.table.setRowHeight(row_idx, 38)
 
         self.table.blockSignals(False)
+        self._refresh_check_ui()
+
+    def _on_row_check_toggled(self, task: CalendarEntry, checked: bool) -> None:
+        if not task.entry_id:
+            return
+        if checked:
+            self._checked_ids.add(task.entry_id)
+        else:
+            self._checked_ids.discard(task.entry_id)
+        self._refresh_check_ui()
+
+    def _toggle_check_all_displayed(self) -> None:
+        """헤더 체크박스 클릭: 현재 화면의 문서를 모두 체크 / 모두 해제"""
+        ids = {t.entry_id for t in self._displayed_tasks if t.entry_id}
+        if not ids:
+            return
+        if ids <= self._checked_ids:
+            self._checked_ids -= ids
+        else:
+            self._checked_ids |= ids
+        self._render_table()
+
+    def _clear_checked(self) -> None:
+        self._checked_ids.clear()
+        self._render_table()
+
+    def _get_checked_tasks(self) -> list[CalendarEntry]:
+        return [t for t in self._filtered_tasks if t.entry_id in self._checked_ids]
+
+    def _refresh_check_ui(self) -> None:
+        """체크 개수에 맞춰 일괄 처리 바와 헤더 전체선택 표시 갱신"""
+        count = len(self._get_checked_tasks())
+        self.bulk_bar.setVisible(count > 0)
+        self.lbl_bulk_count.setText(f"{count}개 선택")
+        displayed = self._displayed_tasks
+        all_checked = bool(displayed) and all(t.entry_id in self._checked_ids for t in displayed)
+        self.header_check.blockSignals(True)
+        self.header_check.setChecked(all_checked)
+        self.header_check.blockSignals(False)
+
+    def _position_header_check(self, *args) -> None:
+        """머리글 체크박스를 체크박스 열 머리글 칸 가운데에 맞춤"""
+        header = self.table.horizontalHeader()
+        hint = self.header_check.sizeHint()
+        x = header.sectionViewportPosition(self.COL_CHECK) + (header.sectionSize(self.COL_CHECK) - hint.width()) // 2
+        y = (header.height() - hint.height()) // 2
+        self.header_check.setGeometry(x, y, hint.width(), hint.height())
+
+    def _bulk_change_status(self, new_status: str) -> None:
+        tasks = self._get_checked_tasks()
+        if not tasks:
+            return
+        self._checked_ids.clear()
+        self._change_tasks_status(tasks, new_status)
+
+    def _bulk_change_category(self, new_cat: str) -> None:
+        tasks = self._get_checked_tasks()
+        if not tasks:
+            return
+        self._checked_ids.clear()
+        self._change_tasks_category(tasks, new_cat)
+
+    def _show_bulk_status_menu(self) -> None:
+        is_dark = self.palette.get("bg", "").lower() in ("#0a0c10", "#171b22") or self.palette.get("text", "").lower() == "#f3f6fb"
+        badge_status_cfg = STATUS_CONFIG_DARK if is_dark else STATUS_CONFIG
+        menu = QMenu(self)
+        menu.setStyleSheet(self._menu_stylesheet())
+        actions = {}
+        for s in get_task_statuses(self.repository):
+            icon = badge_status_cfg.get(s, {}).get("icon", "▫️")
+            actions[menu.addAction(f"{s}")] = s
+        chosen = menu.exec(self.btn_bulk_status.mapToGlobal(QPoint(0, self.btn_bulk_status.height() + 2)))
+        if chosen in actions:
+            self._bulk_change_status(actions[chosen])
+
+    def _show_bulk_category_menu(self) -> None:
+        menu = QMenu(self)
+        menu.setStyleSheet(self._menu_stylesheet())
+        actions = {}
+        for c in get_task_categories(self.repository):
+            actions[menu.addAction(f"{c}")] = c
+        chosen = menu.exec(self.btn_bulk_category.mapToGlobal(QPoint(0, self.btn_bulk_category.height() + 2)))
+        if chosen in actions:
+            self._bulk_change_category(actions[chosen])
+
+    def _bulk_link_work(self) -> None:
+        tasks = self._get_checked_tasks()
+        if tasks:
+            self._link_tasks_to_work(tasks)
+
+    def _bulk_delete(self) -> None:
+        # 삭제된 문서는 _apply_filters에서 체크 목록에서도 자동으로 빠진다
+        tasks = self._get_checked_tasks()
+        if tasks:
+            self._delete_tasks(tasks)
 
     def _update_stats_label(self) -> None:
         """상태 탭 카운트 갱신 (숫자 있는 것만 표기)"""
@@ -2858,11 +3632,55 @@ class TaskManagerDialog(QDialog):
                 pass
         return None
 
+    def _on_reply_cell_edited(self, row: int, item: QTableWidgetItem) -> None:
+        """회신기한 칸 직접 수정: 날짜면 바꾸고, 비우면 회신기한을 없앤다. 회신 일정도 맞춘다."""
+        task = self._displayed_tasks[row]
+        text = item.text().strip()
+        old_due = getattr(task, "reply_due", None)
+        if not text or text == "-":
+            new_due = None
+        else:
+            new_due = self._parse_user_date(text)
+            if new_due is None:
+                self.table.blockSignals(True)
+                item.setText(old_due.strftime("%Y-%m-%d") if old_due else "")
+                self.table.blockSignals(False)
+                QMessageBox.warning(self, "날짜 형식 오류", "회신기한은 'YYYY-MM-DD' 형식으로 입력해주세요.\n(예: 2026-11-30, 비우면 회신기한 없음)")
+                return
+        if new_due == old_due:
+            self.table.blockSignals(True)
+            item.setText(old_due.strftime("%Y-%m-%d") if old_due else "")
+            self.table.blockSignals(False)
+            return
+
+        had_schedule = False
+        try:
+            had_schedule = bool(task.entry_id and self.repository.get_reply_schedule(task.entry_id))
+        except Exception:
+            pass
+        task.reply_due = new_due
+        if not new_due:
+            task.reply_time = ""
+        task.updated_at = datetime.now()
+        self.repository.upsert_entry(task)
+        try:
+            auto = doc_reply.load_settings(self.repository).get("doc_reply_auto_calendar", "1") != "0"
+            self.repository.set_reply_schedule(task, enabled=bool(new_due) and (had_schedule or auto))
+        except Exception:
+            logger.exception("reply schedule sync failed")
+        self.repository.save()
+        QTimer.singleShot(0, self._render_table)
+        if self.main_window and hasattr(self.main_window, "refresh"):
+            QTimer.singleShot(0, self.main_window.refresh)
+
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
         """테이블 셀 내에서 직접 텍스트 수정 시 실시간 저장"""
         row = item.row()
         col = item.column()
         if row < 0 or row >= len(self._displayed_tasks):
+            return
+        if col == self.COL_REPLY:
+            self._on_reply_cell_edited(row, item)
             return
         if col not in (0, 2, 3, 4, 6):
             return
@@ -2917,12 +3735,13 @@ class TaskManagerDialog(QDialog):
             task.assignee = new_val
             task.updated_at = now
 
-        elif col == 6:  # 비고 / 세부내용
-            raw_desc = item.text()
-            if (task.description or "") == raw_desc:
+        elif col == 6:  # 비고 / 세부내용 (목록에는 출처를 떼고 보여 주므로 저장 때 다시 붙임)
+            old_body, source_url = split_doc_source(task.description or "")
+            new_body = item.text().strip()
+            if old_body.replace("\n", "  ").strip() == new_body:
                 return
-            task.description = raw_desc
-            item.setToolTip(task.description)
+            task.description = join_doc_source(new_body, source_url)
+            item.setToolTip(new_body)
             task.updated_at = now
 
         self.repository.upsert_entry(task)
@@ -3007,32 +3826,32 @@ class TaskManagerDialog(QDialog):
 
         if len(tasks) == 1:
             task = tasks[0]
-            act_edit = menu.addAction("✏️ 상세 수정 창 열기")
+            act_edit = menu.addAction("상세 수정 창 열기")
             menu.addSeparator()
 
             # 관련 업무 연결 (문서 ↔ 업무 양방향)
-            act_link_work = menu.addAction("🔗 관련 업무 연결...")
+            act_link_work = menu.addAction("관련 업무 연결...")
             menu.addSeparator()
 
             # 단일 항목 분류 변경 서브메뉴
             cats = get_task_categories(self.repository)
-            menu_cat = menu.addMenu("📁 분류 변경")
+            menu_cat = menu.addMenu("분류 변경")
             menu_cat.setStyleSheet(self._menu_stylesheet())
             actions_cat = {}
             for c in cats:
                 prefix = "✓ " if (task.memo_group or "일반") == c else "   "
-                act = menu_cat.addAction(f"{prefix}📁 {c}")
+                act = menu_cat.addAction(f"{prefix}{c}")
                 actions_cat[act] = c
 
             # 단일 항목 상태 변경 서브메뉴
             statuses = get_task_statuses(self.repository)
-            menu_stat = menu.addMenu("📌 상태 변경")
+            menu_stat = menu.addMenu("상태 변경")
             menu_stat.setStyleSheet(self._menu_stylesheet())
             actions_stat = {}
             for s in statuses:
                 icon = badge_status_cfg.get(s, {}).get("icon", "▫️")
                 prefix = "✓ " if (task.status or "등록") == s else "   "
-                act = menu_stat.addAction(f"{prefix}{icon} {s}")
+                act = menu_stat.addAction(f"{prefix}{s}")
                 actions_stat[act] = s
 
             menu.addSeparator()
@@ -3040,10 +3859,10 @@ class TaskManagerDialog(QDialog):
             urls = re.findall(r'https?://[^\s<>"]+|www\.[^\s<>"]+', task.description or "")
             act_url = None
             if urls:
-                act_url = menu.addAction("🔗 출처 웹페이지 열기")
+                act_url = menu.addAction("출처 웹페이지 열기")
                 menu.addSeparator()
 
-            act_del = menu.addAction("🗑️ 업무 삭제")
+            act_del = menu.addAction("업무 삭제")
 
             action = menu.exec(global_pos)
             if action == act_edit:
@@ -3066,28 +3885,28 @@ class TaskManagerDialog(QDialog):
 
             # 다중 항목 분류 일괄 변경 서브메뉴
             cats = get_task_categories(self.repository)
-            menu_cat = menu.addMenu(f"📁 선택한 업무 분류 일괄 변경 ({count}개)")
+            menu_cat = menu.addMenu(f"선택한 업무 분류 일괄 변경 ({count}개)")
             menu_cat.setStyleSheet(self._menu_stylesheet())
             actions_cat = {}
             for c in cats:
-                act = menu_cat.addAction(f"📁 {c}")
+                act = menu_cat.addAction(f"{c}")
                 actions_cat[act] = c
 
             # 다중 항목 상태 일괄 변경 서브메뉴
             statuses = get_task_statuses(self.repository)
-            menu_stat = menu.addMenu(f"📌 선택한 업무 상태 일괄 변경 ({count}개)")
+            menu_stat = menu.addMenu(f"선택한 업무 상태 일괄 변경 ({count}개)")
             menu_stat.setStyleSheet(self._menu_stylesheet())
             actions_stat = {}
             for s in statuses:
                 icon = badge_status_cfg.get(s, {}).get("icon", "▫️")
-                act = menu_stat.addAction(f"{icon} {s}")
+                act = menu_stat.addAction(f"{s}")
                 actions_stat[act] = s
 
             menu.addSeparator()
 
-            act_link_work = menu.addAction(f"🔗 관련 업무 일괄 연결 ({count}개)...")
+            act_link_work = menu.addAction(f"관련 업무 일괄 연결 ({count}개)...")
             menu.addSeparator()
-            act_del = menu.addAction(f"🗑️ 선택한 업무 일괄 삭제 ({count}개)")
+            act_del = menu.addAction(f"선택한 업무 일괄 삭제 ({count}개)")
 
             action = menu.exec(global_pos)
             if action == act_link_work:
@@ -3337,8 +4156,6 @@ class TaskManagerDialog(QDialog):
         if not tasks:
             QMessageBox.information(self, "안내", "삭제할 업무를 선택해 주세요.")
             return
-
-        self._delete_tasks(tasks)
 
         self._delete_tasks(tasks)
 

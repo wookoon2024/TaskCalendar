@@ -3,16 +3,56 @@ function setupContextMenu() {
     chrome.contextMenus.removeAll(() => {
       chrome.contextMenus.create({
         id: "taskcalendar-add",
-        title: "바로업무로 보내기",
+        title: "일정·업무·메모로 등록…",
         contexts: ["page", "selection", "link", "image"]
       });
       chrome.contextMenus.create({
         id: "taskcalendar-page-memo",
-        title: "해당 페이지 메모 등록",
+        title: "이 페이지에 메모 남기기",
         contexts: ["page", "selection", "link", "image"]
       });
     });
   } catch(e) {}
+}
+
+// taskcalendar:// 링크를 윈도우로 넘긴다.
+// 크롬에서 커스텀 프로토콜은 chrome.tabs.create 로 새 탭을 만들어야 안정적으로 전달된다.
+// 예전에는 이 탭을 뒤에서(active:false) 열어 크롬의 '바로업무 열기' 확인 창이 숨은 탭에만 떠서,
+// 사용자가 그 탭을 찾아가 다시 눌러야 했다 → 앞에서 열고 창도 앞으로 가져와 확인 창이 바로 보이게 한다.
+// 확인한 뒤 남는 빈 탭은 다른 탭으로 옮기면(또는 1분 뒤) 닫고, 원래 보던 탭을 다시 앞으로.
+function openProtocolInFront(urlToOpen) {
+  chrome.windows.getLastFocused({ windowTypes: ["normal"] }, (win) => {
+    var windowId = (win && win.id !== undefined && !chrome.runtime.lastError) ? win.id : undefined;
+    var query = windowId !== undefined ? { active: true, windowId: windowId } : { active: true, lastFocusedWindow: true };
+    chrome.tabs.query(query, (activeTabs) => {
+      var previousTabId = (activeTabs && activeTabs[0]) ? activeTabs[0].id : null;
+      var opts = { url: urlToOpen, active: true };
+      if (windowId !== undefined) opts.windowId = windowId;
+      chrome.tabs.create(opts, (t) => {
+        if (!t || !t.id) return;
+        if (t.windowId !== undefined) chrome.windows.update(t.windowId, { focused: true }).catch(() => {});
+        var done = false;
+        var cleanup = (restorePrevious) => {
+          if (done) return;
+          done = true;
+          chrome.tabs.onActivated.removeListener(onActivated);
+          chrome.windows.onFocusChanged.removeListener(onFocusChanged);
+          chrome.tabs.remove(t.id).catch(() => {});
+          if (restorePrevious && previousTabId) chrome.tabs.update(previousTabId, { active: true }).catch(() => {});
+        };
+        var onActivated = (info) => {
+          if (info.tabId !== t.id && info.windowId === t.windowId) cleanup(false);
+        };
+        // [바로업무 열기]를 눌러 바로업무 창이 앞으로 오면 크롬이 포커스를 잃는다 → 빈 탭을 닫고 원래 탭으로
+        var onFocusChanged = (focusedWindowId) => {
+          if (focusedWindowId === chrome.windows.WINDOW_ID_NONE) setTimeout(() => cleanup(true), 300);
+        };
+        chrome.tabs.onActivated.addListener(onActivated);
+        chrome.windows.onFocusChanged.addListener(onFocusChanged);
+        setTimeout(() => cleanup(true), 60000);
+      });
+    });
+  });
 }
 
 // 초기화 및 이벤트 등록
@@ -1560,13 +1600,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "openProtocolUrl") {
-    var urlToOpen = request.url;
-    // Chrome에서 커스텀 프로토콜(taskcalendar://) 호출은 반드시 chrome.tabs.create로 새 탭을 생성해야 윈도우 셸로 안정적으로 전달됩니다.
-    chrome.tabs.create({ url: urlToOpen, active: false }, (t) => {
-      setTimeout(() => {
-        if (t && t.id) chrome.tabs.remove(t.id).catch(() => {});
-      }, 8000);
-    });
+    openProtocolInFront(request.url);
     sendResponse({ success: true });
     return true;
   }
